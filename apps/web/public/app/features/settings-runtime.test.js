@@ -52,6 +52,9 @@ function createRefs() {
       },
     },
     cfgAssistantModeEnabled: { id: "assistant-mode-master" },
+    cfgOpenAiWireApi: { id: "openai-wire-api" },
+    cfgOpenAiThinking: { id: "openai-thinking" },
+    cfgOpenAiReasoningEffort: { id: "openai-reasoning-effort" },
     cfgHeartbeatEnabled: { id: "heartbeat-enabled" },
     cfgCronEnabled: { id: "cron-enabled" },
     pairingPendingList: { addEventListener: vi.fn() },
@@ -94,5 +97,35 @@ describe("settings runtime feature", () => {
     expect(createSettingsControllerMock.mock.calls[0][0].refs.cfgAssistantModeEnabled).toBe(
       refs.cfgAssistantModeEnabled,
     );
+  });
+
+  it("passes newly added OpenAI reasoning refs into settings controller", () => {
+    const refs = createRefs();
+
+    createSettingsRuntimeFeature({
+      refs,
+      isConnected: () => true,
+      sendReq: vi.fn(),
+      makeId: () => "req-1",
+      setStatus: vi.fn(),
+      loadServerConfig: vi.fn(),
+      invalidateServerConfigCache: vi.fn(),
+      syncAttachmentLimitsFromConfig: vi.fn(),
+      localeController: { t: (_key, _params, fallback) => fallback ?? "" },
+      getConnectionAuthMode: () => "token",
+      clientId: "client-1",
+      getSelectedAgentId: () => null,
+      getActiveConversationId: () => null,
+      getSelectedSubtaskId: () => null,
+      isSubtasksViewActive: () => false,
+      escapeHtml: (value) => String(value ?? ""),
+      showNotice: vi.fn(),
+    });
+
+    expect(createSettingsControllerMock).toHaveBeenCalledTimes(1);
+    const passedRefs = createSettingsControllerMock.mock.calls[0][0].refs;
+    expect(passedRefs.cfgOpenAiWireApi).toBe(refs.cfgOpenAiWireApi);
+    expect(passedRefs.cfgOpenAiThinking).toBe(refs.cfgOpenAiThinking);
+    expect(passedRefs.cfgOpenAiReasoningEffort).toBe(refs.cfgOpenAiReasoningEffort);
   });
 });

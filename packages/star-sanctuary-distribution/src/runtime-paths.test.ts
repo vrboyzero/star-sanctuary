@@ -4,7 +4,7 @@ import { expect, test } from "vitest";
 
 import { resolveGatewayRuntimePaths, resolvePreferredEnvDir, resolvePreferredEnvDirInfo } from "./runtime-paths.js";
 
-test("resolvePreferredEnvDir always resolves to state dir", () => {
+test("resolvePreferredEnvDir prefers explicit envDir argument over state dir", () => {
   const envDir = resolvePreferredEnvDir({
     cwd: "E:/project/star-sanctuary",
     stateDir: "C:/Users/test/.star_sanctuary",
@@ -13,10 +13,10 @@ test("resolvePreferredEnvDir always resolves to state dir", () => {
     exists: () => true,
   });
 
-  expect(envDir).toBe(path.resolve("C:/Users/test/.star_sanctuary"));
+  expect(envDir).toBe(path.resolve("D:/legacy-env"));
 });
 
-test("resolvePreferredEnvDirInfo reports state_dir even when legacy inputs exist", () => {
+test("resolvePreferredEnvDirInfo reports explicit source when explicit envDir argument exists", () => {
   const result = resolvePreferredEnvDirInfo({
     cwd: "E:/project/star-sanctuary",
     stateDir: "C:/Users/test/.star_sanctuary",
@@ -25,8 +25,8 @@ test("resolvePreferredEnvDirInfo reports state_dir even when legacy inputs exist
     exists: () => true,
   });
 
-  expect(result.envDir).toBe(path.resolve("C:/Users/test/.star_sanctuary"));
-  expect(result.source).toBe("state_dir");
+  expect(result.envDir).toBe(path.resolve("D:/legacy-env"));
+  expect(result.source).toBe("explicit");
 });
 
 test("resolveGatewayRuntimePaths uses state-dir env for fresh installs", () => {
@@ -43,18 +43,17 @@ test("resolveGatewayRuntimePaths uses state-dir env for fresh installs", () => {
   expect(runtimePaths.envSource).toBe("state_dir");
 });
 
-test("resolveGatewayRuntimePaths ignores legacy env dir and install metadata", () => {
+test("resolveGatewayRuntimePaths respects explicit env dir from process env", () => {
   const runtimePaths = resolveGatewayRuntimePaths({
     cwd: "E:/project/star-sanctuary",
     stateDir: "C:/Users/test/.star_sanctuary",
-    envDir: "D:/legacy-env",
     runtimeDir: "E:/legacy-install/current",
     env: {
-      STAR_SANCTUARY_ENV_DIR: "E:/ignored-explicit",
+      STAR_SANCTUARY_ENV_DIR: "E:/explicit-env",
     },
   });
 
-  expect(runtimePaths.envDir).toBe(path.resolve("C:/Users/test/.star_sanctuary"));
+  expect(runtimePaths.envDir).toBe(path.resolve("E:/explicit-env"));
   expect(runtimePaths.stateDir).toBe(path.resolve("C:/Users/test/.star_sanctuary"));
-  expect(runtimePaths.envSource).toBe("state_dir");
+  expect(runtimePaths.envSource).toBe("explicit");
 });

@@ -2180,6 +2180,102 @@ describe("ToolEnabledAgent hook timeouts", () => {
   });
 });
 
+describe("OpenAI-compatible reasoning config", () => {
+  it("passes thinking and reasoning_effort from fallback profiles to chat completions", async () => {
+    const requestBodies: Array<Record<string, unknown>> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+      requestBodies.push(body);
+      if (String(url).includes("primary.example.com")) {
+        return new Response(JSON.stringify({ error: "primary unavailable" }), { status: 500 });
+      }
+      return createJsonResponse({
+        choices: [{
+          message: {
+            content: "done",
+          },
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+    });
+
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://primary.example.com/v1",
+      apiKey: "primary-key",
+      model: "primary-model",
+      toolExecutor: createToolExecutor(),
+      fallbacks: [{
+        id: "deepseek-fallback",
+        baseUrl: "https://api.deepseek.com",
+        apiKey: "fallback-key",
+        model: "deepseek-v4-pro",
+        thinking: {
+          type: "enabled",
+          budget_tokens: 2048,
+        },
+        reasoningEffort: "max",
+      }],
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-tool-thinking",
+      text: "hello",
+    }));
+
+    expect(items).toContainEqual({ type: "final", text: "done" });
+    expect(requestBodies).toHaveLength(2);
+    expect(requestBodies[0]).not.toHaveProperty("thinking");
+    expect(requestBodies[1]).toMatchObject({
+      model: "deepseek-v4-pro",
+      thinking: {
+        type: "enabled",
+        budget_tokens: 2048,
+      },
+      reasoning_effort: "max",
+    });
+  });
+
+  it("passes thinking and reasoning_effort to responses payloads", async () => {
+    const requestBodies: Array<Record<string, unknown>> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+      requestBodies.push(body);
+      return createJsonResponse({
+        output: [{
+          type: "message",
+          content: [{ type: "output_text", text: "done" }],
+        }],
+      });
+    });
+
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.deepseek.com",
+      apiKey: "test-key",
+      model: "deepseek-v4-pro",
+      wireApi: "responses",
+      thinking: {
+        type: "enabled",
+      },
+      reasoningEffort: "high",
+      toolExecutor: createToolExecutor(),
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-tool-responses-thinking",
+      text: "hello",
+    }));
+
+    expect(items).toContainEqual({ type: "final", text: "done" });
+    expect(requestBodies[0]).toMatchObject({
+      model: "deepseek-v4-pro",
+      thinking: {
+        type: "enabled",
+      },
+      reasoning_effort: "high",
+    });
+  });
+});
+
 function createToolExecutor(overrides: Record<string, unknown> = {}): any {
   return {
     getDefinitions: () => [],

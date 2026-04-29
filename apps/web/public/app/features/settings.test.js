@@ -43,6 +43,71 @@ function createFakeList() {
   };
 }
 
+function createClassList(initial = []) {
+  const classes = new Set(initial);
+  return {
+    add(name) {
+      classes.add(name);
+    },
+    remove(name) {
+      classes.delete(name);
+    },
+    toggle(name, force) {
+      if (typeof force === "boolean") {
+        if (force) classes.add(name);
+        else classes.delete(name);
+        return force;
+      }
+      if (classes.has(name)) {
+        classes.delete(name);
+        return false;
+      }
+      classes.add(name);
+      return true;
+    },
+    contains(name) {
+      return classes.has(name);
+    },
+  };
+}
+
+function createSettingsTabButton(tabId, active = false) {
+  const listeners = new Map();
+  const attrs = new Map();
+  return {
+    dataset: { settingsTabTarget: tabId },
+    classList: createClassList(active ? ["active"] : []),
+    addEventListener(type, handler) {
+      listeners.set(type, handler);
+    },
+    trigger(type) {
+      listeners.get(type)?.({ target: this });
+    },
+    setAttribute(name, value) {
+      attrs.set(name, value);
+    },
+    getAttribute(name) {
+      return attrs.get(name) ?? null;
+    },
+  };
+}
+
+function createSettingsPanel(tabId, active = false) {
+  return {
+    dataset: { settingsPanel: tabId },
+    classList: createClassList(active ? ["active"] : []),
+    hidden: !active,
+  };
+}
+
+function createSettingsTabs() {
+  const tabIds = ["model", "memory", "tools", "channels", "system"];
+  return {
+    buttons: tabIds.map((tabId, index) => createSettingsTabButton(tabId, index === 0)),
+    panels: tabIds.map((tabId, index) => createSettingsPanel(tabId, index === 0)),
+  };
+}
+
 function createFakeModal() {
   const classes = new Set(["hidden"]);
   return {
@@ -69,7 +134,6 @@ function createButton(textContent = "") {
 }
 
 function createDomNode() {
-  const classes = new Set();
   return {
     className: "",
     textContent: "",
@@ -80,25 +144,7 @@ function createDomNode() {
       return child;
     },
     addEventListener() {},
-    classList: {
-      add(name) {
-        classes.add(name);
-      },
-      remove(name) {
-        classes.delete(name);
-      },
-      toggle(name) {
-        if (classes.has(name)) {
-          classes.delete(name);
-          return false;
-        }
-        classes.add(name);
-        return true;
-      },
-      contains(name) {
-        return classes.has(name);
-      },
-    },
+    classList: createClassList(),
   };
 }
 
@@ -129,13 +175,50 @@ function createCheckbox(checked = false) {
 }
 
 function createSettingsRefs(overrides = {}) {
+  const settingsTabs = overrides.settingsTabs || createSettingsTabs();
   return {
     settingsModal: overrides.settingsModal || createFakeModal(),
+    settingsTabButtons: overrides.settingsTabButtons || settingsTabs.buttons,
+    settingsTabPanels: overrides.settingsTabPanels || settingsTabs.panels,
     pairingPendingList: overrides.pairingPendingList || createFakeList(),
+    channelSecurityPendingList: overrides.channelSecurityPendingList || createFakeList(),
+    channelsSettingsSection: overrides.channelsSettingsSection || createFakeList(),
     saveSettingsBtn: overrides.saveSettingsBtn || createButton("保存"),
+    cfgHost: overrides.cfgHost || createInput(""),
+    cfgPort: overrides.cfgPort || createInput(""),
+    cfgGatewayPort: overrides.cfgGatewayPort || createInput(""),
+    cfgUpdateCheckEnabled: overrides.cfgUpdateCheckEnabled || createCheckbox(true),
+    cfgUpdateCheckTimeoutMs: overrides.cfgUpdateCheckTimeoutMs || createInput(""),
+    cfgUpdateCheckApiUrl: overrides.cfgUpdateCheckApiUrl || createInput(""),
+    cfgAuthMode: overrides.cfgAuthMode || createInput("none"),
+    cfgAuthToken: overrides.cfgAuthToken || createInput(""),
+    cfgAuthPassword: overrides.cfgAuthPassword || createInput(""),
+    cfgAllowedOrigins: overrides.cfgAllowedOrigins || createInput(""),
+    cfgAttachmentMaxFileBytes: overrides.cfgAttachmentMaxFileBytes || createInput(""),
+    cfgAttachmentMaxTotalBytes: overrides.cfgAttachmentMaxTotalBytes || createInput(""),
+    cfgAttachmentTextCharLimit: overrides.cfgAttachmentTextCharLimit || createInput(""),
+    cfgAttachmentTextTotalCharLimit: overrides.cfgAttachmentTextTotalCharLimit || createInput(""),
+    cfgAudioTranscriptAppendCharLimit: overrides.cfgAudioTranscriptAppendCharLimit || createInput(""),
     cfgApiKey: overrides.cfgApiKey || createInput(""),
     cfgBaseUrl: overrides.cfgBaseUrl || createInput(""),
     cfgModel: overrides.cfgModel || createInput(""),
+    cfgAgentProvider: overrides.cfgAgentProvider || createInput("openai"),
+    cfgOpenAiStreamEnabled: overrides.cfgOpenAiStreamEnabled || createCheckbox(true),
+    cfgOpenAiWireApi: overrides.cfgOpenAiWireApi || createInput("chat_completions"),
+    cfgOpenAiThinking: overrides.cfgOpenAiThinking || createInput(""),
+    cfgOpenAiReasoningEffort: overrides.cfgOpenAiReasoningEffort || createInput(""),
+    cfgResponsesSanitizeToolSchema: overrides.cfgResponsesSanitizeToolSchema || createCheckbox(false),
+    cfgOpenAiMaxRetries: overrides.cfgOpenAiMaxRetries || createInput(""),
+    cfgOpenAiRetryBackoffMs: overrides.cfgOpenAiRetryBackoffMs || createInput(""),
+    cfgOpenAiProxyUrl: overrides.cfgOpenAiProxyUrl || createInput(""),
+    cfgPrimaryWarmupEnabled: overrides.cfgPrimaryWarmupEnabled || createCheckbox(true),
+    cfgPrimaryWarmupTimeoutMs: overrides.cfgPrimaryWarmupTimeoutMs || createInput(""),
+    cfgPrimaryWarmupCooldownMs: overrides.cfgPrimaryWarmupCooldownMs || createInput(""),
+    cfgOpenAiSystemPrompt: overrides.cfgOpenAiSystemPrompt || createInput(""),
+    cfgAgentTimeoutMs: overrides.cfgAgentTimeoutMs || createInput(""),
+    cfgAgentProtocol: overrides.cfgAgentProtocol || createInput(""),
+    cfgVideoFileApiUrl: overrides.cfgVideoFileApiUrl || createInput(""),
+    cfgVideoFileApiKey: overrides.cfgVideoFileApiKey || createInput(""),
     cfgModelPreferredProviders: overrides.cfgModelPreferredProviders || createInput(""),
     cfgAssistantModeEnabled: overrides.cfgAssistantModeEnabled || createCheckbox(false),
     cfgAssistantModePreset: overrides.cfgAssistantModePreset || createInput("custom"),
@@ -147,11 +230,86 @@ function createSettingsRefs(overrides = {}) {
     cfgBrowserRelayEnabled: overrides.cfgBrowserRelayEnabled || createCheckbox(false),
     cfgRelayPort: overrides.cfgRelayPort || createInput(""),
     cfgMcpEnabled: overrides.cfgMcpEnabled || createCheckbox(false),
+    cfgBrowserAllowedDomains: overrides.cfgBrowserAllowedDomains || createInput(""),
+    cfgBrowserDeniedDomains: overrides.cfgBrowserDeniedDomains || createInput(""),
+    cfgAgentBridgeEnabled: overrides.cfgAgentBridgeEnabled || createCheckbox(false),
+    cfgToolGroups: overrides.cfgToolGroups || createInput(""),
+    cfgMaxInputTokens: overrides.cfgMaxInputTokens || createInput(""),
+    cfgMaxOutputTokens: overrides.cfgMaxOutputTokens || createInput(""),
+    cfgDangerousToolsEnabled: overrides.cfgDangerousToolsEnabled || createCheckbox(false),
+    cfgToolsPolicyFile: overrides.cfgToolsPolicyFile || createInput(""),
+    cfgSubAgentMaxConcurrent: overrides.cfgSubAgentMaxConcurrent || createInput(""),
+    cfgSubAgentMaxQueueSize: overrides.cfgSubAgentMaxQueueSize || createInput(""),
+    cfgSubAgentTimeoutMs: overrides.cfgSubAgentTimeoutMs || createInput(""),
+    cfgSubAgentMaxDepth: overrides.cfgSubAgentMaxDepth || createInput(""),
+    cfgMemoryEnabled: overrides.cfgMemoryEnabled || createCheckbox(true),
     cfgCronEnabled: overrides.cfgCronEnabled || createCheckbox(false),
     cfgEmbeddingEnabled: overrides.cfgEmbeddingEnabled || createCheckbox(false),
+    cfgEmbeddingProvider: overrides.cfgEmbeddingProvider || createInput("openai"),
     cfgEmbeddingApiKey: overrides.cfgEmbeddingApiKey || createInput(""),
     cfgEmbeddingBaseUrl: overrides.cfgEmbeddingBaseUrl || createInput(""),
     cfgEmbeddingModel: overrides.cfgEmbeddingModel || createInput(""),
+    cfgLocalEmbeddingModel: overrides.cfgLocalEmbeddingModel || createInput(""),
+    cfgEmbeddingBatchSize: overrides.cfgEmbeddingBatchSize || createInput(""),
+    cfgContextInjectionEnabled: overrides.cfgContextInjectionEnabled || createCheckbox(true),
+    cfgContextInjectionLimit: overrides.cfgContextInjectionLimit || createInput(""),
+    cfgContextInjectionIncludeSession: overrides.cfgContextInjectionIncludeSession || createCheckbox(false),
+    cfgContextInjectionTaskLimit: overrides.cfgContextInjectionTaskLimit || createInput(""),
+    cfgContextInjectionAllowedCategories: overrides.cfgContextInjectionAllowedCategories || createInput(""),
+    cfgAutoRecallEnabled: overrides.cfgAutoRecallEnabled || createCheckbox(false),
+    cfgAutoRecallLimit: overrides.cfgAutoRecallLimit || createInput(""),
+    cfgAutoRecallMinScore: overrides.cfgAutoRecallMinScore || createInput(""),
+    cfgToolResultTranscriptCharLimit: overrides.cfgToolResultTranscriptCharLimit || createInput(""),
+    cfgMindProfileRuntimeEnabled: overrides.cfgMindProfileRuntimeEnabled || createCheckbox(true),
+    cfgMindProfileRuntimeMaxLines: overrides.cfgMindProfileRuntimeMaxLines || createInput(""),
+    cfgMindProfileRuntimeMaxLineLength: overrides.cfgMindProfileRuntimeMaxLineLength || createInput(""),
+    cfgMindProfileRuntimeMaxChars: overrides.cfgMindProfileRuntimeMaxChars || createInput(""),
+    cfgMindProfileRuntimeMinSignalCount: overrides.cfgMindProfileRuntimeMinSignalCount || createInput(""),
+    cfgMemorySummaryEnabled: overrides.cfgMemorySummaryEnabled || createCheckbox(false),
+    cfgMemorySummaryModel: overrides.cfgMemorySummaryModel || createInput(""),
+    cfgMemorySummaryBaseUrl: overrides.cfgMemorySummaryBaseUrl || createInput(""),
+    cfgMemorySummaryApiKey: overrides.cfgMemorySummaryApiKey || createInput(""),
+    cfgMemoryEvolutionEnabled: overrides.cfgMemoryEvolutionEnabled || createCheckbox(false),
+    cfgMemoryEvolutionMinMessages: overrides.cfgMemoryEvolutionMinMessages || createInput(""),
+    cfgMemoryEvolutionModel: overrides.cfgMemoryEvolutionModel || createInput(""),
+    cfgMemoryEvolutionBaseUrl: overrides.cfgMemoryEvolutionBaseUrl || createInput(""),
+    cfgMemoryEvolutionApiKey: overrides.cfgMemoryEvolutionApiKey || createInput(""),
+    cfgMemorySessionDigestMaxRuns: overrides.cfgMemorySessionDigestMaxRuns || createInput(""),
+    cfgMemorySessionDigestWindowMs: overrides.cfgMemorySessionDigestWindowMs || createInput(""),
+    cfgMemoryDurableExtractionMaxRuns: overrides.cfgMemoryDurableExtractionMaxRuns || createInput(""),
+    cfgMemoryDurableExtractionWindowMs: overrides.cfgMemoryDurableExtractionWindowMs || createInput(""),
+    cfgMemoryDurableExtractionMinPendingMessages: overrides.cfgMemoryDurableExtractionMinPendingMessages || createInput(""),
+    cfgMemoryDurableExtractionMinMessageDelta: overrides.cfgMemoryDurableExtractionMinMessageDelta || createInput(""),
+    cfgMemoryDurableExtractionSuccessCooldownMs: overrides.cfgMemoryDurableExtractionSuccessCooldownMs || createInput(""),
+    cfgMemoryDurableExtractionFailureBackoffMs: overrides.cfgMemoryDurableExtractionFailureBackoffMs || createInput(""),
+    cfgMemoryDurableExtractionFailureBackoffMaxMs: overrides.cfgMemoryDurableExtractionFailureBackoffMaxMs || createInput(""),
+    cfgTeamSharedMemoryEnabled: overrides.cfgTeamSharedMemoryEnabled || createCheckbox(false),
+    cfgSharedReviewClaimTimeoutMs: overrides.cfgSharedReviewClaimTimeoutMs || createInput(""),
+    cfgTaskMemoryEnabled: overrides.cfgTaskMemoryEnabled || createCheckbox(false),
+    cfgTaskSummaryEnabled: overrides.cfgTaskSummaryEnabled || createCheckbox(false),
+    cfgTaskSummaryModel: overrides.cfgTaskSummaryModel || createInput(""),
+    cfgTaskSummaryBaseUrl: overrides.cfgTaskSummaryBaseUrl || createInput(""),
+    cfgTaskSummaryApiKey: overrides.cfgTaskSummaryApiKey || createInput(""),
+    cfgTaskSummaryMinDurationMs: overrides.cfgTaskSummaryMinDurationMs || createInput(""),
+    cfgTaskSummaryMinToolCalls: overrides.cfgTaskSummaryMinToolCalls || createInput(""),
+    cfgTaskSummaryMinTokenTotal: overrides.cfgTaskSummaryMinTokenTotal || createInput(""),
+    cfgExperienceAutoPromotionEnabled: overrides.cfgExperienceAutoPromotionEnabled || createCheckbox(true),
+    cfgExperienceAutoMethodEnabled: overrides.cfgExperienceAutoMethodEnabled || createCheckbox(true),
+    cfgExperienceAutoSkillEnabled: overrides.cfgExperienceAutoSkillEnabled || createCheckbox(true),
+    cfgMethodGenerationConfirmRequired: overrides.cfgMethodGenerationConfirmRequired || createCheckbox(false),
+    cfgSkillGenerationConfirmRequired: overrides.cfgSkillGenerationConfirmRequired || createCheckbox(false),
+    cfgMethodPublishConfirmRequired: overrides.cfgMethodPublishConfirmRequired || createCheckbox(false),
+    cfgSkillPublishConfirmRequired: overrides.cfgSkillPublishConfirmRequired || createCheckbox(false),
+    cfgMemoryDeepRetrievalEnabled: overrides.cfgMemoryDeepRetrievalEnabled || createCheckbox(false),
+    cfgEmbeddingQueryPrefix: overrides.cfgEmbeddingQueryPrefix || createInput(""),
+    cfgEmbeddingPassagePrefix: overrides.cfgEmbeddingPassagePrefix || createInput(""),
+    cfgRerankerMinScore: overrides.cfgRerankerMinScore || createInput(""),
+    cfgRerankerLengthNormAnchor: overrides.cfgRerankerLengthNormAnchor || createInput(""),
+    cfgMemoryIndexerVerboseWatch: overrides.cfgMemoryIndexerVerboseWatch || createCheckbox(false),
+    cfgTaskDedupGuardEnabled: overrides.cfgTaskDedupGuardEnabled || createCheckbox(true),
+    cfgTaskDedupWindowMinutes: overrides.cfgTaskDedupWindowMinutes || createInput(""),
+    cfgTaskDedupMode: overrides.cfgTaskDedupMode || createInput(""),
+    cfgTaskDedupPolicy: overrides.cfgTaskDedupPolicy || createInput(""),
     cfgToolsEnabled: overrides.cfgToolsEnabled || createCheckbox(false),
     cfgAgentToolControlMode: overrides.cfgAgentToolControlMode || createInput("disabled"),
     cfgAgentToolControlConfirmPassword: overrides.cfgAgentToolControlConfirmPassword || createInput(""),
@@ -160,6 +318,28 @@ function createSettingsRefs(overrides = {}) {
     cfgTtsVoice: overrides.cfgTtsVoice || createInput(""),
     cfgTtsOpenAIBaseUrl: overrides.cfgTtsOpenAIBaseUrl || createInput(""),
     cfgTtsOpenAIApiKey: overrides.cfgTtsOpenAIApiKey || createInput(""),
+    cfgImageEnabled: overrides.cfgImageEnabled || createCheckbox(true),
+    cfgImageProvider: overrides.cfgImageProvider || createInput("openai"),
+    cfgImageApiKey: overrides.cfgImageApiKey || createInput(""),
+    cfgImageBaseUrl: overrides.cfgImageBaseUrl || createInput(""),
+    cfgImageModel: overrides.cfgImageModel || createInput(""),
+    cfgImageOutputFormat: overrides.cfgImageOutputFormat || createInput(""),
+    cfgImageTimeoutMs: overrides.cfgImageTimeoutMs || createInput(""),
+    cfgSttProvider: overrides.cfgSttProvider || createInput(""),
+    cfgSttLanguage: overrides.cfgSttLanguage || createInput(""),
+    cfgSttGroqApiKey: overrides.cfgSttGroqApiKey || createInput(""),
+    cfgSttGroqBaseUrl: overrides.cfgSttGroqBaseUrl || createInput(""),
+    cfgCameraNativeHelperCommand: overrides.cfgCameraNativeHelperCommand || createInput(""),
+    cfgCameraNativeHelperArgsJson: overrides.cfgCameraNativeHelperArgsJson || createInput(""),
+    cfgCameraNativeHelperCwd: overrides.cfgCameraNativeHelperCwd || createInput(""),
+    cfgCameraNativeHelperStartupTimeoutMs: overrides.cfgCameraNativeHelperStartupTimeoutMs || createInput(""),
+    cfgCameraNativeHelperRequestTimeoutMs: overrides.cfgCameraNativeHelperRequestTimeoutMs || createInput(""),
+    cfgCameraNativeHelperIdleShutdownMs: overrides.cfgCameraNativeHelperIdleShutdownMs || createInput(""),
+    cfgCameraNativeHelperEnvJson: overrides.cfgCameraNativeHelperEnvJson || createInput(""),
+    cfgCameraNativeHelperPowershellCommand: overrides.cfgCameraNativeHelperPowershellCommand || createInput(""),
+    cfgCameraNativeHelperPowershellArgsJson: overrides.cfgCameraNativeHelperPowershellArgsJson || createInput(""),
+    cfgCameraNativeHelperFfmpegCommand: overrides.cfgCameraNativeHelperFfmpegCommand || createInput(""),
+    cfgCameraNativeHelperFfmpegArgsJson: overrides.cfgCameraNativeHelperFfmpegArgsJson || createInput(""),
     cfgDashScopeApiKey: overrides.cfgDashScopeApiKey || createInput(""),
     cfgFacetAnchor: overrides.cfgFacetAnchor || createInput(""),
     cfgInjectAgents: overrides.cfgInjectAgents || createCheckbox(false),
@@ -171,8 +351,108 @@ function createSettingsRefs(overrides = {}) {
     cfgConversationKindSubtask: overrides.cfgConversationKindSubtask || createCheckbox(false),
     cfgConversationKindGoal: overrides.cfgConversationKindGoal || createCheckbox(false),
     cfgConversationKindHeartbeat: overrides.cfgConversationKindHeartbeat || createCheckbox(false),
+    cfgPromptExperimentDisableSections: overrides.cfgPromptExperimentDisableSections || createInput(""),
+    cfgPromptExperimentSectionPriorityOverrides: overrides.cfgPromptExperimentSectionPriorityOverrides || createInput(""),
+    cfgPromptExperimentDisableToolContracts: overrides.cfgPromptExperimentDisableToolContracts || createInput(""),
+    cfgPromptSnapshotMaxRuns: overrides.cfgPromptSnapshotMaxRuns || createInput(""),
+    cfgPromptSnapshotMaxPersistedRuns: overrides.cfgPromptSnapshotMaxPersistedRuns || createInput(""),
+    cfgPromptSnapshotEmailThreadMaxRuns: overrides.cfgPromptSnapshotEmailThreadMaxRuns || createInput(""),
+    cfgPromptSnapshotHeartbeatMaxRuns: overrides.cfgPromptSnapshotHeartbeatMaxRuns || createInput(""),
+    cfgPromptSnapshotRetentionDays: overrides.cfgPromptSnapshotRetentionDays || createInput(""),
+    cfgCompactionEnabled: overrides.cfgCompactionEnabled || createCheckbox(true),
+    cfgCompactionThreshold: overrides.cfgCompactionThreshold || createInput(""),
+    cfgCompactionKeepRecent: overrides.cfgCompactionKeepRecent || createInput(""),
+    cfgCompactionTriggerFraction: overrides.cfgCompactionTriggerFraction || createInput(""),
+    cfgCompactionArchivalThreshold: overrides.cfgCompactionArchivalThreshold || createInput(""),
+    cfgCompactionWarningThreshold: overrides.cfgCompactionWarningThreshold || createInput(""),
+    cfgCompactionBlockingThreshold: overrides.cfgCompactionBlockingThreshold || createInput(""),
+    cfgCompactionMaxConsecutiveFailures: overrides.cfgCompactionMaxConsecutiveFailures || createInput(""),
+    cfgCompactionMaxPtlRetries: overrides.cfgCompactionMaxPtlRetries || createInput(""),
+    cfgCompactionModel: overrides.cfgCompactionModel || createInput(""),
+    cfgCompactionBaseUrl: overrides.cfgCompactionBaseUrl || createInput(""),
+    cfgCompactionApiKey: overrides.cfgCompactionApiKey || createInput(""),
+    cfgEmailOutboundRequireConfirmation: overrides.cfgEmailOutboundRequireConfirmation || createCheckbox(false),
+    cfgEmailDefaultProvider: overrides.cfgEmailDefaultProvider || createInput(""),
     cfgEmailSmtpEnabled: overrides.cfgEmailSmtpEnabled || createCheckbox(false),
+    cfgEmailSmtpAccountId: overrides.cfgEmailSmtpAccountId || createInput(""),
+    cfgEmailSmtpHost: overrides.cfgEmailSmtpHost || createInput(""),
+    cfgEmailSmtpPort: overrides.cfgEmailSmtpPort || createInput(""),
+    cfgEmailSmtpSecure: overrides.cfgEmailSmtpSecure || createCheckbox(false),
+    cfgEmailSmtpUser: overrides.cfgEmailSmtpUser || createInput(""),
+    cfgEmailSmtpPass: overrides.cfgEmailSmtpPass || createInput(""),
+    cfgEmailSmtpFromAddress: overrides.cfgEmailSmtpFromAddress || createInput(""),
+    cfgEmailSmtpFromName: overrides.cfgEmailSmtpFromName || createInput(""),
     cfgEmailImapEnabled: overrides.cfgEmailImapEnabled || createCheckbox(false),
+    cfgEmailInboundAgentId: overrides.cfgEmailInboundAgentId || createInput(""),
+    cfgEmailImapAccountId: overrides.cfgEmailImapAccountId || createInput(""),
+    cfgEmailImapHost: overrides.cfgEmailImapHost || createInput(""),
+    cfgEmailImapPort: overrides.cfgEmailImapPort || createInput(""),
+    cfgEmailImapSecure: overrides.cfgEmailImapSecure || createCheckbox(false),
+    cfgEmailImapUser: overrides.cfgEmailImapUser || createInput(""),
+    cfgEmailImapPass: overrides.cfgEmailImapPass || createInput(""),
+    cfgEmailImapMailbox: overrides.cfgEmailImapMailbox || createInput(""),
+    cfgEmailImapPollIntervalMs: overrides.cfgEmailImapPollIntervalMs || createInput(""),
+    cfgEmailImapConnectTimeoutMs: overrides.cfgEmailImapConnectTimeoutMs || createInput(""),
+    cfgEmailImapSocketTimeoutMs: overrides.cfgEmailImapSocketTimeoutMs || createInput(""),
+    cfgEmailImapBootstrapMode: overrides.cfgEmailImapBootstrapMode || createInput(""),
+    cfgEmailImapRecentWindowLimit: overrides.cfgEmailImapRecentWindowLimit || createInput(""),
+    cfgChannelRouterEnabled: overrides.cfgChannelRouterEnabled || createCheckbox(false),
+    cfgChannelRouterConfigPath: overrides.cfgChannelRouterConfigPath || createInput(""),
+    cfgChannelRouterDefaultAgentId: overrides.cfgChannelRouterDefaultAgentId || createInput(""),
+    cfgFeishuAppId: overrides.cfgFeishuAppId || createInput(""),
+    cfgFeishuAppSecret: overrides.cfgFeishuAppSecret || createInput(""),
+    cfgFeishuAgentId: overrides.cfgFeishuAgentId || createInput(""),
+    cfgQqAppId: overrides.cfgQqAppId || createInput(""),
+    cfgQqAppSecret: overrides.cfgQqAppSecret || createInput(""),
+    cfgQqAgentId: overrides.cfgQqAgentId || createInput(""),
+    cfgQqSandbox: overrides.cfgQqSandbox || createCheckbox(false),
+    cfgCommunityApiEnabled: overrides.cfgCommunityApiEnabled || createCheckbox(false),
+    cfgCommunityApiToken: overrides.cfgCommunityApiToken || createInput(""),
+    cfgDiscordEnabled: overrides.cfgDiscordEnabled || createCheckbox(false),
+    cfgDiscordBotToken: overrides.cfgDiscordBotToken || createInput(""),
+    cfgDiscordDefaultChannelId: overrides.cfgDiscordDefaultChannelId || createInput(""),
+    cfgWebhookPreauthMaxBytes: overrides.cfgWebhookPreauthMaxBytes || createInput(""),
+    cfgWebhookPreauthTimeoutMs: overrides.cfgWebhookPreauthTimeoutMs || createInput(""),
+    cfgWebhookRateLimitWindowMs: overrides.cfgWebhookRateLimitWindowMs || createInput(""),
+    cfgWebhookRateLimitMaxRequests: overrides.cfgWebhookRateLimitMaxRequests || createInput(""),
+    cfgWebhookRateLimitMaxTrackedKeys: overrides.cfgWebhookRateLimitMaxTrackedKeys || createInput(""),
+    cfgWebhookMaxInFlightPerKey: overrides.cfgWebhookMaxInFlightPerKey || createInput(""),
+    cfgWebhookMaxInFlightTrackedKeys: overrides.cfgWebhookMaxInFlightTrackedKeys || createInput(""),
+    cfgTokenUsageUploadEnabled: overrides.cfgTokenUsageUploadEnabled || createCheckbox(false),
+    cfgTokenUsageUploadUrl: overrides.cfgTokenUsageUploadUrl || createInput(""),
+    cfgTokenUsageUploadApiKey: overrides.cfgTokenUsageUploadApiKey || createInput(""),
+    cfgTokenUsageUploadTimeoutMs: overrides.cfgTokenUsageUploadTimeoutMs || createInput(""),
+    cfgTokenUsageStrictUuid: overrides.cfgTokenUsageStrictUuid || createCheckbox(false),
+    cfgAutoTaskTimeEnabled: overrides.cfgAutoTaskTimeEnabled || createCheckbox(false),
+    cfgAutoTaskTokenEnabled: overrides.cfgAutoTaskTokenEnabled || createCheckbox(false),
+    cfgWebhookConfigPath: overrides.cfgWebhookConfigPath || createInput(""),
+    cfgWebhookIdempotencyWindowMs: overrides.cfgWebhookIdempotencyWindowMs || createInput(""),
+    cfgStateDir: overrides.cfgStateDir || createInput(""),
+    cfgStateDirWindows: overrides.cfgStateDirWindows || createInput(""),
+    cfgStateDirWsl: overrides.cfgStateDirWsl || createInput(""),
+    cfgWorkspaceDir: overrides.cfgWorkspaceDir || createInput(""),
+    cfgExtraWorkspaceRoots: overrides.cfgExtraWorkspaceRoots || createInput(""),
+    cfgWebRoot: overrides.cfgWebRoot || createInput(""),
+    cfgLogLevel: overrides.cfgLogLevel || createInput(""),
+    cfgLogConsole: overrides.cfgLogConsole || createCheckbox(false),
+    cfgLogFile: overrides.cfgLogFile || createCheckbox(false),
+    cfgLogDir: overrides.cfgLogDir || createInput(""),
+    cfgLogMaxSize: overrides.cfgLogMaxSize || createInput(""),
+    cfgLogRetentionDays: overrides.cfgLogRetentionDays || createInput(""),
+    cfgDreamAutoHeartbeatEnabled: overrides.cfgDreamAutoHeartbeatEnabled || createCheckbox(false),
+    cfgDreamAutoCronEnabled: overrides.cfgDreamAutoCronEnabled || createCheckbox(false),
+    cfgDreamOpenAIThinking: overrides.cfgDreamOpenAIThinking || createInput(""),
+    cfgDreamOpenAIReasoningEffort: overrides.cfgDreamOpenAIReasoningEffort || createInput(""),
+    cfgDreamOpenAITimeoutMs: overrides.cfgDreamOpenAITimeoutMs || createInput(""),
+    cfgDreamOpenAIMaxTokens: overrides.cfgDreamOpenAIMaxTokens || createInput(""),
+    cfgDreamObsidianEnabled: overrides.cfgDreamObsidianEnabled || createCheckbox(false),
+    cfgDreamObsidianVaultPath: overrides.cfgDreamObsidianVaultPath || createInput(""),
+    cfgDreamObsidianRootDir: overrides.cfgDreamObsidianRootDir || createInput(""),
+    cfgCommonsObsidianEnabled: overrides.cfgCommonsObsidianEnabled || createCheckbox(false),
+    cfgCommonsObsidianVaultPath: overrides.cfgCommonsObsidianVaultPath || createInput(""),
+    cfgCommonsObsidianRootDir: overrides.cfgCommonsObsidianRootDir || createInput(""),
+    cfgRoomInjectThreshold: overrides.cfgRoomInjectThreshold || createInput(""),
+    cfgRoomMembersCacheTtl: overrides.cfgRoomMembersCacheTtl || createInput(""),
     doctorStatusEl: overrides.doctorStatusEl || createDomNode(),
     assistantModeConfigTitleEl: overrides.assistantModeConfigTitleEl || { textContent: "" },
     assistantModeConfigHelpEl: overrides.assistantModeConfigHelpEl || { textContent: "" },
@@ -212,6 +492,7 @@ function createController(overrides = {}) {
 describe("settings controller", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.clearAllMocks();
     globalThis.HTMLElement = FakeHTMLElement;
     const doctorToggleBtn = createDomNode();
     globalThis.document = {
@@ -274,8 +555,38 @@ describe("settings controller", () => {
 
   it("loads assistant mode config fields through settings mapping", async () => {
     const loadServerConfig = vi.fn().mockResolvedValue({
+      BELLDANDY_HOST: "0.0.0.0",
+      BELLDANDY_PORT: "3000",
+      BELLDANDY_GATEWAY_PORT: "3001",
+      BELLDANDY_UPDATE_CHECK: "false",
+      BELLDANDY_UPDATE_CHECK_TIMEOUT_MS: "3500",
+      BELLDANDY_UPDATE_CHECK_API_URL: "https://api.github.com/repos/example/project/releases/latest",
+      BELLDANDY_AUTH_MODE: "token",
+      BELLDANDY_AUTH_TOKEN: "[REDACTED]",
+      BELLDANDY_ALLOWED_ORIGINS: "http://localhost:5173,https://app.example.com",
+      BELLDANDY_ATTACHMENT_MAX_FILE_BYTES: "12345",
+      BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES: "67890",
+      BELLDANDY_ATTACHMENT_TEXT_CHAR_LIMIT: "2000",
+      BELLDANDY_ATTACHMENT_TEXT_TOTAL_CHAR_LIMIT: "4000",
+      BELLDANDY_AUDIO_TRANSCRIPT_APPEND_CHAR_LIMIT: "800",
+      BELLDANDY_AGENT_PROVIDER: "openai",
       BELLDANDY_OPENAI_BASE_URL: "https://api.example.com/v1",
       BELLDANDY_OPENAI_MODEL: "gpt-test",
+      BELLDANDY_OPENAI_STREAM: "false",
+      BELLDANDY_OPENAI_WIRE_API: "responses",
+      BELLDANDY_OPENAI_THINKING: "enabled",
+      BELLDANDY_OPENAI_REASONING_EFFORT: "max",
+      BELLDANDY_RESPONSES_SANITIZE_TOOL_SCHEMA: "true",
+      BELLDANDY_OPENAI_MAX_RETRIES: "2",
+      BELLDANDY_OPENAI_RETRY_BACKOFF_MS: "450",
+      BELLDANDY_OPENAI_PROXY_URL: "http://127.0.0.1:7890",
+      BELLDANDY_PRIMARY_WARMUP_ENABLED: "false",
+      BELLDANDY_PRIMARY_WARMUP_TIMEOUT_MS: "9000",
+      BELLDANDY_PRIMARY_WARMUP_COOLDOWN_MS: "65000",
+      BELLDANDY_OPENAI_SYSTEM_PROMPT: "follow house rules",
+      BELLDANDY_AGENT_TIMEOUT_MS: "150000",
+      BELLDANDY_AGENT_PROTOCOL: "anthropic",
+      BELLDANDY_VIDEO_FILE_API_URL: "https://api.moonshot.cn/v1",
       BELLDANDY_TTS_OPENAI_BASE_URL: "https://tts.example.com/v1",
       BELLDANDY_MODEL_PREFERRED_PROVIDERS: "moonshot,openrouter",
       BELLDANDY_MEMORY_SUMMARY_API_KEY: "aliyun-memory-summary-key",
@@ -285,20 +596,200 @@ describe("settings controller", () => {
       BELLDANDY_HEARTBEAT_INTERVAL: "45m",
       BELLDANDY_HEARTBEAT_ENABLED: "true",
       BELLDANDY_HEARTBEAT_ACTIVE_HOURS: "08:00-23:00",
+      BELLDANDY_BROWSER_RELAY_ENABLED: "true",
+      BELLDANDY_RELAY_PORT: "28892",
+      BELLDANDY_MCP_ENABLED: "true",
+      BELLDANDY_BROWSER_ALLOWED_DOMAINS: "github.com,developer.mozilla.org",
+      BELLDANDY_BROWSER_DENIED_DOMAINS: "mail.google.com",
+      BELLDANDY_AGENT_BRIDGE_ENABLED: "true",
+      BELLDANDY_TOOL_GROUPS: "browser,system",
+      BELLDANDY_MAX_INPUT_TOKENS: "20000",
+      BELLDANDY_MAX_OUTPUT_TOKENS: "8192",
+      BELLDANDY_MEMORY_ENABLED: "false",
+      BELLDANDY_EMBEDDING_ENABLED: "true",
+      BELLDANDY_EMBEDDING_PROVIDER: "local",
+      BELLDANDY_EMBEDDING_OPENAI_BASE_URL: "https://embedding.example.com/v1",
+      BELLDANDY_EMBEDDING_MODEL: "text-embedding-3-small",
+      BELLDANDY_LOCAL_EMBEDDING_MODEL: "BAAI/bge-m3",
+      BELLDANDY_EMBEDDING_BATCH_SIZE: "4",
+      BELLDANDY_CONTEXT_INJECTION: "false",
+      BELLDANDY_CONTEXT_INJECTION_LIMIT: "7",
+      BELLDANDY_CONTEXT_INJECTION_INCLUDE_SESSION: "true",
+      BELLDANDY_CONTEXT_INJECTION_TASK_LIMIT: "4",
+      BELLDANDY_CONTEXT_INJECTION_ALLOWED_CATEGORIES: "preference,fact,experience",
+      BELLDANDY_AUTO_RECALL_ENABLED: "true",
+      BELLDANDY_AUTO_RECALL_LIMIT: "5",
+      BELLDANDY_AUTO_RECALL_MIN_SCORE: "0.42",
+      BELLDANDY_TOOL_RESULT_TRANSCRIPT_CHAR_LIMIT: "9000",
+      BELLDANDY_MIND_PROFILE_RUNTIME_ENABLED: "false",
+      BELLDANDY_MIND_PROFILE_RUNTIME_MAX_LINES: "6",
+      BELLDANDY_MIND_PROFILE_RUNTIME_MAX_LINE_LENGTH: "140",
+      BELLDANDY_MIND_PROFILE_RUNTIME_MAX_CHARS: "480",
+      BELLDANDY_MIND_PROFILE_RUNTIME_MIN_SIGNAL_COUNT: "3",
+      BELLDANDY_MEMORY_SUMMARY_ENABLED: "true",
+      BELLDANDY_MEMORY_SUMMARY_MODEL: "qwen-plus",
+      BELLDANDY_MEMORY_SUMMARY_BASE_URL: "https://memory-summary.example.com/v1",
+      BELLDANDY_MEMORY_EVOLUTION_ENABLED: "true",
+      BELLDANDY_MEMORY_EVOLUTION_MIN_MESSAGES: "8",
+      BELLDANDY_MEMORY_EVOLUTION_MODEL: "qwen-max",
+      BELLDANDY_MEMORY_EVOLUTION_BASE_URL: "https://memory-evolution.example.com/v1",
+      BELLDANDY_MEMORY_SESSION_DIGEST_MAX_RUNS: "2",
+      BELLDANDY_MEMORY_SESSION_DIGEST_WINDOW_MS: "1200000",
+      BELLDANDY_MEMORY_DURABLE_EXTRACTION_MAX_RUNS: "3",
+      BELLDANDY_MEMORY_DURABLE_EXTRACTION_WINDOW_MS: "3600000",
+      BELLDANDY_MEMORY_DURABLE_EXTRACTION_MIN_PENDING_MESSAGES: "6",
+      BELLDANDY_MEMORY_DURABLE_EXTRACTION_MIN_MESSAGE_DELTA: "4",
+      BELLDANDY_MEMORY_DURABLE_EXTRACTION_SUCCESS_COOLDOWN_MS: "300000",
+      BELLDANDY_MEMORY_DURABLE_EXTRACTION_FAILURE_BACKOFF_MS: "5000",
+      BELLDANDY_MEMORY_DURABLE_EXTRACTION_FAILURE_BACKOFF_MAX_MS: "600000",
+      BELLDANDY_TEAM_SHARED_MEMORY_ENABLED: "true",
+      BELLDANDY_SHARED_REVIEW_CLAIM_TIMEOUT_MS: "5400000",
+      BELLDANDY_TASK_MEMORY_ENABLED: "true",
+      BELLDANDY_TASK_SUMMARY_ENABLED: "true",
+      BELLDANDY_TASK_SUMMARY_MODEL: "moonshot-v1-32k",
+      BELLDANDY_TASK_SUMMARY_BASE_URL: "https://task-summary.example.com/v1",
+      BELLDANDY_TASK_SUMMARY_MIN_DURATION_MS: "30000",
+      BELLDANDY_TASK_SUMMARY_MIN_TOOL_CALLS: "3",
+      BELLDANDY_TASK_SUMMARY_MIN_TOKEN_TOTAL: "4000",
+      BELLDANDY_EXPERIENCE_AUTO_PROMOTION_ENABLED: "false",
+      BELLDANDY_EXPERIENCE_AUTO_METHOD_ENABLED: "false",
+      BELLDANDY_EXPERIENCE_AUTO_SKILL_ENABLED: "true",
+      BELLDANDY_METHOD_GENERATION_CONFIRM_REQUIRED: "true",
+      BELLDANDY_SKILL_GENERATION_CONFIRM_REQUIRED: "false",
+      BELLDANDY_METHOD_PUBLISH_CONFIRM_REQUIRED: "true",
+      BELLDANDY_SKILL_PUBLISH_CONFIRM_REQUIRED: "true",
+      BELLDANDY_MEMORY_DEEP_RETRIEVAL: "true",
+      BELLDANDY_EMBEDDING_QUERY_PREFIX: "query: ",
+      BELLDANDY_EMBEDDING_PASSAGE_PREFIX: "passage: ",
+      BELLDANDY_RERANKER_MIN_SCORE: "0.2",
+      BELLDANDY_RERANKER_LENGTH_NORM_ANCHOR: "500",
+      BELLDANDY_MEMORY_INDEXER_VERBOSE_WATCH: "true",
+      BELLDANDY_TASK_DEDUP_GUARD_ENABLED: "false",
+      BELLDANDY_TASK_DEDUP_WINDOW_MINUTES: "30",
+      BELLDANDY_TASK_DEDUP_MODE: "strict",
+      BELLDANDY_TASK_DEDUP_POLICY: "run_command:off,file_write:hard-block",
+      BELLDANDY_CAMERA_NATIVE_HELPER_COMMAND: "node",
+      BELLDANDY_CAMERA_NATIVE_HELPER_ARGS_JSON: '["helper.js"]',
+      BELLDANDY_CAMERA_NATIVE_HELPER_CWD: "E:/project/star-sanctuary",
+      BELLDANDY_CAMERA_NATIVE_HELPER_STARTUP_TIMEOUT_MS: "10000",
+      BELLDANDY_CAMERA_NATIVE_HELPER_REQUEST_TIMEOUT_MS: "15000",
+      BELLDANDY_CAMERA_NATIVE_HELPER_IDLE_SHUTDOWN_MS: "2000",
+      BELLDANDY_CAMERA_NATIVE_HELPER_ENV_JSON: '{"FOO":"bar"}',
+      BELLDANDY_CAMERA_NATIVE_HELPER_POWERSHELL_COMMAND: "powershell.exe",
+      BELLDANDY_CAMERA_NATIVE_HELPER_POWERSHELL_ARGS_JSON: "[]",
+      BELLDANDY_CAMERA_NATIVE_HELPER_FFMPEG_COMMAND: "C:/ffmpeg/bin/ffmpeg.exe",
+      BELLDANDY_CAMERA_NATIVE_HELPER_FFMPEG_ARGS_JSON: '["-hide_banner"]',
       BELLDANDY_CRON_ENABLED: "true",
+      BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION: "true",
+      BELLDANDY_EMAIL_DEFAULT_PROVIDER: "smtp",
       BELLDANDY_EMAIL_SMTP_ENABLED: "true",
+      BELLDANDY_EMAIL_SMTP_ACCOUNT_ID: "default",
+      BELLDANDY_EMAIL_SMTP_HOST: "smtp.example.com",
+      BELLDANDY_EMAIL_SMTP_PORT: "587",
+      BELLDANDY_EMAIL_SMTP_SECURE: "false",
+      BELLDANDY_EMAIL_SMTP_USER: "mailer@example.com",
+      BELLDANDY_EMAIL_SMTP_PASS: "[REDACTED]",
+      BELLDANDY_EMAIL_SMTP_FROM_ADDRESS: "mailer@example.com",
+      BELLDANDY_EMAIL_SMTP_FROM_NAME: "Belldandy",
+      BELLDANDY_EMAIL_INBOUND_AGENT_ID: "researcher",
       BELLDANDY_EMAIL_IMAP_ENABLED: "false",
+      BELLDANDY_EMAIL_IMAP_ACCOUNT_ID: "mailbox-1",
+      BELLDANDY_EMAIL_IMAP_HOST: "imap.example.com",
+      BELLDANDY_EMAIL_IMAP_PORT: "993",
+      BELLDANDY_EMAIL_IMAP_SECURE: "true",
+      BELLDANDY_EMAIL_IMAP_USER: "reader@example.com",
+      BELLDANDY_EMAIL_IMAP_PASS: "[REDACTED]",
+      BELLDANDY_EMAIL_IMAP_MAILBOX: "INBOX",
+      BELLDANDY_EMAIL_IMAP_POLL_INTERVAL_MS: "60000",
+      BELLDANDY_EMAIL_IMAP_CONNECT_TIMEOUT_MS: "10000",
+      BELLDANDY_EMAIL_IMAP_SOCKET_TIMEOUT_MS: "20000",
+      BELLDANDY_EMAIL_IMAP_BOOTSTRAP_MODE: "latest",
+      BELLDANDY_EMAIL_IMAP_RECENT_WINDOW_LIMIT: "50",
+      BELLDANDY_CHANNEL_ROUTER_ENABLED: "true",
+      BELLDANDY_CHANNEL_ROUTER_CONFIG_PATH: "~/.star_sanctuary/channels-routing.json",
+      BELLDANDY_CHANNEL_ROUTER_DEFAULT_AGENT_ID: "default",
+      BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID: "123456789012345678",
+      BELLDANDY_WEBHOOK_PREAUTH_MAX_BYTES: "65536",
+      BELLDANDY_WEBHOOK_PREAUTH_TIMEOUT_MS: "5000",
+      BELLDANDY_WEBHOOK_RATE_LIMIT_WINDOW_MS: "60000",
+      BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_REQUESTS: "120",
+      BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS: "4096",
+      BELLDANDY_WEBHOOK_MAX_IN_FLIGHT_PER_KEY: "8",
+      BELLDANDY_WEBHOOK_MAX_IN_FLIGHT_TRACKED_KEYS: "4096",
+      BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED: "true",
+      BELLDANDY_TOKEN_USAGE_UPLOAD_URL: "http://127.0.0.1:3001/api/internal/token-usage",
+      BELLDANDY_TOKEN_USAGE_UPLOAD_APIKEY: "[REDACTED]",
+      BELLDANDY_TOKEN_USAGE_UPLOAD_TIMEOUT_MS: "3000",
+      BELLDANDY_TOKEN_USAGE_STRICT_UUID: "true",
+      BELLDANDY_AUTO_TASK_TIME_ENABLED: "true",
+      BELLDANDY_AUTO_TASK_TOKEN_ENABLED: "false",
+      BELLDANDY_WEBHOOK_CONFIG_PATH: "~/.star_sanctuary/webhooks.json",
+      BELLDANDY_WEBHOOK_IDEMPOTENCY_WINDOW_MS: "600000",
+      BELLDANDY_STATE_DIR: "~/.star_sanctuary",
+      BELLDANDY_STATE_DIR_WINDOWS: "C:/Users/admin/.star_sanctuary",
+      BELLDANDY_STATE_DIR_WSL: "~/.star_sanctuary",
+      BELLDANDY_WORKSPACE_DIR: "./workspace",
+      BELLDANDY_EXTRA_WORKSPACE_ROOTS: "E:/tools,D:/projects",
+      BELLDANDY_WEB_ROOT: "apps/web/public",
+      BELLDANDY_LOG_LEVEL: "info",
+      BELLDANDY_LOG_CONSOLE: "true",
+      BELLDANDY_LOG_FILE: "true",
+      BELLDANDY_LOG_DIR: "~/.star_sanctuary/logs",
+      BELLDANDY_LOG_MAX_SIZE: "10MB",
+      BELLDANDY_LOG_RETENTION_DAYS: "7",
+      BELLDANDY_DREAM_AUTO_HEARTBEAT_ENABLED: "true",
+      BELLDANDY_DREAM_AUTO_CRON_ENABLED: "false",
+      BELLDANDY_DREAM_OPENAI_THINKING: "disabled",
+      BELLDANDY_DREAM_OPENAI_REASONING_EFFORT: "",
+      BELLDANDY_DREAM_OPENAI_TIMEOUT_MS: "120000",
+      BELLDANDY_DREAM_OPENAI_MAX_TOKENS: "1000",
+      BELLDANDY_DREAM_OBSIDIAN_ENABLED: "true",
+      BELLDANDY_DREAM_OBSIDIAN_VAULT_PATH: "C:/Vault",
+      BELLDANDY_DREAM_OBSIDIAN_ROOT_DIR: "Dream",
+      BELLDANDY_COMMONS_OBSIDIAN_ENABLED: "true",
+      BELLDANDY_COMMONS_OBSIDIAN_VAULT_PATH: "C:/Vault",
+      BELLDANDY_COMMONS_OBSIDIAN_ROOT_DIR: "Commons",
     });
     const { controller, refs } = createController({ loadServerConfig });
 
     await controller.loadConfig();
 
+    expect(refs.cfgHost.value).toBe("0.0.0.0");
+    expect(refs.cfgPort.value).toBe("3000");
+    expect(refs.cfgGatewayPort.value).toBe("3001");
+    expect(refs.cfgUpdateCheckEnabled.checked).toBe(false);
+    expect(refs.cfgUpdateCheckTimeoutMs.value).toBe("3500");
+    expect(refs.cfgUpdateCheckApiUrl.value).toBe("https://api.github.com/repos/example/project/releases/latest");
+    expect(refs.cfgAuthMode.value).toBe("token");
+    expect(refs.cfgAuthToken.value).toBe("[REDACTED]");
+    expect(refs.cfgAllowedOrigins.value).toBe("http://localhost:5173,https://app.example.com");
+    expect(refs.cfgAttachmentMaxFileBytes.value).toBe("12345");
+    expect(refs.cfgAttachmentMaxTotalBytes.value).toBe("67890");
+    expect(refs.cfgAttachmentTextCharLimit.value).toBe("2000");
+    expect(refs.cfgAttachmentTextTotalCharLimit.value).toBe("4000");
+    expect(refs.cfgAudioTranscriptAppendCharLimit.value).toBe("800");
     expect(refs.assistantModeConfigTitleEl.textContent).toBe("Assistant Mode 配置");
     expect(refs.assistantModeConfigHelpEl.textContent).toContain("统一收口主动工作相关配置");
     expect(refs.assistantModeConfigHintEl.textContent).toContain("assistant mode 已启用");
     expect(refs.assistantModeConfigHintEl.textContent).toContain("主开关已显式配置");
+    expect(refs.cfgAgentProvider.value).toBe("openai");
     expect(refs.cfgBaseUrl.value).toBe("https://api.example.com/v1");
     expect(refs.cfgModel.value).toBe("gpt-test");
+    expect(refs.cfgOpenAiStreamEnabled.checked).toBe(false);
+    expect(refs.cfgOpenAiWireApi.value).toBe("responses");
+    expect(refs.cfgOpenAiThinking.value).toBe("enabled");
+    expect(refs.cfgOpenAiReasoningEffort.value).toBe("max");
+    expect(refs.cfgResponsesSanitizeToolSchema.checked).toBe(true);
+    expect(refs.cfgOpenAiMaxRetries.value).toBe("2");
+    expect(refs.cfgOpenAiRetryBackoffMs.value).toBe("450");
+    expect(refs.cfgOpenAiProxyUrl.value).toBe("http://127.0.0.1:7890");
+    expect(refs.cfgPrimaryWarmupEnabled.checked).toBe(false);
+    expect(refs.cfgPrimaryWarmupTimeoutMs.value).toBe("9000");
+    expect(refs.cfgPrimaryWarmupCooldownMs.value).toBe("65000");
+    expect(refs.cfgOpenAiSystemPrompt.value).toBe("follow house rules");
+    expect(refs.cfgAgentTimeoutMs.value).toBe("150000");
+    expect(refs.cfgAgentProtocol.value).toBe("anthropic");
+    expect(refs.cfgVideoFileApiUrl.value).toBe("https://api.moonshot.cn/v1");
     expect(refs.cfgTtsOpenAIBaseUrl.value).toBe("https://tts.example.com/v1");
     expect(refs.cfgModelPreferredProviders.value).toBe("moonshot,openrouter");
     expect(refs.cfgDashScopeApiKey.value).toBe("aliyun-memory-summary-key");
@@ -309,15 +800,247 @@ describe("settings controller", () => {
     expect(refs.cfgHeartbeat.value).toBe("45m");
     expect(refs.cfgHeartbeatEnabled.checked).toBe(true);
     expect(refs.cfgHeartbeatActiveHours.value).toBe("08:00-23:00");
+    expect(refs.cfgBrowserRelayEnabled.checked).toBe(true);
+    expect(refs.cfgRelayPort.value).toBe("28892");
+    expect(refs.cfgMcpEnabled.checked).toBe(true);
+    expect(refs.cfgBrowserAllowedDomains.value).toBe("github.com,developer.mozilla.org");
+    expect(refs.cfgBrowserDeniedDomains.value).toBe("mail.google.com");
+    expect(refs.cfgAgentBridgeEnabled.checked).toBe(true);
+    expect(refs.cfgToolGroups.value).toBe("browser,system");
+    expect(refs.cfgMaxInputTokens.value).toBe("20000");
+    expect(refs.cfgMaxOutputTokens.value).toBe("8192");
+    expect(refs.cfgMemoryEnabled.checked).toBe(false);
+    expect(refs.cfgEmbeddingEnabled.checked).toBe(true);
+    expect(refs.cfgEmbeddingProvider.value).toBe("local");
+    expect(refs.cfgEmbeddingBaseUrl.value).toBe("https://embedding.example.com/v1");
+    expect(refs.cfgEmbeddingModel.value).toBe("text-embedding-3-small");
+    expect(refs.cfgLocalEmbeddingModel.value).toBe("BAAI/bge-m3");
+    expect(refs.cfgEmbeddingBatchSize.value).toBe("4");
+    expect(refs.cfgContextInjectionEnabled.checked).toBe(false);
+    expect(refs.cfgContextInjectionLimit.value).toBe("7");
+    expect(refs.cfgContextInjectionIncludeSession.checked).toBe(true);
+    expect(refs.cfgContextInjectionTaskLimit.value).toBe("4");
+    expect(refs.cfgContextInjectionAllowedCategories.value).toBe("preference,fact,experience");
+    expect(refs.cfgAutoRecallEnabled.checked).toBe(true);
+    expect(refs.cfgAutoRecallLimit.value).toBe("5");
+    expect(refs.cfgAutoRecallMinScore.value).toBe("0.42");
+    expect(refs.cfgToolResultTranscriptCharLimit.value).toBe("9000");
+    expect(refs.cfgMindProfileRuntimeEnabled.checked).toBe(false);
+    expect(refs.cfgMindProfileRuntimeMaxLines.value).toBe("6");
+    expect(refs.cfgMindProfileRuntimeMaxLineLength.value).toBe("140");
+    expect(refs.cfgMindProfileRuntimeMaxChars.value).toBe("480");
+    expect(refs.cfgMindProfileRuntimeMinSignalCount.value).toBe("3");
+    expect(refs.cfgMemorySummaryEnabled.checked).toBe(true);
+    expect(refs.cfgMemorySummaryModel.value).toBe("qwen-plus");
+    expect(refs.cfgMemorySummaryBaseUrl.value).toBe("https://memory-summary.example.com/v1");
+    expect(refs.cfgMemorySummaryApiKey.value).toBe("aliyun-memory-summary-key");
+    expect(refs.cfgMemoryEvolutionEnabled.checked).toBe(true);
+    expect(refs.cfgMemoryEvolutionMinMessages.value).toBe("8");
+    expect(refs.cfgMemoryEvolutionModel.value).toBe("qwen-max");
+    expect(refs.cfgMemoryEvolutionBaseUrl.value).toBe("https://memory-evolution.example.com/v1");
+    expect(refs.cfgMemorySessionDigestMaxRuns.value).toBe("2");
+    expect(refs.cfgMemorySessionDigestWindowMs.value).toBe("1200000");
+    expect(refs.cfgMemoryDurableExtractionMaxRuns.value).toBe("3");
+    expect(refs.cfgMemoryDurableExtractionWindowMs.value).toBe("3600000");
+    expect(refs.cfgTeamSharedMemoryEnabled.checked).toBe(true);
+    expect(refs.cfgTaskMemoryEnabled.checked).toBe(true);
+    expect(refs.cfgTaskSummaryEnabled.checked).toBe(true);
+    expect(refs.cfgTaskSummaryModel.value).toBe("moonshot-v1-32k");
+    expect(refs.cfgTaskSummaryBaseUrl.value).toBe("https://task-summary.example.com/v1");
+    expect(refs.cfgExperienceAutoPromotionEnabled.checked).toBe(false);
+    expect(refs.cfgMethodGenerationConfirmRequired.checked).toBe(true);
+    expect(refs.cfgMemoryDeepRetrievalEnabled.checked).toBe(true);
+    expect(refs.cfgEmbeddingQueryPrefix.value).toBe("query: ");
+    expect(refs.cfgMemoryIndexerVerboseWatch.checked).toBe(true);
+    expect(refs.cfgTaskDedupGuardEnabled.checked).toBe(false);
+    expect(refs.cfgTaskDedupWindowMinutes.value).toBe("30");
+    expect(refs.cfgTaskDedupMode.value).toBe("strict");
+    expect(refs.cfgTaskDedupPolicy.value).toBe("run_command:off,file_write:hard-block");
+    expect(refs.cfgCameraNativeHelperCommand.value).toBe("node");
+    expect(refs.cfgCameraNativeHelperArgsJson.value).toBe('["helper.js"]');
+    expect(refs.cfgCameraNativeHelperEnvJson.value).toBe('{"FOO":"bar"}');
     expect(refs.cfgCronEnabled.checked).toBe(true);
+    expect(refs.cfgEmailOutboundRequireConfirmation.checked).toBe(true);
+    expect(refs.cfgEmailDefaultProvider.value).toBe("smtp");
     expect(refs.cfgEmailSmtpEnabled.checked).toBe(true);
+    expect(refs.cfgEmailSmtpAccountId.value).toBe("default");
+    expect(refs.cfgEmailSmtpHost.value).toBe("smtp.example.com");
+    expect(refs.cfgEmailSmtpPort.value).toBe("587");
+    expect(refs.cfgEmailSmtpSecure.checked).toBe(false);
+    expect(refs.cfgEmailSmtpUser.value).toBe("mailer@example.com");
+    expect(refs.cfgEmailSmtpPass.value).toBe("[REDACTED]");
+    expect(refs.cfgEmailSmtpFromAddress.value).toBe("mailer@example.com");
+    expect(refs.cfgEmailSmtpFromName.value).toBe("Belldandy");
+    expect(refs.cfgEmailInboundAgentId.value).toBe("researcher");
     expect(refs.cfgEmailImapEnabled.checked).toBe(false);
+    expect(refs.cfgEmailImapAccountId.value).toBe("mailbox-1");
+    expect(refs.cfgEmailImapHost.value).toBe("imap.example.com");
+    expect(refs.cfgEmailImapPort.value).toBe("993");
+    expect(refs.cfgEmailImapSecure.checked).toBe(true);
+    expect(refs.cfgEmailImapUser.value).toBe("reader@example.com");
+    expect(refs.cfgEmailImapPass.value).toBe("[REDACTED]");
+    expect(refs.cfgEmailImapMailbox.value).toBe("INBOX");
+    expect(refs.cfgEmailImapPollIntervalMs.value).toBe("60000");
+    expect(refs.cfgEmailImapConnectTimeoutMs.value).toBe("10000");
+    expect(refs.cfgEmailImapSocketTimeoutMs.value).toBe("20000");
+    expect(refs.cfgEmailImapBootstrapMode.value).toBe("latest");
+    expect(refs.cfgEmailImapRecentWindowLimit.value).toBe("50");
+    expect(refs.cfgChannelRouterEnabled.checked).toBe(true);
+    expect(refs.cfgChannelRouterConfigPath.value).toBe("~/.star_sanctuary/channels-routing.json");
+    expect(refs.cfgChannelRouterDefaultAgentId.value).toBe("default");
+    expect(refs.cfgDiscordDefaultChannelId.value).toBe("123456789012345678");
+    expect(refs.cfgWebhookPreauthMaxBytes.value).toBe("65536");
+    expect(refs.cfgWebhookPreauthTimeoutMs.value).toBe("5000");
+    expect(refs.cfgWebhookRateLimitWindowMs.value).toBe("60000");
+    expect(refs.cfgWebhookRateLimitMaxRequests.value).toBe("120");
+    expect(refs.cfgWebhookRateLimitMaxTrackedKeys.value).toBe("4096");
+    expect(refs.cfgWebhookMaxInFlightPerKey.value).toBe("8");
+    expect(refs.cfgWebhookMaxInFlightTrackedKeys.value).toBe("4096");
+    expect(refs.cfgTokenUsageUploadEnabled.checked).toBe(true);
+    expect(refs.cfgTokenUsageUploadUrl.value).toBe("http://127.0.0.1:3001/api/internal/token-usage");
+    expect(refs.cfgTokenUsageUploadApiKey.value).toBe("[REDACTED]");
+    expect(refs.cfgTokenUsageUploadTimeoutMs.value).toBe("3000");
+    expect(refs.cfgTokenUsageStrictUuid.checked).toBe(true);
+    expect(refs.cfgAutoTaskTimeEnabled.checked).toBe(true);
+    expect(refs.cfgAutoTaskTokenEnabled.checked).toBe(false);
+    expect(refs.cfgWebhookConfigPath.value).toBe("~/.star_sanctuary/webhooks.json");
+    expect(refs.cfgWebhookIdempotencyWindowMs.value).toBe("600000");
+    expect(refs.cfgStateDir.value).toBe("~/.star_sanctuary");
+    expect(refs.cfgStateDirWindows.value).toBe("C:/Users/admin/.star_sanctuary");
+    expect(refs.cfgStateDirWsl.value).toBe("~/.star_sanctuary");
+    expect(refs.cfgWorkspaceDir.value).toBe("./workspace");
+    expect(refs.cfgExtraWorkspaceRoots.value).toBe("E:/tools,D:/projects");
+    expect(refs.cfgWebRoot.value).toBe("apps/web/public");
+    expect(refs.cfgLogLevel.value).toBe("info");
+    expect(refs.cfgLogConsole.checked).toBe(true);
+    expect(refs.cfgLogFile.checked).toBe(true);
+    expect(refs.cfgLogDir.value).toBe("~/.star_sanctuary/logs");
+    expect(refs.cfgLogMaxSize.value).toBe("10MB");
+    expect(refs.cfgLogRetentionDays.value).toBe("7");
+    expect(refs.cfgDreamAutoHeartbeatEnabled.checked).toBe(true);
+    expect(refs.cfgDreamAutoCronEnabled.checked).toBe(false);
+    expect(refs.cfgDreamOpenAIThinking.value).toBe("disabled");
+    expect(refs.cfgDreamOpenAIReasoningEffort.value).toBe("");
+    expect(refs.cfgDreamOpenAITimeoutMs.value).toBe("120000");
+    expect(refs.cfgDreamOpenAIMaxTokens.value).toBe("1000");
+    expect(refs.cfgDreamObsidianEnabled.checked).toBe(true);
+    expect(refs.cfgDreamObsidianVaultPath.value).toBe("C:/Vault");
+    expect(refs.cfgDreamObsidianRootDir.value).toBe("Dream");
+    expect(refs.cfgCommonsObsidianEnabled.checked).toBe(true);
+    expect(refs.cfgCommonsObsidianVaultPath.value).toBe("C:/Vault");
+    expect(refs.cfgCommonsObsidianRootDir.value).toBe("Commons");
+  });
+
+  it("opens settings on the model tab by default", async () => {
+    const { controller, refs } = createController({
+      loadServerConfig: vi.fn().mockResolvedValue({}),
+      sendReq: vi.fn(async (frame) => {
+        if (frame.method === "models.config.get") {
+          return { ok: true, payload: { path: "models.json", content: '{\n  "fallbacks": []\n}\n' } };
+        }
+        if (frame.method === "channel.security.get") {
+          return { ok: true, payload: { path: "channel-security.json", content: '{\n  "version": 1,\n  "channels": {}\n}\n' } };
+        }
+        if (frame.method === "channel.reply_chunking.get") {
+          return { ok: true, payload: { path: "channel-reply-chunking.json", content: '{\n  "version": 1,\n  "channels": {}\n}\n' } };
+        }
+        if (frame.method === "channel.security.pending.list") {
+          return { ok: true, payload: { pending: [] } };
+        }
+        if (frame.method === "system.doctor") {
+          return { ok: true, payload: { surface: frame.params?.surface || "summary", checks: [] } };
+        }
+        return { ok: true, payload: {} };
+      }),
+    });
+
+    await controller.toggle(true);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(refs.settingsTabButtons[0].classList.contains("active")).toBe(true);
+    expect(refs.settingsTabPanels[0].hidden).toBe(false);
+    expect(refs.settingsTabPanels[3].hidden).toBe(true);
+  });
+
+  it("routes channel and pending entrypoints to the correct tabs", async () => {
+    const { controller, refs } = createController({
+      loadServerConfig: vi.fn().mockResolvedValue({}),
+      sendReq: vi.fn(async (frame) => {
+        if (frame.method === "models.config.get") {
+          return { ok: true, payload: { path: "models.json", content: '{\n  "fallbacks": []\n}\n' } };
+        }
+        if (frame.method === "channel.security.get") {
+          return { ok: true, payload: { path: "channel-security.json", content: '{\n  "version": 1,\n  "channels": {}\n}\n' } };
+        }
+        if (frame.method === "channel.reply_chunking.get") {
+          return { ok: true, payload: { path: "channel-reply-chunking.json", content: '{\n  "version": 1,\n  "channels": {}\n}\n' } };
+        }
+        if (frame.method === "channel.security.pending.list") {
+          return { ok: true, payload: { pending: [] } };
+        }
+        if (frame.method === "system.doctor") {
+          return { ok: true, payload: { surface: frame.params?.surface || "summary", checks: [] } };
+        }
+        return { ok: true, payload: {} };
+      }),
+    });
+
+    await controller.openChannels();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(refs.settingsTabButtons[3].classList.contains("active")).toBe(true);
+    expect(refs.channelsSettingsSection.scrollIntoView).toHaveBeenCalled();
+
+    await controller.openPairingPending();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(refs.settingsTabButtons[0].classList.contains("active")).toBe(true);
+    expect(refs.pairingPendingList.scrollIntoView).toHaveBeenCalled();
+
+    await controller.openChannelSecurityPending();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(refs.settingsTabButtons[0].classList.contains("active")).toBe(true);
+    expect(refs.channelSecurityPendingList.scrollIntoView).toHaveBeenCalled();
   });
 
   it("saves assistant mode config fields through settings mapping", async () => {
     const refs = createSettingsRefs({
+      cfgHost: createInput("0.0.0.0"),
+      cfgPort: createInput("29999"),
+      cfgGatewayPort: createInput("30000"),
+      cfgUpdateCheckEnabled: createCheckbox(false),
+      cfgUpdateCheckTimeoutMs: createInput("3500"),
+      cfgUpdateCheckApiUrl: createInput("https://api.github.com/repos/example/project/releases/latest"),
+      cfgAuthMode: createInput("token"),
+      cfgAuthToken: createInput("setup-test-token"),
+      cfgAuthPassword: createInput("super-secret-pass"),
+      cfgAllowedOrigins: createInput("http://localhost:5173"),
+      cfgAttachmentMaxFileBytes: createInput("555"),
+      cfgAttachmentMaxTotalBytes: createInput("777"),
+      cfgAttachmentTextCharLimit: createInput("888"),
+      cfgAttachmentTextTotalCharLimit: createInput("999"),
+      cfgAudioTranscriptAppendCharLimit: createInput("111"),
       cfgBaseUrl: createInput("https://api.example.com/v1"),
       cfgModel: createInput("gpt-test"),
+      cfgAgentProvider: createInput("openai"),
+      cfgOpenAiStreamEnabled: createCheckbox(false),
+      cfgOpenAiWireApi: createInput("responses"),
+      cfgOpenAiThinking: createInput("enabled"),
+      cfgOpenAiReasoningEffort: createInput("max"),
+      cfgResponsesSanitizeToolSchema: createCheckbox(true),
+      cfgOpenAiMaxRetries: createInput("2"),
+      cfgOpenAiRetryBackoffMs: createInput("450"),
+      cfgOpenAiProxyUrl: createInput("http://127.0.0.1:7890"),
+      cfgPrimaryWarmupEnabled: createCheckbox(false),
+      cfgPrimaryWarmupTimeoutMs: createInput("9000"),
+      cfgPrimaryWarmupCooldownMs: createInput("65000"),
+      cfgOpenAiSystemPrompt: createInput("follow house rules"),
+      cfgAgentTimeoutMs: createInput("150000"),
+      cfgAgentProtocol: createInput("anthropic"),
+      cfgVideoFileApiUrl: createInput("https://api.moonshot.cn/v1"),
+      cfgVideoFileApiKey: createInput("video-api-secret"),
       cfgTtsOpenAIBaseUrl: createInput("https://tts.example.com/v1"),
       cfgTtsOpenAIApiKey: createInput("tts-openai-key"),
       cfgDashScopeApiKey: createInput("aliyun-unified-key"),
@@ -328,9 +1051,173 @@ describe("settings controller", () => {
       cfgHeartbeat: createInput(" 15m "),
       cfgHeartbeatEnabled: createCheckbox(true),
       cfgHeartbeatActiveHours: createInput(" 09:00-18:00 "),
+      cfgBrowserRelayEnabled: createCheckbox(true),
+      cfgRelayPort: createInput("28892"),
+      cfgMcpEnabled: createCheckbox(true),
+      cfgBrowserAllowedDomains: createInput(" github.com,developer.mozilla.org "),
+      cfgBrowserDeniedDomains: createInput(" mail.google.com "),
+      cfgAgentBridgeEnabled: createCheckbox(true),
+      cfgToolGroups: createInput(" browser,system "),
+      cfgMaxInputTokens: createInput("20000"),
+      cfgMaxOutputTokens: createInput("8192"),
+      cfgMemoryEnabled: createCheckbox(false),
+      cfgEmbeddingEnabled: createCheckbox(true),
+      cfgEmbeddingProvider: createInput("local"),
+      cfgEmbeddingBaseUrl: createInput("https://embedding.example.com/v1"),
+      cfgEmbeddingModel: createInput("text-embedding-3-small"),
+      cfgLocalEmbeddingModel: createInput("BAAI/bge-m3"),
+      cfgEmbeddingBatchSize: createInput("4"),
+      cfgContextInjectionEnabled: createCheckbox(false),
+      cfgContextInjectionLimit: createInput("7"),
+      cfgContextInjectionIncludeSession: createCheckbox(true),
+      cfgContextInjectionTaskLimit: createInput("4"),
+      cfgContextInjectionAllowedCategories: createInput(" preference,fact,experience "),
+      cfgAutoRecallEnabled: createCheckbox(true),
+      cfgAutoRecallLimit: createInput("5"),
+      cfgAutoRecallMinScore: createInput("0.42"),
+      cfgToolResultTranscriptCharLimit: createInput("9000"),
+      cfgMindProfileRuntimeEnabled: createCheckbox(false),
+      cfgMindProfileRuntimeMaxLines: createInput("6"),
+      cfgMindProfileRuntimeMaxLineLength: createInput("140"),
+      cfgMindProfileRuntimeMaxChars: createInput("480"),
+      cfgMindProfileRuntimeMinSignalCount: createInput("3"),
+      cfgMemorySummaryEnabled: createCheckbox(true),
+      cfgMemorySummaryModel: createInput("qwen-plus"),
+      cfgMemorySummaryBaseUrl: createInput("https://memory-summary.example.com/v1"),
+      cfgMemorySummaryApiKey: createInput("summary-dedicated-key"),
+      cfgMemoryEvolutionEnabled: createCheckbox(true),
+      cfgMemoryEvolutionMinMessages: createInput("8"),
+      cfgMemoryEvolutionModel: createInput("qwen-max"),
+      cfgMemoryEvolutionBaseUrl: createInput("https://memory-evolution.example.com/v1"),
+      cfgMemoryEvolutionApiKey: createInput("evolution-dedicated-key"),
+      cfgMemorySessionDigestMaxRuns: createInput("2"),
+      cfgMemorySessionDigestWindowMs: createInput("1200000"),
+      cfgMemoryDurableExtractionMaxRuns: createInput("3"),
+      cfgMemoryDurableExtractionWindowMs: createInput("3600000"),
+      cfgMemoryDurableExtractionMinPendingMessages: createInput("6"),
+      cfgMemoryDurableExtractionMinMessageDelta: createInput("4"),
+      cfgMemoryDurableExtractionSuccessCooldownMs: createInput("300000"),
+      cfgMemoryDurableExtractionFailureBackoffMs: createInput("5000"),
+      cfgMemoryDurableExtractionFailureBackoffMaxMs: createInput("600000"),
+      cfgTeamSharedMemoryEnabled: createCheckbox(true),
+      cfgSharedReviewClaimTimeoutMs: createInput("5400000"),
+      cfgTaskMemoryEnabled: createCheckbox(true),
+      cfgTaskSummaryEnabled: createCheckbox(true),
+      cfgTaskSummaryModel: createInput("moonshot-v1-32k"),
+      cfgTaskSummaryBaseUrl: createInput("https://task-summary.example.com/v1"),
+      cfgTaskSummaryApiKey: createInput("task-summary-dedicated-key"),
+      cfgTaskSummaryMinDurationMs: createInput("30000"),
+      cfgTaskSummaryMinToolCalls: createInput("3"),
+      cfgTaskSummaryMinTokenTotal: createInput("4000"),
+      cfgExperienceAutoPromotionEnabled: createCheckbox(false),
+      cfgExperienceAutoMethodEnabled: createCheckbox(false),
+      cfgExperienceAutoSkillEnabled: createCheckbox(true),
+      cfgMethodGenerationConfirmRequired: createCheckbox(true),
+      cfgSkillGenerationConfirmRequired: createCheckbox(false),
+      cfgMethodPublishConfirmRequired: createCheckbox(true),
+      cfgSkillPublishConfirmRequired: createCheckbox(true),
+      cfgMemoryDeepRetrievalEnabled: createCheckbox(true),
+      cfgEmbeddingQueryPrefix: createInput(" query: "),
+      cfgEmbeddingPassagePrefix: createInput(" passage: "),
+      cfgRerankerMinScore: createInput("0.2"),
+      cfgRerankerLengthNormAnchor: createInput("500"),
+      cfgMemoryIndexerVerboseWatch: createCheckbox(true),
+      cfgTaskDedupGuardEnabled: createCheckbox(false),
+      cfgTaskDedupWindowMinutes: createInput("30"),
+      cfgTaskDedupMode: createInput("strict"),
+      cfgTaskDedupPolicy: createInput(" run_command:off,file_write:hard-block "),
       cfgCronEnabled: createCheckbox(true),
+      cfgEmailOutboundRequireConfirmation: createCheckbox(true),
+      cfgEmailDefaultProvider: createInput(" smtp "),
       cfgEmailSmtpEnabled: createCheckbox(true),
+      cfgEmailSmtpAccountId: createInput(" default "),
+      cfgEmailSmtpHost: createInput(" smtp.example.com "),
+      cfgEmailSmtpPort: createInput("587"),
+      cfgEmailSmtpSecure: createCheckbox(false),
+      cfgEmailSmtpUser: createInput(" mailer@example.com "),
+      cfgEmailSmtpPass: createInput("smtp-app-pass"),
+      cfgEmailSmtpFromAddress: createInput(" mailer@example.com "),
+      cfgEmailSmtpFromName: createInput(" Belldandy "),
+      cfgEmailInboundAgentId: createInput(" researcher "),
       cfgEmailImapEnabled: createCheckbox(false),
+      cfgEmailImapAccountId: createInput(" mailbox-1 "),
+      cfgEmailImapHost: createInput(" imap.example.com "),
+      cfgEmailImapPort: createInput("993"),
+      cfgEmailImapSecure: createCheckbox(true),
+      cfgEmailImapUser: createInput(" reader@example.com "),
+      cfgEmailImapPass: createInput("imap-app-pass"),
+      cfgEmailImapMailbox: createInput(" INBOX "),
+      cfgEmailImapPollIntervalMs: createInput("60000"),
+      cfgEmailImapConnectTimeoutMs: createInput("10000"),
+      cfgEmailImapSocketTimeoutMs: createInput("20000"),
+      cfgEmailImapBootstrapMode: createInput(" latest "),
+      cfgEmailImapRecentWindowLimit: createInput("50"),
+      cfgChannelRouterEnabled: createCheckbox(true),
+      cfgChannelRouterConfigPath: createInput(" ~/.star_sanctuary/channels-routing.json "),
+      cfgChannelRouterDefaultAgentId: createInput(" default "),
+      cfgCommunityApiEnabled: createCheckbox(false),
+      cfgCommunityApiToken: createInput("community-token"),
+      cfgFeishuAppId: createInput("cli_test_app"),
+      cfgFeishuAppSecret: createInput("feishu-secret"),
+      cfgFeishuAgentId: createInput("researcher"),
+      cfgQqAppId: createInput("qq-app-id"),
+      cfgQqAppSecret: createInput("qq-secret"),
+      cfgQqAgentId: createInput("researcher"),
+      cfgQqSandbox: createCheckbox(false),
+      cfgDiscordEnabled: createCheckbox(true),
+      cfgDiscordBotToken: createInput("discord-secret"),
+      cfgDiscordDefaultChannelId: createInput(" 123456789012345678 "),
+      cfgWebhookPreauthMaxBytes: createInput("65536"),
+      cfgWebhookPreauthTimeoutMs: createInput("5000"),
+      cfgWebhookRateLimitWindowMs: createInput("60000"),
+      cfgWebhookRateLimitMaxRequests: createInput("120"),
+      cfgWebhookRateLimitMaxTrackedKeys: createInput("4096"),
+      cfgWebhookMaxInFlightPerKey: createInput("8"),
+      cfgWebhookMaxInFlightTrackedKeys: createInput("4096"),
+      cfgTokenUsageUploadEnabled: createCheckbox(true),
+      cfgTokenUsageUploadUrl: createInput(" http://127.0.0.1:3001/api/internal/token-usage "),
+      cfgTokenUsageUploadApiKey: createInput("gro_token_key"),
+      cfgTokenUsageUploadTimeoutMs: createInput("3000"),
+      cfgTokenUsageStrictUuid: createCheckbox(true),
+      cfgAutoTaskTimeEnabled: createCheckbox(true),
+      cfgAutoTaskTokenEnabled: createCheckbox(false),
+      cfgWebhookConfigPath: createInput(" ~/.star_sanctuary/webhooks.json "),
+      cfgWebhookIdempotencyWindowMs: createInput("600000"),
+      cfgStateDir: createInput(" ~/.star_sanctuary "),
+      cfgStateDirWindows: createInput(" C:/Users/admin/.star_sanctuary "),
+      cfgStateDirWsl: createInput(" ~/.star_sanctuary "),
+      cfgWorkspaceDir: createInput(" ./workspace "),
+      cfgExtraWorkspaceRoots: createInput(" E:/tools,D:/projects "),
+      cfgWebRoot: createInput(" apps/web/public "),
+      cfgLogLevel: createInput(" info "),
+      cfgLogConsole: createCheckbox(true),
+      cfgLogFile: createCheckbox(true),
+      cfgLogDir: createInput(" ~/.star_sanctuary/logs "),
+      cfgLogMaxSize: createInput(" 10MB "),
+      cfgLogRetentionDays: createInput("7"),
+      cfgDreamAutoHeartbeatEnabled: createCheckbox(true),
+      cfgDreamAutoCronEnabled: createCheckbox(false),
+      cfgDreamOpenAIThinking: createInput(" disabled "),
+      cfgDreamOpenAIReasoningEffort: createInput(" "),
+      cfgDreamOpenAITimeoutMs: createInput(" 120000 "),
+      cfgDreamOpenAIMaxTokens: createInput(" 1000 "),
+      cfgDreamObsidianEnabled: createCheckbox(true),
+      cfgDreamObsidianVaultPath: createInput(" C:/Vault "),
+      cfgDreamObsidianRootDir: createInput(" Dream "),
+      cfgCommonsObsidianEnabled: createCheckbox(true),
+      cfgCommonsObsidianVaultPath: createInput(" C:/Vault "),
+      cfgCommonsObsidianRootDir: createInput(" Commons "),
+      cfgCameraNativeHelperCommand: createInput(" node "),
+      cfgCameraNativeHelperArgsJson: createInput(' ["helper.js"] '),
+      cfgCameraNativeHelperCwd: createInput(" E:/project/star-sanctuary "),
+      cfgCameraNativeHelperStartupTimeoutMs: createInput("10000"),
+      cfgCameraNativeHelperRequestTimeoutMs: createInput("15000"),
+      cfgCameraNativeHelperIdleShutdownMs: createInput("2000"),
+      cfgCameraNativeHelperEnvJson: createInput(' {"FOO":"bar"} '),
+      cfgCameraNativeHelperPowershellCommand: createInput(" powershell.exe "),
+      cfgCameraNativeHelperPowershellArgsJson: createInput(" [] "),
+      cfgCameraNativeHelperFfmpegCommand: createInput(" C:/ffmpeg/bin/ffmpeg.exe "),
+      cfgCameraNativeHelperFfmpegArgsJson: createInput(' ["-hide_banner"] '),
     });
     const sendReq = vi.fn(async (frame) => {
       switch (frame.method) {
@@ -354,8 +1241,40 @@ describe("settings controller", () => {
     const updateCall = sendReq.mock.calls.find(([frame]) => frame.method === "config.update");
     const restartCall = sendReq.mock.calls.find(([frame]) => frame.method === "system.restart");
     expect(updateCall?.[0]?.params?.updates).toMatchObject({
+      BELLDANDY_HOST: "0.0.0.0",
+      BELLDANDY_PORT: "29999",
+      BELLDANDY_GATEWAY_PORT: "30000",
+      BELLDANDY_UPDATE_CHECK: "false",
+      BELLDANDY_UPDATE_CHECK_TIMEOUT_MS: "3500",
+      BELLDANDY_UPDATE_CHECK_API_URL: "https://api.github.com/repos/example/project/releases/latest",
+      BELLDANDY_AUTH_MODE: "token",
+      BELLDANDY_AUTH_TOKEN: "setup-test-token",
+      BELLDANDY_AUTH_PASSWORD: "super-secret-pass",
+      BELLDANDY_ALLOWED_ORIGINS: "http://localhost:5173",
+      BELLDANDY_ATTACHMENT_MAX_FILE_BYTES: "555",
+      BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES: "777",
+      BELLDANDY_ATTACHMENT_TEXT_CHAR_LIMIT: "888",
+      BELLDANDY_ATTACHMENT_TEXT_TOTAL_CHAR_LIMIT: "999",
+      BELLDANDY_AUDIO_TRANSCRIPT_APPEND_CHAR_LIMIT: "111",
       BELLDANDY_OPENAI_BASE_URL: "https://api.example.com/v1",
       BELLDANDY_OPENAI_MODEL: "gpt-test",
+      BELLDANDY_AGENT_PROVIDER: "openai",
+      BELLDANDY_OPENAI_STREAM: "false",
+      BELLDANDY_OPENAI_WIRE_API: "responses",
+      BELLDANDY_OPENAI_THINKING: "enabled",
+      BELLDANDY_OPENAI_REASONING_EFFORT: "max",
+      BELLDANDY_RESPONSES_SANITIZE_TOOL_SCHEMA: "true",
+      BELLDANDY_OPENAI_MAX_RETRIES: "2",
+      BELLDANDY_OPENAI_RETRY_BACKOFF_MS: "450",
+      BELLDANDY_OPENAI_PROXY_URL: "http://127.0.0.1:7890",
+      BELLDANDY_PRIMARY_WARMUP_ENABLED: "false",
+      BELLDANDY_PRIMARY_WARMUP_TIMEOUT_MS: "9000",
+      BELLDANDY_PRIMARY_WARMUP_COOLDOWN_MS: "65000",
+      BELLDANDY_OPENAI_SYSTEM_PROMPT: "follow house rules",
+      BELLDANDY_AGENT_TIMEOUT_MS: "150000",
+      BELLDANDY_AGENT_PROTOCOL: "anthropic",
+      BELLDANDY_VIDEO_FILE_API_URL: "https://api.moonshot.cn/v1",
+      BELLDANDY_VIDEO_FILE_API_KEY: "video-api-secret",
       BELLDANDY_TTS_OPENAI_BASE_URL: "https://tts.example.com/v1",
       BELLDANDY_TTS_OPENAI_API_KEY: "tts-openai-key",
       DASHSCOPE_API_KEY: "aliyun-unified-key",
@@ -370,12 +1289,343 @@ describe("settings controller", () => {
       BELLDANDY_HEARTBEAT_INTERVAL: "15m",
       BELLDANDY_HEARTBEAT_ENABLED: "true",
       BELLDANDY_HEARTBEAT_ACTIVE_HOURS: "09:00-18:00",
+      BELLDANDY_BROWSER_RELAY_ENABLED: "true",
+      BELLDANDY_RELAY_PORT: "28892",
+      BELLDANDY_MCP_ENABLED: "true",
+      BELLDANDY_BROWSER_ALLOWED_DOMAINS: "github.com,developer.mozilla.org",
+      BELLDANDY_BROWSER_DENIED_DOMAINS: "mail.google.com",
+      BELLDANDY_AGENT_BRIDGE_ENABLED: "true",
+      BELLDANDY_TOOL_GROUPS: "browser,system",
+      BELLDANDY_MAX_INPUT_TOKENS: "20000",
+      BELLDANDY_MAX_OUTPUT_TOKENS: "8192",
+      BELLDANDY_MEMORY_ENABLED: "false",
+      BELLDANDY_EMBEDDING_ENABLED: "true",
+      BELLDANDY_EMBEDDING_PROVIDER: "local",
+      BELLDANDY_EMBEDDING_OPENAI_BASE_URL: "https://embedding.example.com/v1",
+      BELLDANDY_EMBEDDING_MODEL: "text-embedding-3-small",
+      BELLDANDY_LOCAL_EMBEDDING_MODEL: "BAAI/bge-m3",
+      BELLDANDY_EMBEDDING_BATCH_SIZE: "4",
+      BELLDANDY_CONTEXT_INJECTION: "false",
+      BELLDANDY_CONTEXT_INJECTION_LIMIT: "7",
+      BELLDANDY_CONTEXT_INJECTION_INCLUDE_SESSION: "true",
+      BELLDANDY_CONTEXT_INJECTION_TASK_LIMIT: "4",
+      BELLDANDY_CONTEXT_INJECTION_ALLOWED_CATEGORIES: "preference,fact,experience",
+      BELLDANDY_AUTO_RECALL_ENABLED: "true",
+      BELLDANDY_AUTO_RECALL_LIMIT: "5",
+      BELLDANDY_AUTO_RECALL_MIN_SCORE: "0.42",
+      BELLDANDY_TOOL_RESULT_TRANSCRIPT_CHAR_LIMIT: "9000",
+      BELLDANDY_MIND_PROFILE_RUNTIME_ENABLED: "false",
+      BELLDANDY_MIND_PROFILE_RUNTIME_MAX_LINES: "6",
+      BELLDANDY_MIND_PROFILE_RUNTIME_MAX_LINE_LENGTH: "140",
+      BELLDANDY_MIND_PROFILE_RUNTIME_MAX_CHARS: "480",
+      BELLDANDY_MIND_PROFILE_RUNTIME_MIN_SIGNAL_COUNT: "3",
+      BELLDANDY_MEMORY_SUMMARY_ENABLED: "true",
+      BELLDANDY_MEMORY_SUMMARY_MODEL: "qwen-plus",
+      BELLDANDY_MEMORY_SUMMARY_BASE_URL: "https://memory-summary.example.com/v1",
+      BELLDANDY_MEMORY_SUMMARY_API_KEY: "summary-dedicated-key",
+      BELLDANDY_MEMORY_EVOLUTION_ENABLED: "true",
+      BELLDANDY_MEMORY_EVOLUTION_MIN_MESSAGES: "8",
+      BELLDANDY_MEMORY_EVOLUTION_MODEL: "qwen-max",
+      BELLDANDY_MEMORY_EVOLUTION_BASE_URL: "https://memory-evolution.example.com/v1",
+      BELLDANDY_MEMORY_EVOLUTION_API_KEY: "evolution-dedicated-key",
+      BELLDANDY_MEMORY_SESSION_DIGEST_MAX_RUNS: "2",
+      BELLDANDY_MEMORY_SESSION_DIGEST_WINDOW_MS: "1200000",
+      BELLDANDY_MEMORY_DURABLE_EXTRACTION_MAX_RUNS: "3",
+      BELLDANDY_MEMORY_DURABLE_EXTRACTION_WINDOW_MS: "3600000",
+      BELLDANDY_MEMORY_DURABLE_EXTRACTION_MIN_PENDING_MESSAGES: "6",
+      BELLDANDY_MEMORY_DURABLE_EXTRACTION_MIN_MESSAGE_DELTA: "4",
+      BELLDANDY_MEMORY_DURABLE_EXTRACTION_SUCCESS_COOLDOWN_MS: "300000",
+      BELLDANDY_MEMORY_DURABLE_EXTRACTION_FAILURE_BACKOFF_MS: "5000",
+      BELLDANDY_MEMORY_DURABLE_EXTRACTION_FAILURE_BACKOFF_MAX_MS: "600000",
+      BELLDANDY_TEAM_SHARED_MEMORY_ENABLED: "true",
+      BELLDANDY_SHARED_REVIEW_CLAIM_TIMEOUT_MS: "5400000",
+      BELLDANDY_TASK_MEMORY_ENABLED: "true",
+      BELLDANDY_TASK_SUMMARY_ENABLED: "true",
+      BELLDANDY_TASK_SUMMARY_MODEL: "moonshot-v1-32k",
+      BELLDANDY_TASK_SUMMARY_BASE_URL: "https://task-summary.example.com/v1",
+      BELLDANDY_TASK_SUMMARY_API_KEY: "task-summary-dedicated-key",
+      BELLDANDY_TASK_SUMMARY_MIN_DURATION_MS: "30000",
+      BELLDANDY_TASK_SUMMARY_MIN_TOOL_CALLS: "3",
+      BELLDANDY_TASK_SUMMARY_MIN_TOKEN_TOTAL: "4000",
+      BELLDANDY_EXPERIENCE_AUTO_PROMOTION_ENABLED: "false",
+      BELLDANDY_EXPERIENCE_AUTO_METHOD_ENABLED: "false",
+      BELLDANDY_EXPERIENCE_AUTO_SKILL_ENABLED: "true",
+      BELLDANDY_METHOD_GENERATION_CONFIRM_REQUIRED: "true",
+      BELLDANDY_SKILL_GENERATION_CONFIRM_REQUIRED: "false",
+      BELLDANDY_METHOD_PUBLISH_CONFIRM_REQUIRED: "true",
+      BELLDANDY_SKILL_PUBLISH_CONFIRM_REQUIRED: "true",
+      BELLDANDY_MEMORY_DEEP_RETRIEVAL: "true",
+      BELLDANDY_EMBEDDING_QUERY_PREFIX: "query:",
+      BELLDANDY_EMBEDDING_PASSAGE_PREFIX: "passage:",
+      BELLDANDY_RERANKER_MIN_SCORE: "0.2",
+      BELLDANDY_RERANKER_LENGTH_NORM_ANCHOR: "500",
+      BELLDANDY_MEMORY_INDEXER_VERBOSE_WATCH: "true",
+      BELLDANDY_TASK_DEDUP_GUARD_ENABLED: "false",
+      BELLDANDY_TASK_DEDUP_WINDOW_MINUTES: "30",
+      BELLDANDY_TASK_DEDUP_MODE: "strict",
+      BELLDANDY_TASK_DEDUP_POLICY: "run_command:off,file_write:hard-block",
       BELLDANDY_CRON_ENABLED: "true",
+      BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION: "true",
+      BELLDANDY_EMAIL_DEFAULT_PROVIDER: "smtp",
       BELLDANDY_EMAIL_SMTP_ENABLED: "true",
+      BELLDANDY_EMAIL_SMTP_ACCOUNT_ID: "default",
+      BELLDANDY_EMAIL_SMTP_HOST: "smtp.example.com",
+      BELLDANDY_EMAIL_SMTP_PORT: "587",
+      BELLDANDY_EMAIL_SMTP_SECURE: "false",
+      BELLDANDY_EMAIL_SMTP_USER: "mailer@example.com",
+      BELLDANDY_EMAIL_SMTP_PASS: "smtp-app-pass",
+      BELLDANDY_EMAIL_SMTP_FROM_ADDRESS: "mailer@example.com",
+      BELLDANDY_EMAIL_SMTP_FROM_NAME: "Belldandy",
+      BELLDANDY_EMAIL_INBOUND_AGENT_ID: "researcher",
       BELLDANDY_EMAIL_IMAP_ENABLED: "false",
+      BELLDANDY_EMAIL_IMAP_ACCOUNT_ID: "mailbox-1",
+      BELLDANDY_EMAIL_IMAP_HOST: "imap.example.com",
+      BELLDANDY_EMAIL_IMAP_PORT: "993",
+      BELLDANDY_EMAIL_IMAP_SECURE: "true",
+      BELLDANDY_EMAIL_IMAP_USER: "reader@example.com",
+      BELLDANDY_EMAIL_IMAP_PASS: "imap-app-pass",
+      BELLDANDY_EMAIL_IMAP_MAILBOX: "INBOX",
+      BELLDANDY_EMAIL_IMAP_POLL_INTERVAL_MS: "60000",
+      BELLDANDY_EMAIL_IMAP_CONNECT_TIMEOUT_MS: "10000",
+      BELLDANDY_EMAIL_IMAP_SOCKET_TIMEOUT_MS: "20000",
+      BELLDANDY_EMAIL_IMAP_BOOTSTRAP_MODE: "latest",
+      BELLDANDY_EMAIL_IMAP_RECENT_WINDOW_LIMIT: "50",
+      BELLDANDY_CHANNEL_ROUTER_ENABLED: "true",
+      BELLDANDY_CHANNEL_ROUTER_CONFIG_PATH: "~/.star_sanctuary/channels-routing.json",
+      BELLDANDY_CHANNEL_ROUTER_DEFAULT_AGENT_ID: "default",
+      BELLDANDY_COMMUNITY_API_ENABLED: "false",
+      BELLDANDY_COMMUNITY_API_TOKEN: "community-token",
+      BELLDANDY_FEISHU_APP_ID: "cli_test_app",
+      BELLDANDY_FEISHU_APP_SECRET: "feishu-secret",
+      BELLDANDY_FEISHU_AGENT_ID: "researcher",
+      BELLDANDY_QQ_APP_ID: "qq-app-id",
+      BELLDANDY_QQ_APP_SECRET: "qq-secret",
+      BELLDANDY_QQ_AGENT_ID: "researcher",
+      BELLDANDY_QQ_SANDBOX: "false",
+      BELLDANDY_DISCORD_ENABLED: "true",
+      BELLDANDY_DISCORD_BOT_TOKEN: "discord-secret",
+      BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID: "123456789012345678",
+      BELLDANDY_WEBHOOK_PREAUTH_MAX_BYTES: "65536",
+      BELLDANDY_WEBHOOK_PREAUTH_TIMEOUT_MS: "5000",
+      BELLDANDY_WEBHOOK_RATE_LIMIT_WINDOW_MS: "60000",
+      BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_REQUESTS: "120",
+      BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS: "4096",
+      BELLDANDY_WEBHOOK_MAX_IN_FLIGHT_PER_KEY: "8",
+      BELLDANDY_WEBHOOK_MAX_IN_FLIGHT_TRACKED_KEYS: "4096",
+      BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED: "true",
+      BELLDANDY_TOKEN_USAGE_UPLOAD_URL: "http://127.0.0.1:3001/api/internal/token-usage",
+      BELLDANDY_TOKEN_USAGE_UPLOAD_APIKEY: "gro_token_key",
+      BELLDANDY_TOKEN_USAGE_UPLOAD_TIMEOUT_MS: "3000",
+      BELLDANDY_TOKEN_USAGE_STRICT_UUID: "true",
+      BELLDANDY_AUTO_TASK_TIME_ENABLED: "true",
+      BELLDANDY_AUTO_TASK_TOKEN_ENABLED: "false",
+      BELLDANDY_WEBHOOK_CONFIG_PATH: "~/.star_sanctuary/webhooks.json",
+      BELLDANDY_WEBHOOK_IDEMPOTENCY_WINDOW_MS: "600000",
+      BELLDANDY_STATE_DIR: "~/.star_sanctuary",
+      BELLDANDY_STATE_DIR_WINDOWS: "C:/Users/admin/.star_sanctuary",
+      BELLDANDY_STATE_DIR_WSL: "~/.star_sanctuary",
+      BELLDANDY_WORKSPACE_DIR: "./workspace",
+      BELLDANDY_EXTRA_WORKSPACE_ROOTS: "E:/tools,D:/projects",
+      BELLDANDY_WEB_ROOT: "apps/web/public",
+      BELLDANDY_LOG_LEVEL: "info",
+      BELLDANDY_LOG_CONSOLE: "true",
+      BELLDANDY_LOG_FILE: "true",
+      BELLDANDY_LOG_DIR: "~/.star_sanctuary/logs",
+      BELLDANDY_LOG_MAX_SIZE: "10MB",
+      BELLDANDY_LOG_RETENTION_DAYS: "7",
+      BELLDANDY_DREAM_AUTO_HEARTBEAT_ENABLED: "true",
+      BELLDANDY_DREAM_AUTO_CRON_ENABLED: "false",
+      BELLDANDY_DREAM_OPENAI_THINKING: "disabled",
+      BELLDANDY_DREAM_OPENAI_REASONING_EFFORT: "",
+      BELLDANDY_DREAM_OPENAI_TIMEOUT_MS: "120000",
+      BELLDANDY_DREAM_OPENAI_MAX_TOKENS: "1000",
+      BELLDANDY_DREAM_OBSIDIAN_ENABLED: "true",
+      BELLDANDY_DREAM_OBSIDIAN_VAULT_PATH: "C:/Vault",
+      BELLDANDY_DREAM_OBSIDIAN_ROOT_DIR: "Dream",
+      BELLDANDY_COMMONS_OBSIDIAN_ENABLED: "true",
+      BELLDANDY_COMMONS_OBSIDIAN_VAULT_PATH: "C:/Vault",
+      BELLDANDY_COMMONS_OBSIDIAN_ROOT_DIR: "Commons",
+      BELLDANDY_CAMERA_NATIVE_HELPER_COMMAND: "node",
+      BELLDANDY_CAMERA_NATIVE_HELPER_ARGS_JSON: '["helper.js"]',
+      BELLDANDY_CAMERA_NATIVE_HELPER_CWD: "E:/project/star-sanctuary",
+      BELLDANDY_CAMERA_NATIVE_HELPER_STARTUP_TIMEOUT_MS: "10000",
+      BELLDANDY_CAMERA_NATIVE_HELPER_REQUEST_TIMEOUT_MS: "15000",
+      BELLDANDY_CAMERA_NATIVE_HELPER_IDLE_SHUTDOWN_MS: "2000",
+      BELLDANDY_CAMERA_NATIVE_HELPER_ENV_JSON: '{"FOO":"bar"}',
+      BELLDANDY_CAMERA_NATIVE_HELPER_POWERSHELL_COMMAND: "powershell.exe",
+      BELLDANDY_CAMERA_NATIVE_HELPER_POWERSHELL_ARGS_JSON: "[]",
+      BELLDANDY_CAMERA_NATIVE_HELPER_FFMPEG_COMMAND: "C:/ffmpeg/bin/ffmpeg.exe",
+      BELLDANDY_CAMERA_NATIVE_HELPER_FFMPEG_ARGS_JSON: '["-hide_banner"]',
     });
     expect(restartCall?.[0]?.params).toMatchObject({
       reason: "settings updated",
+    });
+  });
+
+  it("loads final cleanup prompt and multimedia settings", async () => {
+    const loadServerConfig = vi.fn().mockResolvedValue({
+      BELLDANDY_PROMPT_EXPERIMENT_DISABLE_SECTIONS: "methodology,context",
+      BELLDANDY_PROMPT_EXPERIMENT_SECTION_PRIORITY_OVERRIDES: "methodology:5,extra:150",
+      BELLDANDY_PROMPT_EXPERIMENT_DISABLE_TOOL_CONTRACTS: "apply_patch,run_command",
+      BELLDANDY_PROMPT_SNAPSHOT_MAX_RUNS: "48",
+      BELLDANDY_PROMPT_SNAPSHOT_MAX_PERSISTED_RUNS: "20",
+      BELLDANDY_PROMPT_SNAPSHOT_EMAIL_THREAD_MAX_RUNS: "10",
+      BELLDANDY_PROMPT_SNAPSHOT_HEARTBEAT_MAX_RUNS: "5",
+      BELLDANDY_PROMPT_SNAPSHOT_RETENTION_DAYS: "7",
+      BELLDANDY_COMPACTION_ENABLED: "true",
+      BELLDANDY_COMPACTION_THRESHOLD: "20000",
+      BELLDANDY_COMPACTION_KEEP_RECENT: "10",
+      BELLDANDY_COMPACTION_TRIGGER_FRACTION: "0.75",
+      BELLDANDY_COMPACTION_ARCHIVAL_THRESHOLD: "2000",
+      BELLDANDY_COMPACTION_WARNING_THRESHOLD: "14000",
+      BELLDANDY_COMPACTION_BLOCKING_THRESHOLD: "18000",
+      BELLDANDY_COMPACTION_MAX_CONSECUTIVE_FAILURES: "3",
+      BELLDANDY_COMPACTION_MAX_PTL_RETRIES: "2",
+      BELLDANDY_COMPACTION_MODEL: "gpt-4o-mini",
+      BELLDANDY_COMPACTION_BASE_URL: "https://compaction.example.com/v1",
+      BELLDANDY_COMPACTION_API_KEY: "[REDACTED]",
+      BELLDANDY_DANGEROUS_TOOLS_ENABLED: "true",
+      BELLDANDY_TOOLS_POLICY_FILE: "~/.star_sanctuary/tools-policy.json",
+      BELLDANDY_SUB_AGENT_MAX_CONCURRENT: "3",
+      BELLDANDY_SUB_AGENT_MAX_QUEUE_SIZE: "10",
+      BELLDANDY_SUB_AGENT_TIMEOUT_MS: "120000",
+      BELLDANDY_SUB_AGENT_MAX_DEPTH: "2",
+      BELLDANDY_IMAGE_ENABLED: "true",
+      BELLDANDY_IMAGE_PROVIDER: "openai",
+      BELLDANDY_IMAGE_OPENAI_API_KEY: "[REDACTED]",
+      BELLDANDY_IMAGE_OPENAI_BASE_URL: "https://api.openai.com/v1",
+      BELLDANDY_IMAGE_MODEL: "gpt-image-2",
+      BELLDANDY_IMAGE_OUTPUT_FORMAT: "png",
+      BELLDANDY_IMAGE_TIMEOUT_MS: "60000",
+      BELLDANDY_STT_PROVIDER: "groq",
+      BELLDANDY_STT_LANGUAGE: "zh",
+      BELLDANDY_STT_GROQ_API_KEY: "[REDACTED]",
+      BELLDANDY_STT_GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      BELLDANDY_ROOM_INJECT_THRESHOLD: "10",
+      BELLDANDY_ROOM_MEMBERS_CACHE_TTL: "300000",
+    });
+    const { controller, refs } = createController({ loadServerConfig });
+
+    await controller.loadConfig();
+
+    expect(refs.cfgPromptExperimentDisableSections.value).toBe("methodology,context");
+    expect(refs.cfgPromptSnapshotRetentionDays.value).toBe("7");
+    expect(refs.cfgCompactionEnabled.checked).toBe(true);
+    expect(refs.cfgCompactionBaseUrl.value).toBe("https://compaction.example.com/v1");
+    expect(refs.cfgCompactionApiKey.value).toBe("[REDACTED]");
+    expect(refs.cfgDangerousToolsEnabled.checked).toBe(true);
+    expect(refs.cfgToolsPolicyFile.value).toBe("~/.star_sanctuary/tools-policy.json");
+    expect(refs.cfgSubAgentMaxDepth.value).toBe("2");
+    expect(refs.cfgImageEnabled.checked).toBe(true);
+    expect(refs.cfgImageApiKey.value).toBe("[REDACTED]");
+    expect(refs.cfgSttProvider.value).toBe("groq");
+    expect(refs.cfgSttGroqApiKey.value).toBe("[REDACTED]");
+    expect(refs.cfgRoomInjectThreshold.value).toBe("10");
+    expect(refs.cfgRoomMembersCacheTtl.value).toBe("300000");
+  });
+
+  it("saves final cleanup prompt and multimedia settings", async () => {
+    const refs = createSettingsRefs({
+      cfgPromptExperimentDisableSections: createInput(" methodology,context "),
+      cfgPromptExperimentSectionPriorityOverrides: createInput(" methodology:5,extra:150 "),
+      cfgPromptExperimentDisableToolContracts: createInput(" apply_patch,run_command "),
+      cfgPromptSnapshotMaxRuns: createInput("48"),
+      cfgPromptSnapshotMaxPersistedRuns: createInput("20"),
+      cfgPromptSnapshotEmailThreadMaxRuns: createInput("10"),
+      cfgPromptSnapshotHeartbeatMaxRuns: createInput("5"),
+      cfgPromptSnapshotRetentionDays: createInput("7"),
+      cfgCompactionEnabled: createCheckbox(true),
+      cfgCompactionThreshold: createInput("20000"),
+      cfgCompactionKeepRecent: createInput("10"),
+      cfgCompactionTriggerFraction: createInput("0.75"),
+      cfgCompactionArchivalThreshold: createInput("2000"),
+      cfgCompactionWarningThreshold: createInput("14000"),
+      cfgCompactionBlockingThreshold: createInput("18000"),
+      cfgCompactionMaxConsecutiveFailures: createInput("3"),
+      cfgCompactionMaxPtlRetries: createInput("2"),
+      cfgCompactionModel: createInput(" gpt-4o-mini "),
+      cfgCompactionBaseUrl: createInput(" https://compaction.example.com/v1 "),
+      cfgCompactionApiKey: createInput("compaction-secret"),
+      cfgDangerousToolsEnabled: createCheckbox(true),
+      cfgToolsPolicyFile: createInput(" ~/.star_sanctuary/tools-policy.json "),
+      cfgSubAgentMaxConcurrent: createInput("3"),
+      cfgSubAgentMaxQueueSize: createInput("10"),
+      cfgSubAgentTimeoutMs: createInput("120000"),
+      cfgSubAgentMaxDepth: createInput("2"),
+      cfgImageEnabled: createCheckbox(true),
+      cfgImageProvider: createInput(" openai "),
+      cfgImageApiKey: createInput("image-secret"),
+      cfgImageBaseUrl: createInput(" https://api.openai.com/v1 "),
+      cfgImageModel: createInput(" gpt-image-2 "),
+      cfgImageOutputFormat: createInput(" png "),
+      cfgImageTimeoutMs: createInput("60000"),
+      cfgSttProvider: createInput(" groq "),
+      cfgSttLanguage: createInput(" zh "),
+      cfgSttGroqApiKey: createInput("gsk-secret"),
+      cfgSttGroqBaseUrl: createInput(" https://api.groq.com/openai/v1 "),
+      cfgRoomInjectThreshold: createInput("10"),
+      cfgRoomMembersCacheTtl: createInput("300000"),
+    });
+    const sendReq = vi.fn(async (frame) => {
+      switch (frame.method) {
+        case "config.update":
+          return { ok: true, payload: {} };
+        case "channel.security.get":
+          return { ok: true, payload: { path: "channel-security.json", content: '{\n  "version": 1,\n  "channels": {}\n}\n' } };
+        case "channel.reply_chunking.get":
+          return { ok: true, payload: { path: "channel-reply-chunking.json", content: '{\n  "version": 1,\n  "channels": {}\n}\n' } };
+        case "channel.security.pending.list":
+          return { ok: true, payload: { pending: [] } };
+        default:
+          return { ok: true, payload: {} };
+      }
+    });
+    const { controller } = createController({ refs, sendReq });
+
+    await controller.saveConfig();
+    vi.runAllTimers();
+
+    const updateCall = sendReq.mock.calls.find(([frame]) => frame.method === "config.update");
+    expect(updateCall?.[0]?.params?.updates).toMatchObject({
+      BELLDANDY_PROMPT_EXPERIMENT_DISABLE_SECTIONS: "methodology,context",
+      BELLDANDY_PROMPT_EXPERIMENT_SECTION_PRIORITY_OVERRIDES: "methodology:5,extra:150",
+      BELLDANDY_PROMPT_EXPERIMENT_DISABLE_TOOL_CONTRACTS: "apply_patch,run_command",
+      BELLDANDY_PROMPT_SNAPSHOT_MAX_RUNS: "48",
+      BELLDANDY_PROMPT_SNAPSHOT_MAX_PERSISTED_RUNS: "20",
+      BELLDANDY_PROMPT_SNAPSHOT_EMAIL_THREAD_MAX_RUNS: "10",
+      BELLDANDY_PROMPT_SNAPSHOT_HEARTBEAT_MAX_RUNS: "5",
+      BELLDANDY_PROMPT_SNAPSHOT_RETENTION_DAYS: "7",
+      BELLDANDY_COMPACTION_ENABLED: "true",
+      BELLDANDY_COMPACTION_THRESHOLD: "20000",
+      BELLDANDY_COMPACTION_KEEP_RECENT: "10",
+      BELLDANDY_COMPACTION_TRIGGER_FRACTION: "0.75",
+      BELLDANDY_COMPACTION_ARCHIVAL_THRESHOLD: "2000",
+      BELLDANDY_COMPACTION_WARNING_THRESHOLD: "14000",
+      BELLDANDY_COMPACTION_BLOCKING_THRESHOLD: "18000",
+      BELLDANDY_COMPACTION_MAX_CONSECUTIVE_FAILURES: "3",
+      BELLDANDY_COMPACTION_MAX_PTL_RETRIES: "2",
+      BELLDANDY_COMPACTION_MODEL: "gpt-4o-mini",
+      BELLDANDY_COMPACTION_BASE_URL: "https://compaction.example.com/v1",
+      BELLDANDY_COMPACTION_API_KEY: "compaction-secret",
+      BELLDANDY_DANGEROUS_TOOLS_ENABLED: "true",
+      BELLDANDY_TOOLS_POLICY_FILE: "~/.star_sanctuary/tools-policy.json",
+      BELLDANDY_SUB_AGENT_MAX_CONCURRENT: "3",
+      BELLDANDY_SUB_AGENT_MAX_QUEUE_SIZE: "10",
+      BELLDANDY_SUB_AGENT_TIMEOUT_MS: "120000",
+      BELLDANDY_SUB_AGENT_MAX_DEPTH: "2",
+      BELLDANDY_IMAGE_ENABLED: "true",
+      BELLDANDY_IMAGE_PROVIDER: "openai",
+      BELLDANDY_IMAGE_OPENAI_API_KEY: "image-secret",
+      BELLDANDY_IMAGE_OPENAI_BASE_URL: "https://api.openai.com/v1",
+      BELLDANDY_IMAGE_MODEL: "gpt-image-2",
+      BELLDANDY_IMAGE_OUTPUT_FORMAT: "png",
+      BELLDANDY_IMAGE_TIMEOUT_MS: "60000",
+      BELLDANDY_STT_PROVIDER: "groq",
+      BELLDANDY_STT_LANGUAGE: "zh",
+      BELLDANDY_STT_GROQ_API_KEY: "gsk-secret",
+      BELLDANDY_STT_GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      BELLDANDY_ROOM_INJECT_THRESHOLD: "10",
+      BELLDANDY_ROOM_MEMBERS_CACHE_TTL: "300000",
     });
   });
 

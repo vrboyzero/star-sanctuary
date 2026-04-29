@@ -596,7 +596,7 @@
 
   <!-- Settings Modal -->
   <div id="settingsModal" class="modal-overlay hidden">
-    <div class="modal">
+    <div class="modal settings-modal">
       <div class="modal-header" style="display: flex; align-items: center;">
         <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
           <span data-i18n="settings.title">设置</span>
@@ -605,422 +605,22 @@
         <button id="closeSettings" class="settings-btn">✕</button>
       </div>
       <div class="modal-body">
-        <div class="form-group">
-          <label class="form-label" for="cfgLocale" data-i18n="settings.languageLabel">界面语言</label>
-          <select id="cfgLocale" class="input"></select>
-          <div class="form-help" data-i18n="settings.languageHelp">仅切换当前 WebChat 前端界面语言，不影响模型输出语言。</div>
-        </div>
-        <hr class="theme-divider">
-
-        <!-- Doctor Status -->
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.systemDoctor">系统检查</label>
-          <div>
-            <button id="doctorToggleBtn" class="button badge" type="button" style="margin-bottom: 8px;">
-              <span data-i18n="settings.doctorChecking">检查中...</span>
-            </button>
-            <div id="doctorStatus" class="hidden" style="display: flex; flex-wrap: wrap; gap: 8px;">
-            </div>
-          </div>
-          <div class="form-help" data-i18n="settings.doctorHelp">检查当前配置、依赖与运行状态，便于快速定位缺失项。</div>
-        </div>
-        <hr class="theme-divider">
-
-        <!-- Config Fields -->
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.apiKeyLabel">OpenAI API Key</label>
-          <input id="cfgApiKey" class="input" type="password" placeholder="sk-..." />
-          <div class="form-help" data-i18n="settings.apiKeyHelp">主对话模型使用的 API Key。未配置时 WebChat 只能进入引导状态。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.baseUrlLabel">OpenAI Base URL</label>
-          <input id="cfgBaseUrl" class="input" placeholder="https://api.openai.com/v1" />
-          <div class="form-help" data-i18n="settings.baseUrlHelp">兼容 OpenAI 协议的接口地址。官方接口通常保持默认即可。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.modelLabel">OpenAI Model</label>
-          <input id="cfgModel" class="input" placeholder="gpt-4o" />
-          <div class="form-help" data-i18n="settings.modelHelp">主聊天模型名称，例如 `gpt-4o`、`deepseek-chat`、`kimi-k2`。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.modelPreferredProvidersLabel">Preferred Providers</label>
-          <input id="cfgModelPreferredProviders" class="input" data-i18n-placeholder="settings.modelPreferredProvidersPlaceholder" placeholder="openrouter,moonshot,anthropic" />
-          <div class="form-help" data-i18n="settings.modelPreferredProvidersHelp">显式指定 model picker 的 provider 排序偏好，使用 providerId 逗号分隔；未命中时仍回退到当前默认模型与可用性排序。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.dashScopeApiKeyLabel">DashScope API Key</label>
-          <input id="cfgDashScopeApiKey" class="input" type="password" data-i18n-placeholder="settings.dashScopeApiKeyPlaceholder" placeholder="仅 dashscope provider 需要" />
-          <div class="form-help" data-i18n="settings.dashScopeApiKeyHelp">仅在 TTS Provider 选择 `dashscope` 时需要配置。</div>
-        </div>
-        <div class="settings-subsection-header" style="margin-top: 16px;">
-          <div>
-            <div class="settings-subsection-title" data-i18n="settings.modelFallbackConfigTitle">Model Fallback Profiles</div>
-            <div class="form-help" data-i18n="settings.modelFallbackConfigHelp">使用结构化 JSON 维护 `models.json` fallback 列表；primary provider 仍由上方 OpenAI API Key / Base URL / Model 控制。已有条目的 `apiKey` 可保留 `[REDACTED]` 占位，保存后会立即刷新 model picker。</div>
-          </div>
-          <button id="refreshModelFallbackConfig" type="button" class="button button-muted" data-i18n="settings.modelFallbackConfigRefresh">刷新</button>
-        </div>
-        <div id="modelFallbackConfigMeta" class="form-help" style="margin-bottom: 8px;"></div>
-        <div class="form-group">
-          <label class="form-label" for="cfgModelFallbackContent" data-i18n="settings.modelFallbackConfigContentLabel">Model Fallback JSON</label>
-          <textarea id="cfgModelFallbackContent" class="input" rows="12" spellcheck="false" placeholder="{&#10;  &quot;fallbacks&quot;: [&#10;    {&#10;      &quot;id&quot;: &quot;openrouter-main&quot;,&#10;      &quot;displayName&quot;: &quot;OpenRouter Main&quot;,&#10;      &quot;baseUrl&quot;: &quot;https://openrouter.ai/api/v1&quot;,&#10;      &quot;apiKey&quot;: &quot;sk-or-v1-...&quot;,&#10;      &quot;model&quot;: &quot;openai/gpt-4o-mini&quot;,&#10;      &quot;protocol&quot;: &quot;openai&quot;,&#10;      &quot;wireApi&quot;: &quot;responses&quot;&#10;    }&#10;  ]&#10;}"></textarea>
-        </div>
-        <section class="settings-subsection" id="assistantModeConfigSection">
-          <div class="settings-subsection-header" style="margin-top: 16px;">
-            <div>
-              <div id="assistantModeConfigTitle" class="settings-subsection-title" data-i18n="settings.assistantModeConfigTitle">Assistant Mode 配置</div>
-              <div id="assistantModeConfigHelp" class="form-help" data-i18n="settings.assistantModeConfigHelp">统一收口主动工作相关配置，包括通知确认、heartbeat 活跃时段和 cron 自动调度。底层仍复用现有 runtime。</div>
-              <div id="assistantModeConfigHint" class="form-help" data-i18n="settings.assistantModeConfigHint">配置入口已收口在下方 Assistant Mode 配置；当前仍复用原有 heartbeat / cron / 外部确认 runtime。</div>
-            </div>
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="cfgAssistantModeEnabled">
-              <input id="cfgAssistantModeEnabled" type="checkbox" style="margin-right: 8px;" />
-              <span data-i18n="settings.assistantModeEnabledLabel">启用 Assistant Mode</span>
-            </label>
-            <div class="form-help" data-i18n="settings.assistantModeEnabledHelp">产品层总开关。关闭时 heartbeat 与 cron 都不会主动运行；重新开启时会优先恢复为 heartbeat + cron 的默认主动组合，随后仍可在下方细调。</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="cfgAssistantModePreset" data-i18n="settings.assistantModePresetLabel">Assistant 策略预设</label>
-            <select id="cfgAssistantModePreset" class="input"></select>
-            <div class="form-help" data-i18n="settings.assistantModePresetHelp">快捷填充下方 Assistant Mode 配置；它不是长期模式切换。选择后仍可继续手工细调，细调后会自动回到“自定义”。</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="cfgExternalOutboundRequireConfirmation">
-              <input id="cfgExternalOutboundRequireConfirmation" type="checkbox" style="margin-right: 8px;" checked />
-              <span data-i18n="settings.externalOutboundRequireConfirmationLabel">外部渠道外发需要确认</span>
-            </label>
-            <div class="form-help" data-i18n="settings.externalOutboundRequireConfirmationHelp">控制 WebChat 请求 Agent 向飞书 / QQ / Community / Discord 外发文本时，是否必须先经过页面确认弹窗。默认开启；保存后需重启 Gateway 生效。</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label" data-i18n="settings.assistantExternalDeliveryPreferenceLabel">Assistant 外发优先级</label>
-            <input id="cfgAssistantExternalDeliveryPreference" class="input" placeholder="feishu,qq,community,discord" />
-            <div class="form-help" data-i18n="settings.assistantExternalDeliveryPreferenceHelp">控制 assistant mode 主动外发时，外部渠道的优先尝试顺序。使用逗号分隔，支持 `feishu,qq,community,discord`；resident 通道始终保留。</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label" data-i18n="settings.heartbeatLabel">Heartbeat Interval</label>
-            <input id="cfgHeartbeat" class="input" placeholder="30m" />
-            <div class="form-help" data-i18n="settings.heartbeatHelp">心跳任务执行间隔，支持 `30m`、`1h`、`300s` 这类格式。</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="cfgHeartbeatEnabled">
-              <input id="cfgHeartbeatEnabled" type="checkbox" style="margin-right: 8px;" />
-              <span data-i18n="settings.heartbeatEnabledLabel">Enable Heartbeat</span>
-            </label>
-            <div class="form-help" data-i18n="settings.heartbeatEnabledHelp">启用后，Agent 会按心跳配置检查 `HEARTBEAT.md` 并主动联系你。</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label" data-i18n="settings.heartbeatActiveHoursLabel">Heartbeat Active Hours</label>
-            <input id="cfgHeartbeatActiveHours" class="input" placeholder="08:00-23:00" />
-            <div class="form-help" data-i18n="settings.heartbeatActiveHoursHelp">限定心跳活跃时段，避免深夜打扰。留空则全天可触发。</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="cfgCronEnabled">
-              <input id="cfgCronEnabled" type="checkbox" style="margin-right: 8px;" />
-              <span data-i18n="settings.cronEnabledLabel">Enable Cron Scheduler</span>
-            </label>
-            <div class="form-help" data-i18n="settings.cronEnabledHelp">控制自动调度引擎。关闭后 `cron` 工具仍存在，但不会自动调度执行。</div>
-          </div>
-        </section>
-        <hr class="theme-divider">
-
-        <div class="form-group">
-          <label class="form-label" for="cfgBrowserRelayEnabled">
-            <input id="cfgBrowserRelayEnabled" type="checkbox" style="margin-right: 8px;" />
-            <span data-i18n="settings.browserRelayEnabledLabel">Enable Browser Relay</span>
-          </label>
-          <div class="form-help" data-i18n="settings.browserRelayEnabledHelp">启用浏览器中继自动启动，需要配合 Chrome 扩展完成自动化操作。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.relayPortLabel">Relay Port</label>
-          <input id="cfgRelayPort" class="input" placeholder="28892" />
-          <div class="form-help" data-i18n="settings.relayPortHelp">浏览器中继监听端口。只有在启用 Browser Relay 时才会用到。</div>
+        <div class="settings-tabs" role="tablist" aria-label="Settings Tabs">
+          <button type="button" class="settings-tab active" data-settings-tab-target="model" aria-selected="true" data-i18n="settings.tabModel">模型</button>
+          <button type="button" class="settings-tab" data-settings-tab-target="memory" aria-selected="false" tabindex="-1" data-i18n="settings.tabMemory">记忆</button>
+          <button type="button" class="settings-tab" data-settings-tab-target="tools" aria-selected="false" tabindex="-1" data-i18n="settings.tabTools">工具</button>
+          <button type="button" class="settings-tab" data-settings-tab-target="channels" aria-selected="false" tabindex="-1" data-i18n="settings.tabChannels">渠道</button>
+          <button type="button" class="settings-tab" data-settings-tab-target="system" aria-selected="false" tabindex="-1" data-i18n="settings.tabSystem">系统</button>
         </div>
 
-        <div class="form-group">
-          <label class="form-label" for="cfgMcpEnabled">
-            <input id="cfgMcpEnabled" type="checkbox" style="margin-right: 8px;" />
-            <span data-i18n="settings.mcpEnabledLabel">Enable MCP</span>
-          </label>
-          <div class="form-help" data-i18n="settings.mcpEnabledHelp">启用 MCP 协议支持。通常需要同时打开工具系统。</div>
-        </div>
-        <hr class="theme-divider">
-
-        <div class="form-group">
-          <label class="form-label" for="cfgEmbeddingEnabled">
-            <input id="cfgEmbeddingEnabled" type="checkbox" style="margin-right: 8px;" />
-            <span data-i18n="settings.embeddingEnabledLabel">Enable Embedding Retrieval</span>
-          </label>
-          <div class="form-help" data-i18n="settings.embeddingEnabledHelp">向量检索总开关。关闭后不会初始化 Embedding，也不会进行相关召回。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.embeddingApiKeyLabel">Embedding API Key</label>
-          <input id="cfgEmbeddingApiKey" class="input" type="password" data-i18n-placeholder="settings.embeddingApiKeyPlaceholder" placeholder="留空则复用主模型 API Key" />
-          <div class="form-help" data-i18n="settings.embeddingApiKeyHelp">向量模型专用 API Key。留空时默认复用主模型的 API Key。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.embeddingBaseUrlLabel">Embedding Base URL</label>
-          <input id="cfgEmbeddingBaseUrl" class="input" data-i18n-placeholder="settings.embeddingBaseUrlPlaceholder" placeholder="留空则复用主模型 Base URL" />
-          <div class="form-help" data-i18n="settings.embeddingBaseUrlHelp">向量模型接口地址。留空时默认复用主模型 Base URL。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.embeddingModelLabel">Embedding Model</label>
-          <input id="cfgEmbeddingModel" class="input" placeholder="text-embedding-3-small" />
-          <div class="form-help" data-i18n="settings.embeddingModelHelp">向量模型名称，例如 `text-embedding-3-small` 或兼容模型名。</div>
-        </div>
-
-        <hr class="theme-divider">
-
-        <div class="form-group">
-          <label class="form-label" for="cfgToolsEnabled">
-            <input id="cfgToolsEnabled" type="checkbox" style="margin-right: 8px;" />
-            <span data-i18n="settings.toolsEnabledLabel">启用工具调用</span>
-          </label>
-          <div class="form-help" data-i18n="settings.toolsEnabledHelp">工具系统总开关。关闭后模型将无法调用文件、浏览器、命令等工具。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.agentToolControlLabel">Agent Tool Control</label>
-          <select id="cfgAgentToolControlMode" class="input">
-            <option value="disabled">disabled</option>
-            <option value="confirm">confirm</option>
-            <option value="auto">auto</option>
-          </select>
-          <div class="form-help" data-i18n="settings.agentToolControlHelp">控制 Agent 是否可修改已注册工具的全局调用开关：disabled=禁止，confirm=文本确认，auto=直接执行。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.agentToolControlPasswordLabel">Agent 工具确认口令</label>
-          <input id="cfgAgentToolControlConfirmPassword" class="input" type="password" data-i18n-placeholder="settings.agentToolControlPasswordPlaceholder" placeholder="留空则使用 requestId 确认口令" />
-          <div class="form-help" data-i18n="settings.agentToolControlPasswordHelp">仅在 confirm 模式下生效。留空时要求用户回复 `批准工具设置变更 &lt;requestId&gt;`；设置后改为输入你配置的确认口令。</div>
-        </div>
-
-        <hr class="theme-divider">
-
-        <div class="form-group">
-          <label class="form-label" for="cfgTtsEnabled">
-            <input id="cfgTtsEnabled" type="checkbox" style="margin-right: 8px;" />
-            <span data-i18n="settings.ttsEnabledLabel">Enable TTS</span>
-          </label>
-          <div class="form-help" data-i18n="settings.ttsEnabledHelp">服务端自动语音开关。开启后回复可附带语音音频。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.ttsProviderLabel">TTS Provider</label>
-          <select id="cfgTtsProvider" class="input">
-            <option value="edge">edge</option>
-            <option value="openai">openai</option>
-            <option value="dashscope">dashscope</option>
-          </select>
-          <div class="form-help" data-i18n="settings.ttsProviderHelp">语音合成提供方。`edge` 免费可用，`openai` 和 `dashscope` 需要对应密钥。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.ttsVoiceLabel">TTS Voice</label>
-          <input id="cfgTtsVoice" class="input" data-i18n-placeholder="settings.ttsVoicePlaceholder" placeholder="留空则使用 provider 默认音色" />
-          <div class="form-help" data-i18n="settings.ttsVoiceHelp">音色名称。留空时按当前 Provider 自动选择默认音色。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.ttsOpenAiBaseUrlLabel">TTS OpenAI Base URL</label>
-          <input id="cfgTtsOpenAIBaseUrl" class="input" data-i18n-placeholder="settings.ttsOpenAiBaseUrlPlaceholder" placeholder="留空则复用主模型 Base URL" />
-          <div class="form-help" data-i18n="settings.ttsOpenAiBaseUrlHelp">仅在 TTS Provider 选择 `openai` 时使用。留空时回退到全局 `BELLDANDY_OPENAI_BASE_URL`，再回退旧的 `OPENAI_BASE_URL`。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.ttsOpenAiApiKeyLabel">TTS OpenAI API Key</label>
-          <input id="cfgTtsOpenAIApiKey" class="input" type="password" data-i18n-placeholder="settings.ttsOpenAiApiKeyPlaceholder" placeholder="留空则复用主模型 API Key" />
-          <div class="form-help" data-i18n="settings.ttsOpenAiApiKeyHelp">仅在 TTS Provider 选择 `openai` 时使用。留空时回退到全局 `BELLDANDY_OPENAI_API_KEY`，再回退旧的 `OPENAI_API_KEY`。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.voiceShortcutLabel">Voice Shortcut</label>
-          <input id="cfgVoiceShortcut" class="input" data-i18n-placeholder="settings.voiceShortcutPlaceholder" placeholder="聚焦后按下新的快捷键" readonly />
-          <div class="form-help" id="cfgVoiceShortcutStatus" data-i18n="voice.shortcutStatusInitial">本地快捷键，默认 Alt+R。聚焦输入框后按下组合键即可修改，不会写入服务端配置。</div>
-          <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
-            <button id="cfgVoiceShortcutDefault" type="button" class="button" data-i18n="settings.voiceShortcutDefault">恢复默认</button>
-            <button id="cfgVoiceShortcutClear" type="button" class="button" data-i18n="settings.voiceShortcutClear">禁用快捷键</button>
-          </div>
-        </div>
-
-        <hr class="theme-divider">
-
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.facetAnchorLabel">FACET Anchor</label>
-          <input id="cfgFacetAnchor" class="input" placeholder="&lt;!-- FACET_ANCHOR --&gt;" />
-          <div class="form-help" data-i18n="settings.facetAnchorHelp">`switch_facet` 工具在 `SOUL.md` 中查找的锚点文本，用来确定替换起点。</div>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label" for="cfgInjectAgents">
-            <input id="cfgInjectAgents" type="checkbox" style="margin-right: 8px;" />
-            <span data-i18n="settings.injectAgentsLabel">Inject AGENTS.md</span>
-          </label>
-          <div class="form-help" data-i18n="settings.injectAgentsHelp">决定是否把 `AGENTS.md` 注入到 System Prompt。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="cfgInjectSoul">
-            <input id="cfgInjectSoul" type="checkbox" style="margin-right: 8px;" />
-            <span data-i18n="settings.injectSoulLabel">Inject SOUL.md</span>
-          </label>
-          <div class="form-help" data-i18n="settings.injectSoulHelp">决定是否把 `SOUL.md` 注入到 System Prompt。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="cfgInjectMemory">
-            <input id="cfgInjectMemory" type="checkbox" style="margin-right: 8px;" />
-            <span data-i18n="settings.injectMemoryLabel">Inject MEMORY.md</span>
-          </label>
-          <div class="form-help" data-i18n="settings.injectMemoryHelp">决定是否把 `MEMORY.md` 注入到 System Prompt。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.maxSystemPromptCharsLabel">Max System Prompt Chars</label>
-          <input id="cfgMaxSystemPromptChars" class="input" placeholder="0 / 6000 / 20000" />
-          <div class="form-help" data-i18n="settings.maxSystemPromptCharsHelp">限制 System Prompt 最大字符数。设为 `0` 或留空表示不限制。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.maxHistoryLabel">Max History Rounds</label>
-          <input id="cfgMaxHistory" class="input" placeholder="10" />
-          <div class="form-help" data-i18n="settings.maxHistoryHelp">传给模型的最近对话轮数。数值越小，越节省上下文长度。</div>
-        </div>
-        <hr class="theme-divider">
-        <div class="settings-subsection-header">
-          <div>
-            <div class="settings-subsection-title" data-i18n="settings.pairingPendingTitle">待批准配对</div>
-            <div class="form-help" data-i18n="settings.pairingPendingHelp">当当前 WebChat 会话尚未完成 Pairing 时，这里会显示待批准的配对码。你可以直接在设置页内批准，不需要回终端。</div>
-          </div>
-        </div>
-        <div id="pairingPendingList" class="doctor-grid"></div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.conversationAccessTitle">会话历史访问范围</label>
-          <div class="form-help" data-i18n="settings.conversationAccessHelp">全局限制 Agent 通过 conversation_list / conversation_read 可读取的会话类别。未配置时默认全开；保存后需重启 Gateway 生效。</div>
-          <label class="form-label" for="cfgConversationKindMain" style="margin-top: 10px;">
-            <input id="cfgConversationKindMain" type="checkbox" style="margin-right: 8px;" />
-            <span data-i18n="settings.conversationAccessMain">允许主会话</span>
-          </label>
-          <label class="form-label" for="cfgConversationKindSubtask" style="margin-top: 6px;">
-            <input id="cfgConversationKindSubtask" type="checkbox" style="margin-right: 8px;" />
-            <span data-i18n="settings.conversationAccessSubtask">允许子代理会话</span>
-          </label>
-          <label class="form-label" for="cfgConversationKindGoal" style="margin-top: 6px;">
-            <input id="cfgConversationKindGoal" type="checkbox" style="margin-right: 8px;" />
-            <span data-i18n="settings.conversationAccessGoal">允许长期任务会话</span>
-          </label>
-          <label class="form-label" for="cfgConversationKindHeartbeat" style="margin-top: 6px;">
-            <input id="cfgConversationKindHeartbeat" type="checkbox" style="margin-right: 8px;" />
-            <span data-i18n="settings.conversationAccessHeartbeat">允许心跳会话</span>
-          </label>
-        </div>
-
-        <hr class="theme-divider">
-
-        <section id="channelsSettingsSection" class="settings-subsection">
+        <section class="settings-panel active" data-settings-panel="model">
           <div class="settings-subsection-header">
             <div>
-              <div class="settings-subsection-title" data-i18n="settings.channelsSectionTitle">渠道配置</div>
-              <div class="form-help" data-i18n="settings.channelsSectionHelp">用于维护社区 API、邮件、飞书、QQ 和 Discord 的环境变量配置。社区/官网相关的结构化配置仍需配合 community.json。</div>
-            </div>
-            <button id="openCommunityConfig" type="button" class="button button-muted" data-i18n="settings.openCommunityConfig">打开 community.json</button>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label" for="cfgCommunityApiEnabled">
-              <input id="cfgCommunityApiEnabled" type="checkbox" style="margin-right: 8px;" />
-              <span data-i18n="settings.communityApiEnabledLabel">Enable Community API</span>
-            </label>
-            <div class="form-help" data-i18n="settings.communityApiEnabledHelp">启用 /api/message 社区 API。开启前必须确保 Gateway 认证模式不是 none。</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label" data-i18n="settings.communityApiTokenLabel">Community API Token</label>
-            <input id="cfgCommunityApiToken" class="input" type="password" data-i18n-placeholder="settings.communityApiTokenPlaceholder" placeholder="用于 Bearer 鉴权" />
-            <div class="form-help" data-i18n="settings.communityApiTokenHelp">社区 API 的 Bearer Token。保存时会继续使用脱敏逻辑。</div>
-          </div>
-
-          <hr class="theme-divider">
-
-          <div class="form-group">
-            <label class="form-label" for="cfgEmailSmtpEnabled">
-              <input id="cfgEmailSmtpEnabled" type="checkbox" style="margin-right: 8px;" />
-              <span data-i18n="settings.emailSmtpEnabledLabel">Enable Email SMTP</span>
-            </label>
-            <div class="form-help" data-i18n="settings.emailSmtpEnabledHelp">启用邮件发送通道。保存后需重启 Gateway 生效。</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="cfgEmailImapEnabled">
-              <input id="cfgEmailImapEnabled" type="checkbox" style="margin-right: 8px;" />
-              <span data-i18n="settings.emailImapEnabledLabel">Enable Email IMAP</span>
-            </label>
-            <div class="form-help" data-i18n="settings.emailImapEnabledHelp">启用 IMAP 轮询收信与邮件线程处理。保存后需重启 Gateway 生效。</div>
-          </div>
-
-          <hr class="theme-divider">
-
-          <div class="form-group">
-            <label class="form-label" data-i18n="settings.feishuAppIdLabel">Feishu App ID</label>
-            <input id="cfgFeishuAppId" class="input" placeholder="cli_xxxxxxxxxxxxxxxx" />
-          </div>
-          <div class="form-group">
-            <label class="form-label" data-i18n="settings.feishuAppSecretLabel">Feishu App Secret</label>
-            <input id="cfgFeishuAppSecret" class="input" type="password" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
-          </div>
-          <div class="form-group">
-            <label class="form-label" data-i18n="settings.feishuAgentIdLabel">Feishu Agent ID</label>
-            <input id="cfgFeishuAgentId" class="input" placeholder="default" />
-          </div>
-
-          <hr class="theme-divider">
-
-          <div class="form-group">
-            <label class="form-label" data-i18n="settings.qqAppIdLabel">QQ App ID</label>
-            <input id="cfgQqAppId" class="input" placeholder="xxxxxxxx" />
-          </div>
-          <div class="form-group">
-            <label class="form-label" data-i18n="settings.qqAppSecretLabel">QQ App Secret</label>
-            <input id="cfgQqAppSecret" class="input" type="password" placeholder="xxxxxxxx" />
-          </div>
-          <div class="form-group">
-            <label class="form-label" data-i18n="settings.qqAgentIdLabel">QQ Agent ID</label>
-            <input id="cfgQqAgentId" class="input" placeholder="default" />
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="cfgQqSandbox">
-              <input id="cfgQqSandbox" type="checkbox" style="margin-right: 8px;" />
-              <span data-i18n="settings.qqSandboxLabel">QQ Sandbox Mode</span>
-            </label>
-            <div class="form-help" data-i18n="settings.qqSandboxHelp">控制 QQ 机器人是否运行在沙箱环境。</div>
-          </div>
-
-          <hr class="theme-divider">
-
-          <div class="form-group">
-            <label class="form-label" for="cfgDiscordEnabled">
-              <input id="cfgDiscordEnabled" type="checkbox" style="margin-right: 8px;" />
-              <span data-i18n="settings.discordEnabledLabel">Enable Discord</span>
-            </label>
-            <div class="form-help" data-i18n="settings.discordEnabledHelp">启用 Discord 渠道。保存后需重启 Gateway 生效。</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label" data-i18n="settings.discordBotTokenLabel">Discord Bot Token</label>
-            <input id="cfgDiscordBotToken" class="input" type="password" placeholder="your-discord-bot-token" />
-          </div>
-
-          <hr class="theme-divider">
-
-          <div class="settings-subsection-header">
-            <div>
-              <div class="settings-subsection-title" data-i18n="settings.channelSecurityTitle">渠道安全默认值</div>
-                <div class="form-help" data-i18n="settings.channelSecurityHelp">使用结构化 JSON 维护 `discord / feishu / qq / community` 的安全默认值；也可通过 `channels.&lt;channel&gt;.accounts.&lt;accountId&gt;` 覆盖账号级 `dmPolicy / allowFrom / mentionRequired`。</div>
-            </div>
-            <button id="refreshChannelSecurity" type="button" class="button button-muted" data-i18n="settings.channelSecurityRefresh">刷新</button>
-          </div>
-          <div id="channelSecurityConfigMeta" class="form-help" style="margin-bottom: 8px;"></div>
-          <div class="form-group">
-            <label class="form-label" for="cfgChannelSecurityContent" data-i18n="settings.channelSecurityContentLabel">Channel Security JSON</label>
-            <textarea id="cfgChannelSecurityContent" class="input" rows="12" spellcheck="false" placeholder="{&#10;  &quot;version&quot;: 1,&#10;  &quot;channels&quot;: {}&#10;}"></textarea>
-          </div>
-
-          <div class="settings-subsection-header" style="margin-top: 16px;">
-            <div>
-              <div class="settings-subsection-title" data-i18n="settings.channelReplyChunkingTitle">渠道回复分段策略</div>
-              <div class="form-help" data-i18n="settings.channelReplyChunkingHelp">使用结构化 JSON 维护 discord / feishu / qq / community 的回复分段 runtime 策略；支持 channels.&lt;channel&gt;.accounts.&lt;accountId&gt; 覆盖 textLimit / chunkMode。默认值：discord 1800/newline、qq 1500/newline、feishu 3000/newline、community 3500/newline。</div>
+              <div class="settings-subsection-title" data-i18n="settings.pairingPendingTitle">待批准配对</div>
+              <div class="form-help" data-i18n="settings.pairingPendingHelp">当当前 WebChat 会话尚未完成 Pairing 时，这里会显示待批准的配对码。你可以直接在设置页内批准，不需要回终端。</div>
             </div>
           </div>
-          <div id="channelReplyChunkingConfigMeta" class="form-help" style="margin-bottom: 8px;"></div>
-          <div class="form-group">
-            <label class="form-label" for="cfgChannelReplyChunkingContent" data-i18n="settings.channelReplyChunkingContentLabel">Channel Reply Chunking JSON</label>
-            <textarea id="cfgChannelReplyChunkingContent" class="input" rows="12" spellcheck="false" placeholder="{&#10;  &quot;version&quot;: 1,&#10;  &quot;channels&quot;: {&#10;    &quot;discord&quot;: { &quot;textLimit&quot;: 1800, &quot;chunkMode&quot;: &quot;newline&quot; },&#10;    &quot;qq&quot;: { &quot;textLimit&quot;: 1500, &quot;chunkMode&quot;: &quot;newline&quot; },&#10;    &quot;feishu&quot;: { &quot;textLimit&quot;: 3000, &quot;chunkMode&quot;: &quot;newline&quot; },&#10;    &quot;community&quot;: {&#10;      &quot;textLimit&quot;: 3500,&#10;      &quot;chunkMode&quot;: &quot;newline&quot;,&#10;      &quot;accounts&quot;: {&#10;        &quot;agent-name&quot;: { &quot;textLimit&quot;: 2200, &quot;chunkMode&quot;: &quot;length&quot; }&#10;      }&#10;    }&#10;  }&#10;}"></textarea>
-          </div>
+          <div id="pairingPendingList" class="doctor-grid"></div>
 
           <div class="settings-subsection-header" style="margin-top: 16px;">
             <div>
@@ -1029,6 +629,1748 @@
             </div>
           </div>
           <div id="channelSecurityPendingList" class="doctor-grid"></div>
+
+          <hr class="theme-divider">
+
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.agentProviderLabel">Agent Provider</label>
+            <select id="cfgAgentProvider" class="input">
+              <option value="openai">openai</option>
+              <option value="mock">mock</option>
+            </select>
+            <div class="form-help" data-i18n="settings.agentProviderHelp">控制主聊天 Agent 使用的 provider。生产环境通常保持 `openai`。</div>
+          </div>
+          <div class="form-group settings-featured-group">
+            <label class="form-label settings-featured-label" data-i18n="settings.apiKeyLabel">OpenAI API Key</label>
+            <input id="cfgApiKey" class="input settings-featured-input" type="password" placeholder="sk-..." />
+            <div class="form-help" data-i18n="settings.apiKeyHelp">主对话模型使用的 API Key。未配置时 WebChat 只能进入引导状态。</div>
+          </div>
+          <div class="form-group settings-featured-group">
+            <label class="form-label settings-featured-label" data-i18n="settings.baseUrlLabel">OpenAI Base URL</label>
+            <input id="cfgBaseUrl" class="input settings-featured-input" placeholder="https://api.openai.com/v1" />
+            <div class="form-help" data-i18n="settings.baseUrlHelp">兼容 OpenAI 协议的接口地址。官方接口通常保持默认即可。</div>
+          </div>
+          <div class="form-group settings-featured-group">
+            <label class="form-label settings-featured-label" data-i18n="settings.modelLabel">OpenAI Model</label>
+            <input id="cfgModel" class="input settings-featured-input" placeholder="gpt-4o" />
+            <div class="form-help" data-i18n="settings.modelHelp">主聊天模型名称，例如 `gpt-4o`、`deepseek-chat`、`kimi-k2`。</div>
+          </div>
+          <div class="form-group settings-featured-group">
+            <label class="form-label settings-featured-label" data-i18n="settings.dashScopeApiKeyLabel">DashScope API Key</label>
+            <input id="cfgDashScopeApiKey" class="input settings-featured-input" type="password" data-i18n-placeholder="settings.dashScopeApiKeyPlaceholder" placeholder="仅 dashscope provider 需要" />
+            <div class="form-help" data-i18n="settings.dashScopeApiKeyHelp">仅在 TTS Provider 选择 `dashscope` 时需要配置。</div>
+          </div>
+
+          <div class="settings-subsection-header" style="margin-top: 16px;">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.modelFallbackConfigTitle">Model Fallback Profiles</div>
+              <div class="form-help" data-i18n="settings.modelFallbackConfigHelp">使用结构化 JSON 维护 `models.json` fallback 列表；primary provider 仍由上方 OpenAI API Key / Base URL / Model 控制。已有条目的 `apiKey` 可保留 `[REDACTED]` 占位，保存后会立即刷新 model picker。</div>
+            </div>
+            <button id="refreshModelFallbackConfig" type="button" class="button button-muted" data-i18n="settings.modelFallbackConfigRefresh">刷新</button>
+          </div>
+          <div id="modelFallbackConfigMeta" class="form-help" style="margin-bottom: 8px;"></div>
+          <div class="form-group">
+            <label class="form-label" for="cfgModelFallbackContent" data-i18n="settings.modelFallbackConfigContentLabel">Model Fallback JSON</label>
+            <textarea id="cfgModelFallbackContent" class="input" rows="12" spellcheck="false" placeholder="{&#10;  &quot;fallbacks&quot;: [&#10;    {&#10;      &quot;id&quot;: &quot;openrouter-main&quot;,&#10;      &quot;displayName&quot;: &quot;OpenRouter Main&quot;,&#10;      &quot;baseUrl&quot;: &quot;https://openrouter.ai/api/v1&quot;,&#10;      &quot;apiKey&quot;: &quot;sk-or-v1-...&quot;,&#10;      &quot;model&quot;: &quot;openai/gpt-4o-mini&quot;,&#10;      &quot;protocol&quot;: &quot;openai&quot;,&#10;      &quot;wireApi&quot;: &quot;responses&quot;&#10;    }&#10;  ]&#10;}"></textarea>
+          </div>
+
+          <section class="settings-subsection" id="assistantModeConfigSection">
+            <div class="settings-subsection-header" style="margin-top: 16px;">
+              <div>
+                <div id="assistantModeConfigTitle" class="settings-subsection-title" data-i18n="settings.assistantModeConfigTitle">Assistant Mode 配置</div>
+                <div id="assistantModeConfigHelp" class="form-help" data-i18n="settings.assistantModeConfigHelp">统一收口主动工作相关配置，包括通知确认、heartbeat 活跃时段和 cron 自动调度。底层仍复用现有 runtime。</div>
+                <div id="assistantModeConfigHint" class="form-help" data-i18n="settings.assistantModeConfigHint">配置入口已收口在下方 Assistant Mode 配置；当前仍复用原有 heartbeat / cron / 外部确认 runtime。</div>
+              </div>
+            </div>
+            <div class="form-group settings-priority-toggle">
+              <label class="form-label" for="cfgAssistantModeEnabled">
+                <input id="cfgAssistantModeEnabled" type="checkbox" style="margin-right: 8px;" />
+                <span class="settings-priority-toggle-title" data-i18n="settings.assistantModeEnabledLabel">启用 Assistant Mode</span>
+              </label>
+              <div class="form-help" data-i18n="settings.assistantModeEnabledHelp">产品层总开关。关闭时 heartbeat 与 cron 都不会主动运行；重新开启时会优先恢复为 heartbeat + cron 的默认主动组合，随后仍可在下方细调。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgAssistantModePreset" data-i18n="settings.assistantModePresetLabel">Assistant 策略预设</label>
+              <select id="cfgAssistantModePreset" class="input"></select>
+              <div class="form-help" data-i18n="settings.assistantModePresetHelp">快捷填充下方 Assistant Mode 配置；它不是长期模式切换。选择后仍可继续手工细调，细调后会自动回到“自定义”。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgExternalOutboundRequireConfirmation">
+                <input id="cfgExternalOutboundRequireConfirmation" type="checkbox" style="margin-right: 8px;" checked />
+                <span data-i18n="settings.externalOutboundRequireConfirmationLabel">外部渠道外发需要确认</span>
+              </label>
+              <div class="form-help" data-i18n="settings.externalOutboundRequireConfirmationHelp">控制 WebChat 请求 Agent 向飞书 / QQ / Community / Discord 外发文本时，是否必须先经过页面确认弹窗。默认开启；保存后需重启 Gateway 生效。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" data-i18n="settings.assistantExternalDeliveryPreferenceLabel">Assistant 外发优先级</label>
+              <input id="cfgAssistantExternalDeliveryPreference" class="input" placeholder="feishu,qq,community,discord" />
+              <div class="form-help" data-i18n="settings.assistantExternalDeliveryPreferenceHelp">控制 assistant mode 主动外发时，外部渠道的优先尝试顺序。使用逗号分隔，支持 `feishu,qq,community,discord`；resident 通道始终保留。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" data-i18n="settings.heartbeatLabel">Heartbeat Interval</label>
+              <input id="cfgHeartbeat" class="input" placeholder="30m" />
+              <div class="form-help" data-i18n="settings.heartbeatHelp">心跳任务执行间隔，支持 `30m`、`1h`、`300s` 这类格式。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgHeartbeatEnabled">
+                <input id="cfgHeartbeatEnabled" type="checkbox" style="margin-right: 8px;" />
+                <span data-i18n="settings.heartbeatEnabledLabel">Enable Heartbeat</span>
+              </label>
+              <div class="form-help" data-i18n="settings.heartbeatEnabledHelp">启用后，Agent 会按心跳配置检查 `HEARTBEAT.md` 并主动联系你。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" data-i18n="settings.heartbeatActiveHoursLabel">Heartbeat Active Hours</label>
+              <input id="cfgHeartbeatActiveHours" class="input" placeholder="08:00-23:00" />
+              <div class="form-help" data-i18n="settings.heartbeatActiveHoursHelp">限定心跳活跃时段，避免深夜打扰。留空则全天可触发。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgCronEnabled">
+                <input id="cfgCronEnabled" type="checkbox" style="margin-right: 8px;" />
+                <span data-i18n="settings.cronEnabledLabel">Enable Cron Scheduler</span>
+              </label>
+              <div class="form-help" data-i18n="settings.cronEnabledHelp">控制自动调度引擎。关闭后 `cron` 工具仍存在，但不会自动调度执行。</div>
+            </div>
+          </section>
+
+          <hr class="theme-divider">
+
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.modelPreferredProvidersLabel">Preferred Providers</label>
+            <input id="cfgModelPreferredProviders" class="input" data-i18n-placeholder="settings.modelPreferredProvidersPlaceholder" placeholder="openrouter,moonshot,anthropic" />
+            <div class="form-help" data-i18n="settings.modelPreferredProvidersHelp">显式指定 model picker 的 provider 排序偏好，使用 providerId 逗号分隔；未命中时仍回退到当前默认模型与可用性排序。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgOpenAiStreamEnabled">
+              <input id="cfgOpenAiStreamEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.openAiStreamEnabledLabel">启用流式输出</span>
+            </label>
+            <div class="form-help" data-i18n="settings.openAiStreamEnabledHelp">控制 OpenAI-compatible 请求是否启用流式输出。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.openAiWireApiLabel">OpenAI 线路协议</label>
+            <select id="cfgOpenAiWireApi" class="input">
+              <option value="chat_completions">chat_completions</option>
+              <option value="responses">responses</option>
+            </select>
+            <div class="form-help" data-i18n="settings.openAiWireApiHelp">选择 OpenAI-compatible 请求走 `chat/completions` 还是 `responses`。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.openAiThinkingLabel">Thinking</label>
+            <input id="cfgOpenAiThinking" class="input" data-i18n-placeholder="settings.openAiThinkingPlaceholder" placeholder="enabled / disabled / {&quot;type&quot;:&quot;enabled&quot;}" />
+            <div class="form-help" data-i18n="settings.openAiThinkingHelp">OpenAI-compatible 思考模式透传值。可写 `enabled`、`disabled` 或 JSON。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.openAiReasoningEffortLabel">Reasoning Effort</label>
+            <input id="cfgOpenAiReasoningEffort" class="input" data-i18n-placeholder="settings.openAiReasoningEffortPlaceholder" placeholder="high / max" />
+            <div class="form-help" data-i18n="settings.openAiReasoningEffortHelp">OpenAI-compatible 推理强度透传值，会写入 `reasoning_effort`。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgResponsesSanitizeToolSchema">
+              <input id="cfgResponsesSanitizeToolSchema" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.responsesSanitizeToolSchemaLabel">清洗 Responses Tool Schema</span>
+            </label>
+            <div class="form-help" data-i18n="settings.responsesSanitizeToolSchemaHelp">仅在 `responses + tools` 模式下移除 `oneOf`、`$ref` 等不兼容 schema 关键字。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.openAiMaxRetriesLabel">OpenAI Max Retries</label>
+            <input id="cfgOpenAiMaxRetries" class="input" placeholder="1" />
+            <div class="form-help" data-i18n="settings.openAiMaxRetriesHelp">OpenAI-compatible 默认重试次数，不含首次请求。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.openAiRetryBackoffMsLabel">Retry Backoff MS</label>
+            <input id="cfgOpenAiRetryBackoffMs" class="input" placeholder="300" />
+            <div class="form-help" data-i18n="settings.openAiRetryBackoffMsHelp">默认重试退避基线毫秒数，实际采用指数退避。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.openAiProxyUrlLabel">OpenAI Proxy URL</label>
+            <input id="cfgOpenAiProxyUrl" class="input" placeholder="http://127.0.0.1:7890" />
+            <div class="form-help" data-i18n="settings.openAiProxyUrlHelp">主模型请求专用代理地址。fallback 可继续在 `models.json` 单独覆盖。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgPrimaryWarmupEnabled">
+              <input id="cfgPrimaryWarmupEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.primaryWarmupEnabledLabel">启用 Primary 预热</span>
+            </label>
+            <div class="form-help" data-i18n="settings.primaryWarmupEnabledHelp">启动时对 primary 做预热探测，失败时给 primary 添加短期冷却。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.primaryWarmupTimeoutMsLabel">Primary Warmup Timeout MS</label>
+            <input id="cfgPrimaryWarmupTimeoutMs" class="input" placeholder="8000" />
+            <div class="form-help" data-i18n="settings.primaryWarmupTimeoutMsHelp">primary 预热探测请求超时，单位毫秒。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.primaryWarmupCooldownMsLabel">Primary Warmup Cooldown MS</label>
+            <input id="cfgPrimaryWarmupCooldownMs" class="input" placeholder="60000" />
+            <div class="form-help" data-i18n="settings.primaryWarmupCooldownMsHelp">预热失败后 primary 的冷却时间，单位毫秒。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.agentTimeoutMsLabel">Agent Timeout MS</label>
+            <input id="cfgAgentTimeoutMs" class="input" placeholder="120000" />
+            <div class="form-help" data-i18n="settings.agentTimeoutMsHelp">单次模型调用超时，单位毫秒。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.agentProtocolLabel">Agent Protocol</label>
+            <select id="cfgAgentProtocol" class="input">
+              <option value="" data-i18n="settings.agentProtocolAuto">自动</option>
+              <option value="openai">openai</option>
+              <option value="anthropic">anthropic</option>
+            </select>
+            <div class="form-help" data-i18n="settings.agentProtocolHelp">主聊天协议。留空表示自动检测；Anthropic 原生协议可启用 prompt caching。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgOpenAiSystemPrompt" data-i18n="settings.openAiSystemPromptLabel">Extra System Prompt</label>
+            <textarea id="cfgOpenAiSystemPrompt" class="input" rows="4" spellcheck="false" data-i18n-placeholder="settings.openAiSystemPromptPlaceholder" placeholder="额外追加到 workspace prompt 之后"></textarea>
+            <div class="form-help" data-i18n="settings.openAiSystemPromptHelp">额外追加到 workspace prompt 之后的系统提示词。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.videoFileApiUrlLabel">Video File API URL</label>
+            <input id="cfgVideoFileApiUrl" class="input" placeholder="https://api.moonshot.cn/v1" />
+            <div class="form-help" data-i18n="settings.videoFileApiUrlHelp">当主聊天线路不支持视频文件上传时，可在这里单独指定视频文件 API URL。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.videoFileApiKeyLabel">Video File API Key</label>
+            <input id="cfgVideoFileApiKey" class="input" type="password" placeholder="sk-..." />
+            <div class="form-help" data-i18n="settings.videoFileApiKeyHelp">视频文件上传专用 API Key。留空时回退到主模型 API Key。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.facetAnchorLabel">FACET Anchor</label>
+            <input id="cfgFacetAnchor" class="input" placeholder="&lt;!-- FACET_ANCHOR --&gt;" />
+            <div class="form-help" data-i18n="settings.facetAnchorHelp">`switch_facet` 工具在 `SOUL.md` 中查找的锚点文本，用来确定替换起点。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgInjectAgents">
+              <input id="cfgInjectAgents" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.injectAgentsLabel">Inject AGENTS.md</span>
+            </label>
+            <div class="form-help" data-i18n="settings.injectAgentsHelp">决定是否把 `AGENTS.md` 注入到 System Prompt。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgInjectSoul">
+              <input id="cfgInjectSoul" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.injectSoulLabel">Inject SOUL.md</span>
+            </label>
+            <div class="form-help" data-i18n="settings.injectSoulHelp">决定是否把 `SOUL.md` 注入到 System Prompt。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgInjectMemory">
+              <input id="cfgInjectMemory" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.injectMemoryLabel">Inject MEMORY.md</span>
+            </label>
+            <div class="form-help" data-i18n="settings.injectMemoryHelp">决定是否把 `MEMORY.md` 注入到 System Prompt。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.maxSystemPromptCharsLabel">Max System Prompt Chars</label>
+            <input id="cfgMaxSystemPromptChars" class="input" placeholder="0 / 6000 / 20000" />
+            <div class="form-help" data-i18n="settings.maxSystemPromptCharsHelp">限制 System Prompt 最大字符数。设为 `0` 或留空表示不限制。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.maxHistoryLabel">Max History Rounds</label>
+            <input id="cfgMaxHistory" class="input" placeholder="10" />
+            <div class="form-help" data-i18n="settings.maxHistoryHelp">传给模型的最近对话轮数。数值越小，越节省上下文长度。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.conversationAccessTitle">会话历史访问范围</label>
+            <div class="form-help" data-i18n="settings.conversationAccessHelp">全局限制 Agent 通过 conversation_list / conversation_read 可读取的会话类别。未配置时默认全开；保存后需重启 Gateway 生效。</div>
+            <label class="form-label" for="cfgConversationKindMain" style="margin-top: 10px;">
+              <input id="cfgConversationKindMain" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.conversationAccessMain">允许主会话</span>
+            </label>
+            <label class="form-label" for="cfgConversationKindSubtask" style="margin-top: 6px;">
+              <input id="cfgConversationKindSubtask" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.conversationAccessSubtask">允许子代理会话</span>
+            </label>
+            <label class="form-label" for="cfgConversationKindGoal" style="margin-top: 6px;">
+              <input id="cfgConversationKindGoal" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.conversationAccessGoal">允许长期任务会话</span>
+            </label>
+            <label class="form-label" for="cfgConversationKindHeartbeat" style="margin-top: 6px;">
+              <input id="cfgConversationKindHeartbeat" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.conversationAccessHeartbeat">允许心跳会话</span>
+            </label>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title">Prompt Runtime</div>
+              <div class="form-help">Prompt 实验开关、快照保留策略与上下文压缩预算。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgPromptExperimentDisableSections">Prompt Disable Sections</label>
+            <input id="cfgPromptExperimentDisableSections" class="input" placeholder="methodology,context" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgPromptExperimentSectionPriorityOverrides">Prompt Section Priority Overrides</label>
+            <input id="cfgPromptExperimentSectionPriorityOverrides" class="input" placeholder="methodology:5,extra:150" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgPromptExperimentDisableToolContracts">Prompt Disable Tool Contracts</label>
+            <input id="cfgPromptExperimentDisableToolContracts" class="input" placeholder="apply_patch,run_command" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgPromptSnapshotMaxRuns">Prompt Snapshot Max Runs</label>
+            <input id="cfgPromptSnapshotMaxRuns" class="input" placeholder="48" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgPromptSnapshotMaxPersistedRuns">Prompt Snapshot Max Persisted Runs</label>
+            <input id="cfgPromptSnapshotMaxPersistedRuns" class="input" placeholder="20" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgPromptSnapshotEmailThreadMaxRuns">Prompt Snapshot Email Thread Max Runs</label>
+            <input id="cfgPromptSnapshotEmailThreadMaxRuns" class="input" placeholder="10" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgPromptSnapshotHeartbeatMaxRuns">Prompt Snapshot Heartbeat Max Runs</label>
+            <input id="cfgPromptSnapshotHeartbeatMaxRuns" class="input" placeholder="5" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgPromptSnapshotRetentionDays">Prompt Snapshot Retention Days</label>
+            <input id="cfgPromptSnapshotRetentionDays" class="input" placeholder="7" />
+          </div>
+
+          <div class="settings-subsection-header" style="margin-top: 16px;">
+            <div>
+              <div class="settings-subsection-title">Compaction</div>
+              <div class="form-help">上下文自动压缩、预警/阻断阈值和摘要专用模型。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCompactionEnabled">
+              <input id="cfgCompactionEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span>Enable Compaction</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCompactionThreshold">Compaction Threshold</label>
+            <input id="cfgCompactionThreshold" class="input" placeholder="20000" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCompactionKeepRecent">Compaction Keep Recent</label>
+            <input id="cfgCompactionKeepRecent" class="input" placeholder="10" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCompactionTriggerFraction">Compaction Trigger Fraction</label>
+            <input id="cfgCompactionTriggerFraction" class="input" placeholder="0.75" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCompactionArchivalThreshold">Compaction Archival Threshold</label>
+            <input id="cfgCompactionArchivalThreshold" class="input" placeholder="2000" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCompactionWarningThreshold">Compaction Warning Threshold</label>
+            <input id="cfgCompactionWarningThreshold" class="input" placeholder="可留空使用默认推导值" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCompactionBlockingThreshold">Compaction Blocking Threshold</label>
+            <input id="cfgCompactionBlockingThreshold" class="input" placeholder="可留空使用默认推导值" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCompactionMaxConsecutiveFailures">Compaction Max Consecutive Failures</label>
+            <input id="cfgCompactionMaxConsecutiveFailures" class="input" placeholder="3" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCompactionMaxPtlRetries">Compaction Max PTL Retries</label>
+            <input id="cfgCompactionMaxPtlRetries" class="input" placeholder="2" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCompactionModel">Compaction Model</label>
+            <input id="cfgCompactionModel" class="input" placeholder="gpt-4o-mini" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCompactionBaseUrl">Compaction Base URL</label>
+            <input id="cfgCompactionBaseUrl" class="input" placeholder="https://api.openai.com/v1" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCompactionApiKey">Compaction API Key</label>
+            <input id="cfgCompactionApiKey" class="input" type="password" placeholder="sk-..." />
+          </div>
+        </section>
+
+        <section class="settings-panel" data-settings-panel="memory" hidden>
+          <div class="form-group settings-priority-toggle">
+            <label class="form-label" for="cfgMemoryEnabled">
+              <input id="cfgMemoryEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span class="settings-priority-toggle-title" data-i18n="settings.memoryEnabledLabel">启用记忆系统</span>
+            </label>
+            <div class="form-help" data-i18n="settings.memoryEnabledHelp">记忆系统总开关。关闭后不会初始化记忆运行时、向量检索和相关召回。</div>
+          </div>
+
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.embeddingSectionTitle">Embedding 与检索</div>
+              <div class="form-help" data-i18n="settings.embeddingSectionHelp">用于配置向量检索、Embedding provider，以及基础的上下文注入行为。</div>
+            </div>
+          </div>
+          <div class="form-group settings-priority-toggle">
+            <label class="form-label" for="cfgEmbeddingEnabled">
+              <input id="cfgEmbeddingEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span class="settings-priority-toggle-title" data-i18n="settings.embeddingEnabledLabel">Enable Embedding Retrieval</span>
+            </label>
+            <div class="form-help" data-i18n="settings.embeddingEnabledHelp">向量检索总开关。关闭后不会初始化 Embedding，也不会进行相关召回。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.embeddingProviderLabel">Embedding Provider</label>
+            <select id="cfgEmbeddingProvider" class="input">
+              <option value="openai">openai</option>
+              <option value="local">local</option>
+            </select>
+            <div class="form-help" data-i18n="settings.embeddingProviderHelp">选择向量 provider。`openai` 走兼容接口，`local` 使用本机模型。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.embeddingApiKeyLabel">Embedding API Key</label>
+            <input id="cfgEmbeddingApiKey" class="input" type="password" data-i18n-placeholder="settings.embeddingApiKeyPlaceholder" placeholder="留空则复用主模型 API Key" />
+            <div class="form-help" data-i18n="settings.embeddingApiKeyHelp">向量模型专用 API Key。留空时默认复用主模型的 API Key。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.embeddingBaseUrlLabel">Embedding Base URL</label>
+            <input id="cfgEmbeddingBaseUrl" class="input" data-i18n-placeholder="settings.embeddingBaseUrlPlaceholder" placeholder="留空则复用主模型 Base URL" />
+            <div class="form-help" data-i18n="settings.embeddingBaseUrlHelp">向量模型接口地址。留空时默认复用主模型 Base URL。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.embeddingModelLabel">Embedding Model</label>
+            <input id="cfgEmbeddingModel" class="input" placeholder="text-embedding-3-small" />
+            <div class="form-help" data-i18n="settings.embeddingModelHelp">向量模型名称，例如 `text-embedding-3-small` 或兼容模型名。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.localEmbeddingModelLabel">Local Embedding Model</label>
+            <input id="cfgLocalEmbeddingModel" class="input" data-i18n-placeholder="settings.localEmbeddingModelPlaceholder" placeholder="BAAI/bge-m3" />
+            <div class="form-help" data-i18n="settings.localEmbeddingModelHelp">仅在 `Embedding Provider=local` 时生效，本机会自动下载并缓存该模型。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.embeddingBatchSizeLabel">Embedding Batch Size</label>
+            <input id="cfgEmbeddingBatchSize" class="input" inputmode="numeric" placeholder="2" />
+            <div class="form-help" data-i18n="settings.embeddingBatchSizeHelp">向量批处理大小。较小的值更稳，能减少 `413 Payload Too Large` 风险。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.contextInjectionSectionTitle">上下文注入</div>
+              <div class="form-help" data-i18n="settings.contextInjectionSectionHelp">控制每轮对话开始时是否自动注入近期记忆、已完成任务摘要与相关分类。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgContextInjectionEnabled">
+              <input id="cfgContextInjectionEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.contextInjectionEnabledLabel">启用 Context Injection</span>
+            </label>
+            <div class="form-help" data-i18n="settings.contextInjectionEnabledHelp">关闭后，对话开始时不会自动注入最近记忆摘要。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.contextInjectionLimitLabel">Context Injection Limit</label>
+            <input id="cfgContextInjectionLimit" class="input" inputmode="numeric" placeholder="5" />
+            <div class="form-help" data-i18n="settings.contextInjectionLimitHelp">每次最多注入多少条最近记忆。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgContextInjectionIncludeSession">
+              <input id="cfgContextInjectionIncludeSession" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.contextInjectionIncludeSessionLabel">允许注入 Session 短期记忆</span>
+            </label>
+            <div class="form-help" data-i18n="settings.contextInjectionIncludeSessionHelp">建议默认关闭，避免把刚执行过的步骤再次塞回上下文。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.contextInjectionTaskLimitLabel">Task Summary Limit</label>
+            <input id="cfgContextInjectionTaskLimit" class="input" inputmode="numeric" placeholder="3" />
+            <div class="form-help" data-i18n="settings.contextInjectionTaskLimitHelp">额外附带多少条最近已完成任务摘要，用于减少重复执行。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.contextInjectionAllowedCategoriesLabel">Allowed Categories</label>
+            <input id="cfgContextInjectionAllowedCategories" class="input" data-i18n-placeholder="settings.contextInjectionAllowedCategoriesPlaceholder" placeholder="preference,fact,decision,entity" />
+            <div class="form-help" data-i18n="settings.contextInjectionAllowedCategoriesHelp">逗号分隔，例如 `preference,fact,decision,entity,experience`。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.mindProfileRuntimeSectionTitle">Mind Profile Runtime</div>
+              <div class="form-help" data-i18n="settings.mindProfileRuntimeSectionHelp">控制最小心智画像 prelude 的启用与注入预算。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgMindProfileRuntimeEnabled">
+              <input id="cfgMindProfileRuntimeEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.mindProfileRuntimeEnabledLabel">启用 Mind Profile Runtime</span>
+            </label>
+            <div class="form-help" data-i18n="settings.mindProfileRuntimeEnabledHelp">在合适时机向主会话注入一小段稳定用户画像/长期记忆摘要。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.mindProfileRuntimeMaxLinesLabel">Max Lines</label>
+            <input id="cfgMindProfileRuntimeMaxLines" class="input" inputmode="numeric" placeholder="4" />
+            <div class="form-help" data-i18n="settings.mindProfileRuntimeMaxLinesHelp">最多注入的摘要行数。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.mindProfileRuntimeMaxLineLengthLabel">Max Line Length</label>
+            <input id="cfgMindProfileRuntimeMaxLineLength" class="input" inputmode="numeric" placeholder="120" />
+            <div class="form-help" data-i18n="settings.mindProfileRuntimeMaxLineLengthHelp">单行最大字符数。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.mindProfileRuntimeMaxCharsLabel">Max Chars</label>
+            <input id="cfgMindProfileRuntimeMaxChars" class="input" inputmode="numeric" placeholder="360" />
+            <div class="form-help" data-i18n="settings.mindProfileRuntimeMaxCharsHelp">整段 prelude 的总字符预算。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.mindProfileRuntimeMinSignalCountLabel">Min Signal Count</label>
+            <input id="cfgMindProfileRuntimeMinSignalCount" class="input" inputmode="numeric" placeholder="2" />
+            <div class="form-help" data-i18n="settings.mindProfileRuntimeMinSignalCountHelp">需要至少多少个稳定信号才触发注入。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.taskDedupSectionTitle">Task 去重守卫</div>
+              <div class="form-help" data-i18n="settings.taskDedupSectionHelp">控制近期重复工具动作的拦截窗口、模式和按工具覆盖策略。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgTaskDedupGuardEnabled">
+              <input id="cfgTaskDedupGuardEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.taskDedupGuardEnabledLabel">启用 Task 去重守卫</span>
+            </label>
+            <div class="form-help" data-i18n="settings.taskDedupGuardEnabledHelp">阻止最近已经成功执行过的相同工具动作再次执行。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.taskDedupWindowMinutesLabel">去重窗口（分钟）</label>
+            <input id="cfgTaskDedupWindowMinutes" class="input" inputmode="numeric" placeholder="20" />
+            <div class="form-help" data-i18n="settings.taskDedupWindowMinutesHelp">在这个时间窗口内，重复动作会按当前模式被拦截或警告。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.taskDedupModeLabel">去重模式</label>
+            <select id="cfgTaskDedupMode" class="input">
+              <option value="">default</option>
+              <option value="off">off</option>
+              <option value="graded">graded</option>
+              <option value="strict">strict</option>
+            </select>
+            <div class="form-help" data-i18n="settings.taskDedupModeHelp">`graded` 使用内置分级策略，`strict` 会把 warn-only 工具也提升为 hard-block。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.taskDedupPolicyLabel">去重策略覆盖</label>
+            <input id="cfgTaskDedupPolicy" class="input" data-i18n-placeholder="settings.taskDedupPolicyPlaceholder" placeholder="run_command:off,file_write:hard-block" />
+            <div class="form-help" data-i18n="settings.taskDedupPolicyHelp">按 `toolName:mode` 逗号分隔覆盖，例如 `run_command:off,file_delete:hard-block`。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.autoRecallSectionTitle">Auto Recall</div>
+              <div class="form-help" data-i18n="settings.autoRecallSectionHelp">控制对话开始时的自动语义召回，以及工具结果转录的基础字符预算。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgAutoRecallEnabled">
+              <input id="cfgAutoRecallEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.autoRecallEnabledLabel">启用 Auto Recall</span>
+            </label>
+            <div class="form-help" data-i18n="settings.autoRecallEnabledHelp">开启后，会在每轮开始前按当前输入自动做一次语义召回。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.autoRecallLimitLabel">Auto Recall Limit</label>
+            <input id="cfgAutoRecallLimit" class="input" inputmode="numeric" placeholder="3" />
+            <div class="form-help" data-i18n="settings.autoRecallLimitHelp">单轮最多追加多少条自动召回结果。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.autoRecallMinScoreLabel">Auto Recall Min Score</label>
+            <input id="cfgAutoRecallMinScore" class="input" placeholder="0.3" />
+            <div class="form-help" data-i18n="settings.autoRecallMinScoreHelp">自动召回命中的最低分数阈值，越高越严格。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.toolResultTranscriptCharLimitLabel">Tool Transcript Char Limit</label>
+            <input id="cfgToolResultTranscriptCharLimit" class="input" inputmode="numeric" placeholder="12000" />
+            <div class="form-help" data-i18n="settings.toolResultTranscriptCharLimitHelp">限制写入记忆的工具结果转录字符数，避免超长输出污染记忆。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.memorySummarySectionTitle">Summary / Evolution</div>
+              <div class="form-help" data-i18n="settings.memorySummarySectionHelp">配置记忆摘要层、会话演化抽取，以及各自专用模型线路。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgMemorySummaryEnabled">
+              <input id="cfgMemorySummaryEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.memorySummaryEnabledLabel">启用 Memory Summary</span>
+            </label>
+            <div class="form-help" data-i18n="settings.memorySummaryEnabledHelp">启用 L0 摘要层，为长期记忆提供更稳定的压缩摘要。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.memorySummaryModelLabel">Memory Summary Model</label>
+            <input id="cfgMemorySummaryModel" class="input" placeholder="gpt-4o-mini" />
+            <div class="form-help" data-i18n="settings.memorySummaryModelHelp">留空则回退到主模型名称。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.memorySummaryBaseUrlLabel">Memory Summary Base URL</label>
+            <input id="cfgMemorySummaryBaseUrl" class="input" data-i18n-placeholder="settings.memorySummaryBaseUrlPlaceholder" placeholder="留空则复用主模型 Base URL" />
+            <div class="form-help" data-i18n="settings.memorySummaryBaseUrlHelp">留空时回退到主模型 Base URL。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.memorySummaryApiKeyLabel">Memory Summary API Key</label>
+            <input id="cfgMemorySummaryApiKey" class="input" type="password" data-i18n-placeholder="settings.memorySummaryApiKeyPlaceholder" placeholder="留空则复用主模型 API Key" />
+            <div class="form-help" data-i18n="settings.memorySummaryApiKeyHelp">可单独覆盖摘要层 API Key；若同时填写阿里云快速通道，这里会以后者保存值为准。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgMemoryEvolutionEnabled">
+              <input id="cfgMemoryEvolutionEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.memoryEvolutionEnabledLabel">启用 Memory Evolution</span>
+            </label>
+            <div class="form-help" data-i18n="settings.memoryEvolutionEnabledHelp">启用会话记忆自动演化抽取，把对话逐步沉淀成长期记忆。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.memoryEvolutionMinMessagesLabel">Evolution Min Messages</label>
+            <input id="cfgMemoryEvolutionMinMessages" class="input" inputmode="numeric" placeholder="4" />
+            <div class="form-help" data-i18n="settings.memoryEvolutionMinMessagesHelp">至少累计多少条消息后才触发一次记忆演化。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.memoryEvolutionModelLabel">Memory Evolution Model</label>
+            <input id="cfgMemoryEvolutionModel" class="input" placeholder="gpt-4o-mini" />
+            <div class="form-help" data-i18n="settings.memoryEvolutionModelHelp">留空则回退到主模型名称。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.memoryEvolutionBaseUrlLabel">Memory Evolution Base URL</label>
+            <input id="cfgMemoryEvolutionBaseUrl" class="input" data-i18n-placeholder="settings.memoryEvolutionBaseUrlPlaceholder" placeholder="留空则复用主模型 Base URL" />
+            <div class="form-help" data-i18n="settings.memoryEvolutionBaseUrlHelp">留空时回退到主模型 Base URL。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.memoryEvolutionApiKeyLabel">Memory Evolution API Key</label>
+            <input id="cfgMemoryEvolutionApiKey" class="input" type="password" data-i18n-placeholder="settings.memoryEvolutionApiKeyPlaceholder" placeholder="留空则复用主模型 API Key" />
+            <div class="form-help" data-i18n="settings.memoryEvolutionApiKeyHelp">可单独覆盖演化抽取 API Key；若同时填写阿里云快速通道，这里会以后者保存值为准。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.memoryBudgetSectionTitle">Budget / Durable</div>
+              <div class="form-help" data-i18n="settings.memoryBudgetSectionHelp">配置会话摘要预算、durable extraction 节流窗口，以及失败退避策略。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.memorySessionDigestMaxRunsLabel">Session Digest Max Runs</label>
+            <input id="cfgMemorySessionDigestMaxRuns" class="input" inputmode="numeric" placeholder="1" />
+            <div class="form-help" data-i18n="settings.memorySessionDigestMaxRunsHelp">限制指定时间窗内最多运行多少次会话 digest。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.memorySessionDigestWindowMsLabel">Session Digest Window Ms</label>
+            <input id="cfgMemorySessionDigestWindowMs" class="input" inputmode="numeric" placeholder="3600000" />
+            <div class="form-help" data-i18n="settings.memorySessionDigestWindowMsHelp">仅在设置了 Max Runs 后生效，用于定义 session digest 限流窗口。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.memoryDurableExtractionMaxRunsLabel">Durable Extraction Max Runs</label>
+            <input id="cfgMemoryDurableExtractionMaxRuns" class="input" inputmode="numeric" placeholder="1" />
+            <div class="form-help" data-i18n="settings.memoryDurableExtractionMaxRunsHelp">限制 durable extraction 在时间窗内的最大运行次数。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.memoryDurableExtractionWindowMsLabel">Durable Extraction Window Ms</label>
+            <input id="cfgMemoryDurableExtractionWindowMs" class="input" inputmode="numeric" placeholder="3600000" />
+            <div class="form-help" data-i18n="settings.memoryDurableExtractionWindowMsHelp">仅在设置了 Max Runs 后生效，用于定义 durable extraction 限流窗口。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.memoryDurableExtractionMinPendingMessagesLabel">Min Pending Messages</label>
+            <input id="cfgMemoryDurableExtractionMinPendingMessages" class="input" inputmode="numeric" placeholder="6" />
+            <div class="form-help" data-i18n="settings.memoryDurableExtractionMinPendingMessagesHelp">至少累计多少条待处理消息才允许 durable extraction 触发。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.memoryDurableExtractionMinMessageDeltaLabel">Min Message Delta</label>
+            <input id="cfgMemoryDurableExtractionMinMessageDelta" class="input" inputmode="numeric" placeholder="4" />
+            <div class="form-help" data-i18n="settings.memoryDurableExtractionMinMessageDeltaHelp">与上次抽取相比，至少新增多少条消息才再次触发。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.memoryDurableExtractionSuccessCooldownMsLabel">Success Cooldown Ms</label>
+            <input id="cfgMemoryDurableExtractionSuccessCooldownMs" class="input" inputmode="numeric" placeholder="300000" />
+            <div class="form-help" data-i18n="settings.memoryDurableExtractionSuccessCooldownMsHelp">成功抽取后冷却多久才允许下一次运行。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.memoryDurableExtractionFailureBackoffMsLabel">Failure Backoff Ms</label>
+            <input id="cfgMemoryDurableExtractionFailureBackoffMs" class="input" inputmode="numeric" placeholder="5000" />
+            <div class="form-help" data-i18n="settings.memoryDurableExtractionFailureBackoffMsHelp">失败后的初始退避时间。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.memoryDurableExtractionFailureBackoffMaxMsLabel">Failure Backoff Max Ms</label>
+            <input id="cfgMemoryDurableExtractionFailureBackoffMaxMs" class="input" inputmode="numeric" placeholder="600000" />
+            <div class="form-help" data-i18n="settings.memoryDurableExtractionFailureBackoffMaxMsHelp">失败退避的最长上限。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.taskMemorySectionTitle">Task / Experience</div>
+              <div class="form-help" data-i18n="settings.taskMemorySectionHelp">控制任务记忆、任务摘要、共享记忆审批，以及经验自动沉淀链路。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgTeamSharedMemoryEnabled">
+              <input id="cfgTeamSharedMemoryEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.teamSharedMemoryEnabledLabel">启用 Team Shared Memory</span>
+            </label>
+            <div class="form-help" data-i18n="settings.teamSharedMemoryEnabledHelp">开启后，resident 与相关运行时可使用团队共享记忆层。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.sharedReviewClaimTimeoutMsLabel">Shared Review Claim Timeout Ms</label>
+            <input id="cfgSharedReviewClaimTimeoutMs" class="input" inputmode="numeric" placeholder="3600000" />
+            <div class="form-help" data-i18n="settings.sharedReviewClaimTimeoutMsHelp">共享记忆审批被领取后的超时时间，超过后可重新领取。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgTaskMemoryEnabled">
+              <input id="cfgTaskMemoryEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.taskMemoryEnabledLabel">启用 Task Memory</span>
+            </label>
+            <div class="form-help" data-i18n="settings.taskMemoryEnabledHelp">让长任务与子任务运行结果沉淀到任务级记忆层。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgTaskSummaryEnabled">
+              <input id="cfgTaskSummaryEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.taskSummaryEnabledLabel">启用 Task Summary</span>
+            </label>
+            <div class="form-help" data-i18n="settings.taskSummaryEnabledHelp">开启后，满足阈值的任务会自动生成摘要并进入任务记忆层。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.taskSummaryModelLabel">Task Summary Model</label>
+            <input id="cfgTaskSummaryModel" class="input" placeholder="moonshot-v1-8k" />
+            <div class="form-help" data-i18n="settings.taskSummaryModelHelp">留空则回退到主模型名称。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.taskSummaryBaseUrlLabel">Task Summary Base URL</label>
+            <input id="cfgTaskSummaryBaseUrl" class="input" data-i18n-placeholder="settings.taskSummaryBaseUrlPlaceholder" placeholder="留空则复用主模型 Base URL" />
+            <div class="form-help" data-i18n="settings.taskSummaryBaseUrlHelp">留空时回退到主模型 Base URL。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.taskSummaryApiKeyLabel">Task Summary API Key</label>
+            <input id="cfgTaskSummaryApiKey" class="input" type="password" data-i18n-placeholder="settings.taskSummaryApiKeyPlaceholder" placeholder="留空则复用主模型 API Key" />
+            <div class="form-help" data-i18n="settings.taskSummaryApiKeyHelp">可单独覆盖任务摘要 API Key；若同时填写阿里云快速通道，这里会以后者保存值为准。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.taskSummaryMinDurationMsLabel">Task Summary Min Duration Ms</label>
+            <input id="cfgTaskSummaryMinDurationMs" class="input" inputmode="numeric" placeholder="15000" />
+            <div class="form-help" data-i18n="settings.taskSummaryMinDurationMsHelp">任务至少运行多久后，才允许进入自动摘要评估。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.taskSummaryMinToolCallsLabel">Task Summary Min Tool Calls</label>
+            <input id="cfgTaskSummaryMinToolCalls" class="input" inputmode="numeric" placeholder="2" />
+            <div class="form-help" data-i18n="settings.taskSummaryMinToolCallsHelp">任务至少触发多少次工具调用后，才允许自动摘要。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.taskSummaryMinTokenTotalLabel">Task Summary Min Token Total</label>
+            <input id="cfgTaskSummaryMinTokenTotal" class="input" inputmode="numeric" placeholder="2000" />
+            <div class="form-help" data-i18n="settings.taskSummaryMinTokenTotalHelp">任务累计 token 至少达到多少后，才允许自动摘要。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgExperienceAutoPromotionEnabled">
+              <input id="cfgExperienceAutoPromotionEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.experienceAutoPromotionEnabledLabel">启用 Experience Auto Promotion</span>
+            </label>
+            <div class="form-help" data-i18n="settings.experienceAutoPromotionEnabledHelp">总开关。开启后，经验候选可自动进入方法论或技能沉淀流程。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgExperienceAutoMethodEnabled">
+              <input id="cfgExperienceAutoMethodEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.experienceAutoMethodEnabledLabel">启用自动沉淀 Method</span>
+            </label>
+            <div class="form-help" data-i18n="settings.experienceAutoMethodEnabledHelp">允许经验候选自动产出方法论草稿；若要求确认，则仅保留候选不自动生成。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgExperienceAutoSkillEnabled">
+              <input id="cfgExperienceAutoSkillEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.experienceAutoSkillEnabledLabel">启用自动沉淀 Skill</span>
+            </label>
+            <div class="form-help" data-i18n="settings.experienceAutoSkillEnabledHelp">允许经验候选自动产出技能草稿；若要求确认，则仅保留候选不自动生成。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgMethodGenerationConfirmRequired">
+              <input id="cfgMethodGenerationConfirmRequired" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.methodGenerationConfirmRequiredLabel">Method 生成需确认</span>
+            </label>
+            <div class="form-help" data-i18n="settings.methodGenerationConfirmRequiredHelp">开启后，不再自动生成方法论草稿，而是转入确认流。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgSkillGenerationConfirmRequired">
+              <input id="cfgSkillGenerationConfirmRequired" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.skillGenerationConfirmRequiredLabel">Skill 生成需确认</span>
+            </label>
+            <div class="form-help" data-i18n="settings.skillGenerationConfirmRequiredHelp">开启后，不再自动生成技能草稿，而是转入确认流。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgMethodPublishConfirmRequired">
+              <input id="cfgMethodPublishConfirmRequired" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.methodPublishConfirmRequiredLabel">Method 发布需确认</span>
+            </label>
+            <div class="form-help" data-i18n="settings.methodPublishConfirmRequiredHelp">开启后，方法论发布动作必须经过确认。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgSkillPublishConfirmRequired">
+              <input id="cfgSkillPublishConfirmRequired" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.skillPublishConfirmRequiredLabel">Skill 发布需确认</span>
+            </label>
+            <div class="form-help" data-i18n="settings.skillPublishConfirmRequiredHelp">开启后，技能发布动作必须经过确认。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.advancedRetrievalSectionTitle">Advanced Retrieval</div>
+              <div class="form-help" data-i18n="settings.advancedRetrievalSectionHelp">配置深度检索、向量前缀、reranker 阈值与索引监看日志。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgMemoryDeepRetrievalEnabled">
+              <input id="cfgMemoryDeepRetrievalEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.memoryDeepRetrievalEnabledLabel">启用 Deep Retrieval</span>
+            </label>
+            <div class="form-help" data-i18n="settings.memoryDeepRetrievalEnabledHelp">开启后，可沿源路径做更深层的记忆聚合检索。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.embeddingQueryPrefixLabel">Embedding Query Prefix</label>
+            <input id="cfgEmbeddingQueryPrefix" class="input" data-i18n-placeholder="settings.embeddingQueryPrefixPlaceholder" placeholder='query: ' />
+            <div class="form-help" data-i18n="settings.embeddingQueryPrefixHelp">适用于 Jina / BGE 等需要 query 前缀的模型，例如 `query: ` 或 `retrieval.query: `。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.embeddingPassagePrefixLabel">Embedding Passage Prefix</label>
+            <input id="cfgEmbeddingPassagePrefix" class="input" data-i18n-placeholder="settings.embeddingPassagePrefixPlaceholder" placeholder='passage: ' />
+            <div class="form-help" data-i18n="settings.embeddingPassagePrefixHelp">适用于 Jina / BGE 等需要 passage 前缀的模型，例如 `passage: ` 或 `retrieval.passage: `。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.rerankerMinScoreLabel">Reranker Min Score</label>
+            <input id="cfgRerankerMinScore" class="input" placeholder="0.15" />
+            <div class="form-help" data-i18n="settings.rerankerMinScoreHelp">召回结果进入最终候选前的最低分数阈值。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.rerankerLengthNormAnchorLabel">Reranker Length Norm Anchor</label>
+            <input id="cfgRerankerLengthNormAnchor" class="input" inputmode="numeric" placeholder="500" />
+            <div class="form-help" data-i18n="settings.rerankerLengthNormAnchorHelp">长度归一化锚点，用于平衡长短记忆块的排序偏差。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgMemoryIndexerVerboseWatch">
+              <input id="cfgMemoryIndexerVerboseWatch" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.memoryIndexerVerboseWatchLabel">启用 Indexer Verbose Watch</span>
+            </label>
+            <div class="form-help" data-i18n="settings.memoryIndexerVerboseWatchHelp">开启后，索引器会输出更详细的 watch / 增量索引日志。</div>
+          </div>
+        </section>
+
+        <section class="settings-panel" data-settings-panel="tools" hidden>
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.toolsRuntimeSectionTitle">工具运行时</div>
+              <div class="form-help" data-i18n="settings.toolsRuntimeSectionHelp">控制工具总开关、桥接能力、工具分组，以及模型单轮工具预算。</div>
+            </div>
+          </div>
+          <div class="form-group settings-priority-toggle">
+            <label class="form-label" for="cfgToolsEnabled">
+              <input id="cfgToolsEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span class="settings-priority-toggle-title" data-i18n="settings.toolsEnabledLabel">启用工具调用</span>
+            </label>
+            <div class="form-help" data-i18n="settings.toolsEnabledHelp">工具系统总开关。关闭后模型将无法调用文件、浏览器、命令等工具。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgAgentBridgeEnabled">
+              <input id="cfgAgentBridgeEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.agentBridgeEnabledLabel">启用 Agent Bridge</span>
+            </label>
+            <div class="form-help" data-i18n="settings.agentBridgeEnabledHelp">启用 CLI / IDE 桥接工具族，具体 target 仍需在 `agent-bridge.json` 中声明。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.toolGroupsLabel">Tool Groups</label>
+            <input id="cfgToolGroups" class="input" data-i18n-placeholder="settings.toolGroupsPlaceholder" placeholder="all / browser,system" />
+            <div class="form-help" data-i18n="settings.toolGroupsHelp">逗号分隔工具分组，`all` 表示全部；`core` 始终会加载。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.maxInputTokensLabel">Max Input Tokens</label>
+            <input id="cfgMaxInputTokens" class="input" inputmode="numeric" placeholder="0" />
+            <div class="form-help" data-i18n="settings.maxInputTokensHelp">单次模型调用最大输入 token。`0` 或留空表示不限制。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.maxOutputTokensLabel">Max Output Tokens</label>
+            <input id="cfgMaxOutputTokens" class="input" inputmode="numeric" placeholder="4096" />
+            <div class="form-help" data-i18n="settings.maxOutputTokensHelp">单次模型调用最大输出 token，建议在长工具调用场景中适当调大。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.agentToolControlLabel">Agent Tool Control</label>
+            <select id="cfgAgentToolControlMode" class="input">
+              <option value="disabled">disabled</option>
+              <option value="confirm">confirm</option>
+              <option value="auto">auto</option>
+            </select>
+            <div class="form-help" data-i18n="settings.agentToolControlHelp">控制 Agent 是否可修改已注册工具的全局调用开关：disabled=禁止，confirm=文本确认，auto=直接执行。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.agentToolControlPasswordLabel">Agent 工具确认口令</label>
+            <input id="cfgAgentToolControlConfirmPassword" class="input" type="password" data-i18n-placeholder="settings.agentToolControlPasswordPlaceholder" placeholder="留空则使用 requestId 确认口令" />
+            <div class="form-help" data-i18n="settings.agentToolControlPasswordHelp">仅在 confirm 模式下生效。留空时要求用户回复 `批准工具设置变更 &lt;requestId&gt;`；设置后改为输入你配置的确认口令。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="form-group settings-priority-toggle">
+            <label class="form-label" for="cfgTtsEnabled">
+              <input id="cfgTtsEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span class="settings-priority-toggle-title" data-i18n="settings.ttsEnabledLabel">Enable TTS</span>
+            </label>
+            <div class="form-help" data-i18n="settings.ttsEnabledHelp">服务端自动语音开关。开启后回复可附带语音音频。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.ttsProviderLabel">TTS Provider</label>
+            <select id="cfgTtsProvider" class="input">
+              <option value="edge">edge</option>
+              <option value="openai">openai</option>
+              <option value="dashscope">dashscope</option>
+            </select>
+            <div class="form-help" data-i18n="settings.ttsProviderHelp">语音合成提供方。`edge` 免费可用，`openai` 和 `dashscope` 需要对应密钥。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.ttsVoiceLabel">TTS Voice</label>
+            <input id="cfgTtsVoice" class="input" data-i18n-placeholder="settings.ttsVoicePlaceholder" placeholder="留空则使用 provider 默认音色" />
+            <div class="form-help" data-i18n="settings.ttsVoiceHelp">音色名称。留空时按当前 Provider 自动选择默认音色。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.ttsOpenAiBaseUrlLabel">TTS OpenAI Base URL</label>
+            <input id="cfgTtsOpenAIBaseUrl" class="input" data-i18n-placeholder="settings.ttsOpenAiBaseUrlPlaceholder" placeholder="留空则复用主模型 Base URL" />
+            <div class="form-help" data-i18n="settings.ttsOpenAiBaseUrlHelp">仅在 TTS Provider 选择 `openai` 时使用。留空时回退到全局 `BELLDANDY_OPENAI_BASE_URL`，再回退旧的 `OPENAI_BASE_URL`。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.ttsOpenAiApiKeyLabel">TTS OpenAI API Key</label>
+            <input id="cfgTtsOpenAIApiKey" class="input" type="password" data-i18n-placeholder="settings.ttsOpenAiApiKeyPlaceholder" placeholder="留空则复用主模型 API Key" />
+            <div class="form-help" data-i18n="settings.ttsOpenAiApiKeyHelp">仅在 TTS Provider 选择 `openai` 时使用。留空时回退到全局 `BELLDANDY_OPENAI_API_KEY`，再回退旧的 `OPENAI_API_KEY`。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.relayMcpSectionTitle">Relay / MCP / 浏览器</div>
+              <div class="form-help" data-i18n="settings.relayMcpSectionHelp">控制浏览器自动化中继、MCP 能力，以及浏览器域名访问边界。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgBrowserRelayEnabled">
+              <input id="cfgBrowserRelayEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.browserRelayEnabledLabel">Enable Browser Relay</span>
+            </label>
+            <div class="form-help" data-i18n="settings.browserRelayEnabledHelp">启用浏览器中继自动启动，需要配合 Chrome 扩展完成自动化操作。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.relayPortLabel">Relay Port</label>
+            <input id="cfgRelayPort" class="input" placeholder="28892" />
+            <div class="form-help" data-i18n="settings.relayPortHelp">浏览器中继监听端口。只有在启用 Browser Relay 时才会用到。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgMcpEnabled">
+              <input id="cfgMcpEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.mcpEnabledLabel">Enable MCP</span>
+            </label>
+            <div class="form-help" data-i18n="settings.mcpEnabledHelp">启用 MCP 协议支持。通常需要同时打开工具系统。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.browserAllowedDomainsLabel">Browser Allowed Domains</label>
+            <input id="cfgBrowserAllowedDomains" class="input" data-i18n-placeholder="settings.browserAllowedDomainsPlaceholder" placeholder="github.com,developer.mozilla.org" />
+            <div class="form-help" data-i18n="settings.browserAllowedDomainsHelp">逗号分隔白名单。设置后只允许访问这些域名及其子域名。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.browserDeniedDomainsLabel">Browser Denied Domains</label>
+            <input id="cfgBrowserDeniedDomains" class="input" data-i18n-placeholder="settings.browserDeniedDomainsPlaceholder" placeholder="mail.google.com,drive.google.com" />
+            <div class="form-help" data-i18n="settings.browserDeniedDomainsHelp">逗号分隔黑名单，优先级高于白名单，适合明确封禁高风险站点。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="form-group">
+            <label class="form-label" for="cfgDangerousToolsEnabled">
+              <input id="cfgDangerousToolsEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span>Enable Dangerous Tools</span>
+            </label>
+            <div class="form-help">受控开放高风险工具能力。生产环境建议审慎开启。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgToolsPolicyFile">Tools Policy File</label>
+            <input id="cfgToolsPolicyFile" class="input" placeholder="~/.star_sanctuary/tools-policy.json" />
+            <div class="form-help">工具策略 JSON 路径。可用于平衡档/开放档等预定义策略。</div>
+          </div>
+
+          <div class="settings-subsection-header" style="margin-top: 16px;">
+            <div>
+              <div class="settings-subsection-title">Sub Agents</div>
+              <div class="form-help">子代理并发、排队、超时和嵌套深度预算。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgSubAgentMaxConcurrent">Sub Agent Max Concurrent</label>
+            <input id="cfgSubAgentMaxConcurrent" class="input" placeholder="3" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgSubAgentMaxQueueSize">Sub Agent Max Queue Size</label>
+            <input id="cfgSubAgentMaxQueueSize" class="input" placeholder="10" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgSubAgentTimeoutMs">Sub Agent Timeout (ms)</label>
+            <input id="cfgSubAgentTimeoutMs" class="input" placeholder="120000" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgSubAgentMaxDepth">Sub Agent Max Depth</label>
+            <input id="cfgSubAgentMaxDepth" class="input" placeholder="2" />
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title">Image / STT</div>
+              <div class="form-help">独立图片生成工具与语音识别转写配置。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgImageEnabled">
+              <input id="cfgImageEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span>Enable Image Tool</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgImageProvider">Image Provider</label>
+            <input id="cfgImageProvider" class="input" placeholder="openai" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgImageApiKey">Image API Key</label>
+            <input id="cfgImageApiKey" class="input" type="password" placeholder="sk-..." />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgImageBaseUrl">Image Base URL</label>
+            <input id="cfgImageBaseUrl" class="input" placeholder="https://api.openai.com/v1" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgImageModel">Image Model</label>
+            <input id="cfgImageModel" class="input" placeholder="gpt-image-2" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgImageOutputFormat">Image Output Format</label>
+            <input id="cfgImageOutputFormat" class="input" placeholder="png / jpeg / webp" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgImageTimeoutMs">Image Timeout (ms)</label>
+            <input id="cfgImageTimeoutMs" class="input" placeholder="60000" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgSttProvider">STT Provider</label>
+            <input id="cfgSttProvider" class="input" placeholder="openai / groq / dashscope" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgSttLanguage">STT Language</label>
+            <input id="cfgSttLanguage" class="input" placeholder="zh" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgSttGroqApiKey">STT Groq API Key</label>
+            <input id="cfgSttGroqApiKey" class="input" type="password" placeholder="gsk_..." />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgSttGroqBaseUrl">STT Groq Base URL</label>
+            <input id="cfgSttGroqBaseUrl" class="input" placeholder="https://api.groq.com/openai/v1" />
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.cameraHelperSectionTitle">Camera Helper</div>
+              <div class="form-help" data-i18n="settings.cameraHelperSectionHelp">配置本机 camera native helper 的启动命令、工作目录、JSON 参数与 ffmpeg / PowerShell 运行时。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.cameraNativeHelperCommandLabel">Helper Command</label>
+            <input id="cfgCameraNativeHelperCommand" class="input" placeholder="node" />
+            <div class="form-help" data-i18n="settings.cameraNativeHelperCommandHelp">用于拉起 native_desktop helper 的主命令，例如 `node` 或绝对路径。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.cameraNativeHelperArgsJsonLabel">Helper Args JSON</label>
+            <textarea id="cfgCameraNativeHelperArgsJson" class="input" rows="3" spellcheck="false" placeholder='["packages/belldandy-skills/dist/builtin/multimedia/camera-native-desktop-helper.js"]'></textarea>
+            <div class="form-help" data-i18n="settings.cameraNativeHelperArgsJsonHelp">JSON 数组。若 command 是 `node`，这里通常要包含 helper 入口脚本路径。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.cameraNativeHelperCwdLabel">Helper CWD</label>
+            <input id="cfgCameraNativeHelperCwd" class="input" placeholder="E:/project/star-sanctuary" />
+            <div class="form-help" data-i18n="settings.cameraNativeHelperCwdHelp">helper 的工作目录。相对入口脚本路径通常以这里为基准解析。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.cameraNativeHelperStartupTimeoutMsLabel">Startup Timeout Ms</label>
+            <input id="cfgCameraNativeHelperStartupTimeoutMs" class="input" inputmode="numeric" placeholder="10000" />
+            <div class="form-help" data-i18n="settings.cameraNativeHelperStartupTimeoutMsHelp">等待 helper 启动握手成功的超时时间。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.cameraNativeHelperRequestTimeoutMsLabel">Request Timeout Ms</label>
+            <input id="cfgCameraNativeHelperRequestTimeoutMs" class="input" inputmode="numeric" placeholder="15000" />
+            <div class="form-help" data-i18n="settings.cameraNativeHelperRequestTimeoutMsHelp">单次截图、探测或媒体请求的超时时间。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.cameraNativeHelperIdleShutdownMsLabel">Idle Shutdown Ms</label>
+            <input id="cfgCameraNativeHelperIdleShutdownMs" class="input" inputmode="numeric" placeholder="2000" />
+            <div class="form-help" data-i18n="settings.cameraNativeHelperIdleShutdownMsHelp">helper 空闲多久后自动退出，避免长期占用本机资源。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.cameraNativeHelperEnvJsonLabel">Helper Env JSON</label>
+            <textarea id="cfgCameraNativeHelperEnvJson" class="input" rows="4" spellcheck="false" placeholder='{"BELLDANDY_CAMERA_NATIVE_HELPER_FFMPEG_COMMAND":"C:/ffmpeg/bin/ffmpeg.exe"}'></textarea>
+            <div class="form-help" data-i18n="settings.cameraNativeHelperEnvJsonHelp">JSON 对象。用于给 helper 子进程额外注入环境变量。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.cameraNativeHelperPowershellCommandLabel">PowerShell Command</label>
+            <input id="cfgCameraNativeHelperPowershellCommand" class="input" placeholder="powershell.exe" />
+            <div class="form-help" data-i18n="settings.cameraNativeHelperPowershellCommandHelp">helper 内部调用 PowerShell 时使用的命令名或绝对路径。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.cameraNativeHelperPowershellArgsJsonLabel">PowerShell Args JSON</label>
+            <textarea id="cfgCameraNativeHelperPowershellArgsJson" class="input" rows="3" spellcheck="false" placeholder="[]"></textarea>
+            <div class="form-help" data-i18n="settings.cameraNativeHelperPowershellArgsJsonHelp">JSON 数组。可用于覆写 PowerShell 的附加启动参数。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.cameraNativeHelperFfmpegCommandLabel">FFmpeg Command</label>
+            <input id="cfgCameraNativeHelperFfmpegCommand" class="input" placeholder="C:/Program Files/ffmpeg/bin/ffmpeg.exe" />
+            <div class="form-help" data-i18n="settings.cameraNativeHelperFfmpegCommandHelp">helper 录屏/转码时使用的 ffmpeg 命令名或绝对路径。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.cameraNativeHelperFfmpegArgsJsonLabel">FFmpeg Args JSON</label>
+            <textarea id="cfgCameraNativeHelperFfmpegArgsJson" class="input" rows="3" spellcheck="false" placeholder="[]"></textarea>
+            <div class="form-help" data-i18n="settings.cameraNativeHelperFfmpegArgsJsonHelp">JSON 数组。用于附加 ffmpeg 全局参数。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.voiceShortcutLabel">Voice Shortcut</label>
+            <input id="cfgVoiceShortcut" class="input" data-i18n-placeholder="settings.voiceShortcutPlaceholder" placeholder="聚焦后按下新的快捷键" readonly />
+            <div class="form-help" id="cfgVoiceShortcutStatus" data-i18n="voice.shortcutStatusInitial">本地快捷键，默认 Alt+R。聚焦输入框后按下组合键即可修改，不会写入服务端配置。</div>
+            <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
+              <button id="cfgVoiceShortcutDefault" type="button" class="button" data-i18n="settings.voiceShortcutDefault">恢复默认</button>
+              <button id="cfgVoiceShortcutClear" type="button" class="button" data-i18n="settings.voiceShortcutClear">禁用快捷键</button>
+            </div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title">Room Context</div>
+              <div class="form-help">群聊成员列表注入阈值与缓存时间，影响身份上下文和 token 消耗。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgRoomInjectThreshold">Room Inject Threshold</label>
+            <input id="cfgRoomInjectThreshold" class="input" placeholder="10" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgRoomMembersCacheTtl">Room Members Cache TTL (ms)</label>
+            <input id="cfgRoomMembersCacheTtl" class="input" placeholder="300000" />
+          </div>
+        </section>
+
+        <section class="settings-panel" data-settings-panel="channels" hidden>
+          <section id="channelsSettingsSection" class="settings-subsection">
+            <div class="settings-subsection-header">
+              <div>
+                <div class="settings-subsection-title" data-i18n="settings.channelsSectionTitle">渠道配置</div>
+                <div class="form-help" data-i18n="settings.channelsSectionHelp">用于维护社区 API、邮件、飞书、QQ 和 Discord 的环境变量配置。社区/官网相关的结构化配置仍需配合 community.json。</div>
+              </div>
+              <button id="openCommunityConfig" type="button" class="button button-muted" data-i18n="settings.openCommunityConfig">打开 community.json</button>
+            </div>
+
+            <div class="form-group settings-priority-toggle">
+              <label class="form-label" for="cfgCommunityApiEnabled">
+                <input id="cfgCommunityApiEnabled" type="checkbox" style="margin-right: 8px;" />
+                <span class="settings-priority-toggle-title" data-i18n="settings.communityApiEnabledLabel">Enable Community API</span>
+              </label>
+              <div class="form-help" data-i18n="settings.communityApiEnabledHelp">启用 /api/message 社区 API。开启前必须确保 Gateway 认证模式不是 none。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" data-i18n="settings.communityApiTokenLabel">Community API Token</label>
+              <input id="cfgCommunityApiToken" class="input" type="password" data-i18n-placeholder="settings.communityApiTokenPlaceholder" placeholder="用于 Bearer 鉴权" />
+              <div class="form-help" data-i18n="settings.communityApiTokenHelp">社区 API 的 Bearer Token。保存时会继续使用脱敏逻辑。</div>
+            </div>
+
+            <hr class="theme-divider">
+
+            <div class="form-group">
+              <label class="form-label" for="cfgDiscordEnabled">
+                <input id="cfgDiscordEnabled" type="checkbox" style="margin-right: 8px;" />
+                <span data-i18n="settings.discordEnabledLabel">Enable Discord</span>
+              </label>
+              <div class="form-help" data-i18n="settings.discordEnabledHelp">启用 Discord 渠道。保存后需重启 Gateway 生效。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" data-i18n="settings.discordBotTokenLabel">Discord Bot Token</label>
+              <input id="cfgDiscordBotToken" class="input" type="password" placeholder="your-discord-bot-token" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgDiscordDefaultChannelId">Discord Default Channel ID</label>
+              <input id="cfgDiscordDefaultChannelId" class="input" placeholder="123456789012345678" />
+              <div class="form-help">仅在需要把主动消息默认投递到固定 Discord 频道时设置。</div>
+            </div>
+
+            <hr class="theme-divider">
+
+            <div class="form-group">
+              <label class="form-label" data-i18n="settings.feishuAppIdLabel">Feishu App ID</label>
+              <input id="cfgFeishuAppId" class="input" placeholder="cli_xxxxxxxxxxxxxxxx" />
+              <div class="form-help" data-i18n="settings.feishuAppIdHelp">飞书应用的 App ID。用于获取 tenant token 并接收事件回调。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" data-i18n="settings.feishuAppSecretLabel">Feishu App Secret</label>
+              <input id="cfgFeishuAppSecret" class="input" type="password" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+              <div class="form-help" data-i18n="settings.feishuAppSecretHelp">飞书应用密钥。与 App ID 配套使用，保存时会继续走脱敏逻辑。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" data-i18n="settings.feishuAgentIdLabel">Feishu Agent ID</label>
+              <input id="cfgFeishuAgentId" class="input" placeholder="default" />
+              <div class="form-help" data-i18n="settings.feishuAgentIdHelp">飞书渠道默认绑定的内部 Agent ID。留空时通常回退到 `default`。</div>
+            </div>
+
+            <hr class="theme-divider">
+
+            <div class="form-group">
+              <label class="form-label" data-i18n="settings.qqAppIdLabel">QQ App ID</label>
+              <input id="cfgQqAppId" class="input" placeholder="xxxxxxxx" />
+              <div class="form-help" data-i18n="settings.qqAppIdHelp">QQ 机器人应用的 App ID。用于鉴权和事件接入。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" data-i18n="settings.qqAppSecretLabel">QQ App Secret</label>
+              <input id="cfgQqAppSecret" class="input" type="password" placeholder="xxxxxxxx" />
+              <div class="form-help" data-i18n="settings.qqAppSecretHelp">QQ 机器人应用密钥。与 App ID 配套使用，保存时会继续走脱敏逻辑。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" data-i18n="settings.qqAgentIdLabel">QQ Agent ID</label>
+              <input id="cfgQqAgentId" class="input" placeholder="default" />
+              <div class="form-help" data-i18n="settings.qqAgentIdHelp">QQ 渠道默认绑定的内部 Agent ID。留空时通常回退到 `default`。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgQqSandbox">
+                <input id="cfgQqSandbox" type="checkbox" style="margin-right: 8px;" />
+                <span data-i18n="settings.qqSandboxLabel">QQ Sandbox Mode</span>
+              </label>
+              <div class="form-help" data-i18n="settings.qqSandboxHelp">控制 QQ 机器人是否运行在沙箱环境。</div>
+            </div>
+
+            <hr class="theme-divider">
+
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailSmtpEnabled">
+                <input id="cfgEmailSmtpEnabled" type="checkbox" style="margin-right: 8px;" />
+                <span data-i18n="settings.emailSmtpEnabledLabel">Enable Email SMTP</span>
+              </label>
+              <div class="form-help" data-i18n="settings.emailSmtpEnabledHelp">启用邮件发送通道。保存后需重启 Gateway 生效。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailImapEnabled">
+                <input id="cfgEmailImapEnabled" type="checkbox" style="margin-right: 8px;" />
+                <span data-i18n="settings.emailImapEnabledLabel">Enable Email IMAP</span>
+              </label>
+              <div class="form-help" data-i18n="settings.emailImapEnabledHelp">启用 IMAP 轮询收信与邮件线程处理。保存后需重启 Gateway 生效。</div>
+            </div>
+
+            <div class="settings-subsection-header" style="margin-top: 16px;">
+              <div>
+                <div class="settings-subsection-title">Email Outbound</div>
+                <div class="form-help">邮件外发细项。用于 SMTP 发信账号、发件人身份和是否要求二次确认。</div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailOutboundRequireConfirmation">
+                <input id="cfgEmailOutboundRequireConfirmation" type="checkbox" style="margin-right: 8px;" />
+                <span>Require Email Confirmation</span>
+              </label>
+              <div class="form-help">对应 `BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION`，建议在生产环境保持开启。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailDefaultProvider">Email Default Provider</label>
+              <input id="cfgEmailDefaultProvider" class="input" placeholder="smtp" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailSmtpAccountId">SMTP Account ID</label>
+              <input id="cfgEmailSmtpAccountId" class="input" placeholder="default" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailSmtpHost">SMTP Host</label>
+              <input id="cfgEmailSmtpHost" class="input" placeholder="smtp.example.com" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailSmtpPort">SMTP Port</label>
+              <input id="cfgEmailSmtpPort" class="input" placeholder="587" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailSmtpSecure">
+                <input id="cfgEmailSmtpSecure" type="checkbox" style="margin-right: 8px;" />
+                <span>SMTP Secure</span>
+              </label>
+              <div class="form-help">`true` 时走 SMTPS/TLS，常见为 `465`；`false` 时常见为 `587`。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailSmtpUser">SMTP User</label>
+              <input id="cfgEmailSmtpUser" class="input" placeholder="mailer@example.com" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailSmtpPass">SMTP Password</label>
+              <input id="cfgEmailSmtpPass" class="input" type="password" placeholder="app-password" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailSmtpFromAddress">SMTP From Address</label>
+              <input id="cfgEmailSmtpFromAddress" class="input" placeholder="mailer@example.com" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailSmtpFromName">SMTP From Name</label>
+              <input id="cfgEmailSmtpFromName" class="input" placeholder="Belldandy" />
+            </div>
+
+            <div class="settings-subsection-header" style="margin-top: 16px;">
+              <div>
+                <div class="settings-subsection-title">Email Inbound</div>
+                <div class="form-help">邮件收信细项。用于 IMAP 轮询、线程接管与默认投递 Agent。</div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailInboundAgentId">Inbound Agent ID</label>
+              <input id="cfgEmailInboundAgentId" class="input" placeholder="default" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailImapAccountId">IMAP Account ID</label>
+              <input id="cfgEmailImapAccountId" class="input" placeholder="default" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailImapHost">IMAP Host</label>
+              <input id="cfgEmailImapHost" class="input" placeholder="imap.example.com" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailImapPort">IMAP Port</label>
+              <input id="cfgEmailImapPort" class="input" placeholder="993" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailImapSecure">
+                <input id="cfgEmailImapSecure" type="checkbox" style="margin-right: 8px;" />
+                <span>IMAP Secure</span>
+              </label>
+              <div class="form-help">通常收信建议保持开启。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailImapUser">IMAP User</label>
+              <input id="cfgEmailImapUser" class="input" placeholder="mailer@example.com" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailImapPass">IMAP Password</label>
+              <input id="cfgEmailImapPass" class="input" type="password" placeholder="app-password" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailImapMailbox">IMAP Mailbox</label>
+              <input id="cfgEmailImapMailbox" class="input" placeholder="INBOX" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailImapPollIntervalMs">IMAP Poll Interval (ms)</label>
+              <input id="cfgEmailImapPollIntervalMs" class="input" placeholder="60000" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailImapConnectTimeoutMs">IMAP Connect Timeout (ms)</label>
+              <input id="cfgEmailImapConnectTimeoutMs" class="input" placeholder="10000" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailImapSocketTimeoutMs">IMAP Socket Timeout (ms)</label>
+              <input id="cfgEmailImapSocketTimeoutMs" class="input" placeholder="20000" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailImapBootstrapMode">IMAP Bootstrap Mode</label>
+              <input id="cfgEmailImapBootstrapMode" class="input" placeholder="latest / all" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgEmailImapRecentWindowLimit">IMAP Recent Window Limit</label>
+              <input id="cfgEmailImapRecentWindowLimit" class="input" placeholder="50" />
+            </div>
+
+            <div class="settings-subsection-header" style="margin-top: 16px;">
+              <div>
+                <div class="settings-subsection-title">Channel Router</div>
+                <div class="form-help">按规则做 mention gating / agent 路由。规则正文仍在独立 JSON 文件中维护。</div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgChannelRouterEnabled">
+                <input id="cfgChannelRouterEnabled" type="checkbox" style="margin-right: 8px;" />
+                <span>Enable Channel Router</span>
+              </label>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgChannelRouterConfigPath">Router Config Path</label>
+              <input id="cfgChannelRouterConfigPath" class="input" placeholder="~/.star_sanctuary/channels-routing.json" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="cfgChannelRouterDefaultAgentId">Router Default Agent ID</label>
+              <input id="cfgChannelRouterDefaultAgentId" class="input" placeholder="default" />
+            </div>
+
+            <hr class="theme-divider">
+
+            <div class="settings-subsection-header">
+              <div>
+                <div class="settings-subsection-title" data-i18n="settings.channelSecurityTitle">渠道安全默认值</div>
+                <div class="form-help" data-i18n="settings.channelSecurityHelp">使用结构化 JSON 维护 `discord / feishu / qq / community` 的安全默认值；也可通过 `channels.&lt;channel&gt;.accounts.&lt;accountId&gt;` 覆盖账号级 `dmPolicy / allowFrom / mentionRequired`。</div>
+              </div>
+              <button id="refreshChannelSecurity" type="button" class="button button-muted" data-i18n="settings.channelSecurityRefresh">刷新</button>
+            </div>
+            <div id="channelSecurityConfigMeta" class="form-help" style="margin-bottom: 8px;"></div>
+            <div class="form-group">
+              <label class="form-label" for="cfgChannelSecurityContent" data-i18n="settings.channelSecurityContentLabel">Channel Security JSON</label>
+              <textarea id="cfgChannelSecurityContent" class="input" rows="12" spellcheck="false" placeholder="{&#10;  &quot;version&quot;: 1,&#10;  &quot;channels&quot;: {}&#10;}"></textarea>
+            </div>
+
+            <div class="settings-subsection-header" style="margin-top: 16px;">
+              <div>
+                <div class="settings-subsection-title" data-i18n="settings.channelReplyChunkingTitle">渠道回复分段策略</div>
+                <div class="form-help" data-i18n="settings.channelReplyChunkingHelp">使用结构化 JSON 维护 discord / feishu / qq / community 的回复分段 runtime 策略；支持 channels.&lt;channel&gt;.accounts.&lt;accountId&gt; 覆盖 textLimit / chunkMode。默认值：discord 1800/newline、qq 1500/newline、feishu 3000/newline、community 3500/newline。</div>
+              </div>
+            </div>
+            <div id="channelReplyChunkingConfigMeta" class="form-help" style="margin-bottom: 8px;"></div>
+            <div class="form-group">
+              <label class="form-label" for="cfgChannelReplyChunkingContent" data-i18n="settings.channelReplyChunkingContentLabel">Channel Reply Chunking JSON</label>
+              <textarea id="cfgChannelReplyChunkingContent" class="input" rows="12" spellcheck="false" placeholder="{&#10;  &quot;version&quot;: 1,&#10;  &quot;channels&quot;: {&#10;    &quot;discord&quot;: { &quot;textLimit&quot;: 1800, &quot;chunkMode&quot;: &quot;newline&quot; },&#10;    &quot;qq&quot;: { &quot;textLimit&quot;: 1500, &quot;chunkMode&quot;: &quot;newline&quot; },&#10;    &quot;feishu&quot;: { &quot;textLimit&quot;: 3000, &quot;chunkMode&quot;: &quot;newline&quot; },&#10;    &quot;community&quot;: {&#10;      &quot;textLimit&quot;: 3500,&#10;      &quot;chunkMode&quot;: &quot;newline&quot;,&#10;      &quot;accounts&quot;: {&#10;        &quot;agent-name&quot;: { &quot;textLimit&quot;: 2200, &quot;chunkMode&quot;: &quot;length&quot; }&#10;      }&#10;    }&#10;  }&#10;}"></textarea>
+            </div>
+          </section>
+        </section>
+
+        <section class="settings-panel" data-settings-panel="system" hidden>
+          <div class="form-group settings-featured-group">
+            <label class="form-label" for="cfgLocale" data-i18n="settings.languageLabel">界面语言</label>
+            <select id="cfgLocale" class="input"></select>
+            <div class="form-help" data-i18n="settings.languageHelp">仅切换当前 WebChat 前端界面语言，不影响模型输出语言。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="form-group settings-featured-group settings-doctor-group">
+            <label class="form-label" data-i18n="settings.systemDoctor">系统检查</label>
+            <div>
+              <button id="doctorToggleBtn" class="button badge" type="button" style="margin-bottom: 8px;">
+                <span data-i18n="settings.doctorChecking">检查中...</span>
+              </button>
+              <div id="doctorStatus" class="hidden" style="display: flex; flex-wrap: wrap; gap: 8px;">
+              </div>
+            </div>
+            <div class="form-help" data-i18n="settings.doctorHelp">检查当前配置、依赖与运行状态，便于快速定位缺失项。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="settings-subsection-header settings-featured-header" style="margin-top: 16px;">
+            <div>
+              <div class="settings-subsection-title">State Dir / Paths</div>
+              <div class="form-help">运行态、工作区和静态资源路径。`Extra Workspace Roots` 仍会写入共享 `.env`。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgStateDir">State Dir</label>
+            <input id="cfgStateDir" class="input" placeholder="~/.star_sanctuary" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgStateDirWindows">State Dir Windows</label>
+            <input id="cfgStateDirWindows" class="input" placeholder="C:\\Users\\your-name\\.star_sanctuary" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgStateDirWsl">State Dir WSL</label>
+            <input id="cfgStateDirWsl" class="input" placeholder="~/.star_sanctuary" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgWorkspaceDir">Workspace Dir</label>
+            <input id="cfgWorkspaceDir" class="input" placeholder="./workspace" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgExtraWorkspaceRoots">Extra Workspace Roots</label>
+            <input id="cfgExtraWorkspaceRoots" class="input" placeholder="E:\\tools,D:\\projects" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgWebRoot">Web Root</label>
+            <input id="cfgWebRoot" class="input" placeholder="apps/web/public" />
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.hostLabel">Gateway Host</label>
+            <input id="cfgHost" class="input" placeholder="127.0.0.1" />
+            <div class="form-help" data-i18n="settings.hostHelp">Gateway 绑定地址。`127.0.0.1` 仅本机可访问，`0.0.0.0` 允许局域网访问。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.portLabel">Gateway Port</label>
+            <input id="cfgPort" class="input" placeholder="28889" />
+            <div class="form-help" data-i18n="settings.portHelp">Gateway 主监听端口。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.gatewayPortLabel">Gateway Compose Port</label>
+            <input id="cfgGatewayPort" class="input" placeholder="28889" />
+            <div class="form-help" data-i18n="settings.gatewayPortHelp">Docker Compose 场景使用的网关端口变量。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgUpdateCheckEnabled">
+              <input id="cfgUpdateCheckEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.updateCheckEnabledLabel">启用版本检查</span>
+            </label>
+            <div class="form-help" data-i18n="settings.updateCheckEnabledHelp">仅做新版本日志提示，不会自动升级。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgUpdateCheckTimeoutMs">Update Check Timeout (ms)</label>
+            <input id="cfgUpdateCheckTimeoutMs" class="input" placeholder="3000" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgUpdateCheckApiUrl">Update Check API URL</label>
+            <input id="cfgUpdateCheckApiUrl" class="input" placeholder="https://api.github.com/repos/vrboyzero/star-sanctuary/releases/latest" />
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="form-group settings-priority-toggle">
+            <label class="form-label" data-i18n="settings.authModeLabel">认证模式</label>
+            <select id="cfgAuthMode" class="input">
+              <option value="none">none</option>
+              <option value="token">token</option>
+              <option value="password">password</option>
+            </select>
+            <div class="form-help" data-i18n="settings.authModeHelp">Gateway 连接认证模式。即使是 `none`，新设备连接仍然需要 Pairing。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.authTokenLabel">Auth Token</label>
+            <input id="cfgAuthToken" class="input" type="password" placeholder="setup-... / hex token" />
+            <div class="form-help" data-i18n="settings.authTokenHelp">当认证模式是 `token` 时使用。WebSocket / HTTP 接入都会用到它。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.authPasswordLabel">Auth Password</label>
+            <input id="cfgAuthPassword" class="input" type="password" placeholder="your-secure-password" />
+            <div class="form-help" data-i18n="settings.authPasswordHelp">当认证模式是 `password` 时使用。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.allowedOriginsLabel">Allowed Origins</label>
+            <input id="cfgAllowedOrigins" class="input" data-i18n-placeholder="settings.allowedOriginsPlaceholder" placeholder="http://localhost:3000,https://app.example.com" />
+            <div class="form-help" data-i18n="settings.allowedOriginsHelp">WebSocket Origin 白名单，使用逗号分隔，用于限制哪些网页客户端可以连到 Gateway。</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.attachmentMaxFileBytesLabel">Attachment Max File Bytes</label>
+            <input id="cfgAttachmentMaxFileBytes" class="input" placeholder="10485760" />
+            <div class="form-help" data-i18n="settings.attachmentMaxFileBytesHelp">单个附件大小上限，单位字节。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.attachmentMaxTotalBytesLabel">Attachment Max Total Bytes</label>
+            <input id="cfgAttachmentMaxTotalBytes" class="input" placeholder="31457280" />
+            <div class="form-help" data-i18n="settings.attachmentMaxTotalBytesHelp">单次消息所有附件总大小上限，单位字节。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.attachmentTextCharLimitLabel">Attachment Text Char Limit</label>
+            <input id="cfgAttachmentTextCharLimit" class="input" placeholder="200000" />
+            <div class="form-help" data-i18n="settings.attachmentTextCharLimitHelp">单个文本附件可注入 prompt 的字符上限。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.attachmentTextTotalCharLimitLabel">Attachment Text Total Char Limit</label>
+            <input id="cfgAttachmentTextTotalCharLimit" class="input" placeholder="200000" />
+            <div class="form-help" data-i18n="settings.attachmentTextTotalCharLimitHelp">单次消息所有文本附件与音频转录共用的 prompt 字符预算。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.audioTranscriptAppendCharLimitLabel">Audio Transcript Append Char Limit</label>
+            <input id="cfgAudioTranscriptAppendCharLimit" class="input" placeholder="12000" />
+            <div class="form-help" data-i18n="settings.audioTranscriptAppendCharLimitHelp">用户已输入文本时，单个音频转录追加进 prompt 的字符上限。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title">Webhook Guard</div>
+              <div class="form-help">Webhook 入口预鉴权、限流和并发保护。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgWebhookPreauthMaxBytes">Webhook Preauth Max Bytes</label>
+            <input id="cfgWebhookPreauthMaxBytes" class="input" placeholder="65536" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgWebhookPreauthTimeoutMs">Webhook Preauth Timeout (ms)</label>
+            <input id="cfgWebhookPreauthTimeoutMs" class="input" placeholder="5000" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgWebhookRateLimitWindowMs">Webhook Rate Limit Window (ms)</label>
+            <input id="cfgWebhookRateLimitWindowMs" class="input" placeholder="60000" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgWebhookRateLimitMaxRequests">Webhook Rate Limit Max Requests</label>
+            <input id="cfgWebhookRateLimitMaxRequests" class="input" placeholder="120" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgWebhookRateLimitMaxTrackedKeys">Webhook Rate Limit Max Tracked Keys</label>
+            <input id="cfgWebhookRateLimitMaxTrackedKeys" class="input" placeholder="4096" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgWebhookMaxInFlightPerKey">Webhook Max In Flight Per Key</label>
+            <input id="cfgWebhookMaxInFlightPerKey" class="input" placeholder="8" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgWebhookMaxInFlightTrackedKeys">Webhook Max In Flight Tracked Keys</label>
+            <input id="cfgWebhookMaxInFlightTrackedKeys" class="input" placeholder="4096" />
+          </div>
+
+          <div class="settings-subsection-header" style="margin-top: 16px;">
+            <div>
+              <div class="settings-subsection-title">Token Upload</div>
+              <div class="form-help">任务 token 增量上传和任务结束统计附带项。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgTokenUsageUploadEnabled">
+              <input id="cfgTokenUsageUploadEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span>Enable Token Usage Upload</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgTokenUsageUploadUrl">Token Usage Upload URL</label>
+            <input id="cfgTokenUsageUploadUrl" class="input" placeholder="http://127.0.0.1:3001/api/internal/token-usage" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgTokenUsageUploadApiKey">Token Usage Upload API Key</label>
+            <input id="cfgTokenUsageUploadApiKey" class="input" type="password" placeholder="gro_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgTokenUsageUploadTimeoutMs">Token Usage Upload Timeout (ms)</label>
+            <input id="cfgTokenUsageUploadTimeoutMs" class="input" placeholder="3000" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgTokenUsageStrictUuid">
+              <input id="cfgTokenUsageStrictUuid" type="checkbox" style="margin-right: 8px;" />
+              <span>Strict UUID Upload</span>
+            </label>
+            <div class="form-help">接收端开启严格 UUID 校验时建议同步开启。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgAutoTaskTimeEnabled">
+              <input id="cfgAutoTaskTimeEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span>Append Auto Task Time</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgAutoTaskTokenEnabled">
+              <input id="cfgAutoTaskTokenEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span>Append Auto Task Token</span>
+            </label>
+          </div>
+
+          <div class="settings-subsection-header" style="margin-top: 16px;">
+            <div>
+              <div class="settings-subsection-title">Webhook Runtime</div>
+              <div class="form-help">Webhook 路由配置文件和幂等窗口。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgWebhookConfigPath">Webhook Config Path</label>
+            <input id="cfgWebhookConfigPath" class="input" placeholder="~/.star_sanctuary/webhooks.json" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgWebhookIdempotencyWindowMs">Webhook Idempotency Window (ms)</label>
+            <input id="cfgWebhookIdempotencyWindowMs" class="input" placeholder="600000" />
+          </div>
+
+          <div class="settings-subsection-header" style="margin-top: 16px;">
+            <div>
+              <div class="settings-subsection-title">Logging</div>
+              <div class="form-help">日志级别、输出目标和轮转策略。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgLogLevel">Log Level</label>
+            <input id="cfgLogLevel" class="input" placeholder="info" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgLogConsole">
+              <input id="cfgLogConsole" type="checkbox" style="margin-right: 8px;" />
+              <span>Log To Console</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgLogFile">
+              <input id="cfgLogFile" type="checkbox" style="margin-right: 8px;" />
+              <span>Log To File</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgLogDir">Log Dir</label>
+            <input id="cfgLogDir" class="input" placeholder="~/.star_sanctuary/logs" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgLogMaxSize">Log Max Size</label>
+            <input id="cfgLogMaxSize" class="input" placeholder="10MB" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgLogRetentionDays">Log Retention Days</label>
+            <input id="cfgLogRetentionDays" class="input" placeholder="7" />
+          </div>
+
+          <div class="settings-subsection-header" style="margin-top: 16px;">
+            <div>
+              <div class="settings-subsection-title">Dream / Obsidian</div>
+              <div class="form-help">Dream 自动任务和 Obsidian 镜像输出。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgDreamAutoHeartbeatEnabled">
+              <input id="cfgDreamAutoHeartbeatEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span>Dream Auto Heartbeat</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgDreamAutoCronEnabled">
+              <input id="cfgDreamAutoCronEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span>Dream Auto Cron</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgDreamOpenAIThinking">Dream Thinking</label>
+            <input id="cfgDreamOpenAIThinking" class="input" placeholder='disabled / {"type":"enabled"}' />
+            <div class="form-help">Dream 独立推理开关。留空时按运行时默认策略决定；常用值为 <code>disabled</code>。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgDreamOpenAIReasoningEffort">Dream Reasoning Effort</label>
+            <input id="cfgDreamOpenAIReasoningEffort" class="input" placeholder="high / max" />
+            <div class="form-help">仅在 Dream 单独开启 thinking 时通常才需要设置；留空表示不单独指定。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgDreamOpenAITimeoutMs">Dream Request Timeout (ms)</label>
+            <input id="cfgDreamOpenAITimeoutMs" class="input" placeholder="120000" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgDreamOpenAIMaxTokens">Dream Initial Max Tokens</label>
+            <input id="cfgDreamOpenAIMaxTokens" class="input" placeholder="1000" />
+            <div class="form-help">首次请求的输出 token 预算；如果 reasoning 吃满预算，运行时会自动放大后重试一次。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgDreamObsidianEnabled">
+              <input id="cfgDreamObsidianEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span>Dream Obsidian Enabled</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgDreamObsidianVaultPath">Dream Obsidian Vault Path</label>
+            <input id="cfgDreamObsidianVaultPath" class="input" placeholder="C:\\Users\\admin\\Documents\\Obsidian Vault" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgDreamObsidianRootDir">Dream Obsidian Root Dir</label>
+            <input id="cfgDreamObsidianRootDir" class="input" placeholder="Star Sanctuary" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCommonsObsidianEnabled">
+              <input id="cfgCommonsObsidianEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span>Commons Obsidian Enabled</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCommonsObsidianVaultPath">Commons Obsidian Vault Path</label>
+            <input id="cfgCommonsObsidianVaultPath" class="input" placeholder="C:\\Users\\admin\\Documents\\Obsidian Vault" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCommonsObsidianRootDir">Commons Obsidian Root Dir</label>
+            <input id="cfgCommonsObsidianRootDir" class="input" placeholder="Star Sanctuary" />
+          </div>
 
         </section>
       </div>

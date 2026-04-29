@@ -14,6 +14,7 @@ import type { AgentRunInput, AgentStreamItem, AgentUsage, BelldandyAgent, AgentH
 import type { HookRunner } from "./hook-runner.js";
 import type { AfterCompactionEvent, BeforeCompactionEvent, HookAgentContext, HookToolContext, HookToolResultPersistContext } from "./hooks.js";
 import { FailoverClient, type ModelProfile, type FailoverExecutionSummary, type FailoverLogger } from "./failover-client.js";
+import { applyOpenAICompatibleReasoningConfig } from "./openai-reasoning.js";
 import { buildUrl, preprocessMultimodalContent, type VideoUploadConfig } from "./multimodal.js";
 import {
   buildAnthropicRequest,
@@ -103,6 +104,10 @@ export type ToolEnabledAgentOptions = {
   retryBackoffMs?: number;
   /** primary profile 专用代理 URL（可选） */
   proxyUrl?: string;
+  /** OpenAI-compatible 思考模式配置（primary profile） */
+  thinking?: Record<string, unknown>;
+  /** OpenAI-compatible 推理强度（primary profile） */
+  reasoningEffort?: string;
   /** 启动阶段预置冷却（毫秒） */
   bootstrapProfileCooldowns?: Record<string, number>;
   /** ReAct 循环内压缩配置（可选） */
@@ -500,6 +505,8 @@ export class ToolEnabledAgent implements BelldandyAgent {
         apiKey: opts.apiKey,
         model: opts.model,
         proxyUrl: opts.proxyUrl,
+        thinking: opts.thinking,
+        reasoningEffort: opts.reasoningEffort,
       },
       fallbacks: opts.fallbacks,
       logger: opts.failoverLogger,
@@ -1597,6 +1604,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
               max_output_tokens: this.opts.maxOutputTokens ?? 4096,
               stream: false,
             };
+            applyOpenAICompatibleReasoningConfig(payload, profile);
             if (tools && tools.length > 0) {
               const responseTools = this.opts.sanitizeResponsesToolSchema
                 ? sanitizeResponsesToolDefinitions(tools)
@@ -1629,6 +1637,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
             max_tokens: this.opts.maxOutputTokens ?? 4096,
             stream: false,
           };
+          applyOpenAICompatibleReasoningConfig(payload, profile);
           if (tools && tools.length > 0) {
             payload.tools = tools;
             payload.tool_choice = "auto";

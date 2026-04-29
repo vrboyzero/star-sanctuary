@@ -38,6 +38,16 @@ function normalizeNonNegativeInt(value: unknown): number | undefined {
     : undefined;
 }
 
+function normalizeThinkingConfig(value: unknown): Record<string, unknown> | undefined {
+  if (!isObjectRecord(value)) return undefined;
+  const type = normalizeOptionalString(value.type);
+  if (!type) return undefined;
+  return {
+    ...value,
+    type,
+  };
+}
+
 function normalizeModelProfile(value: unknown, index: number): ModelProfile {
   const item = isObjectRecord(value) ? value : {};
   const id = normalizeOptionalString(item.id) ?? `fallback-${index}`;
@@ -67,6 +77,8 @@ function normalizeModelProfile(value: unknown, index: number): ModelProfile {
     maxRetries: normalizeNonNegativeInt(item.maxRetries),
     retryBackoffMs: normalizePositiveInt(item.retryBackoffMs),
     proxyUrl: normalizeOptionalString(item.proxyUrl),
+    thinking: normalizeThinkingConfig(item.thinking),
+    reasoningEffort: normalizeOptionalString(item.reasoningEffort),
   };
 }
 
@@ -104,6 +116,8 @@ function toPersistedModelProfile(profile: ModelProfile): Record<string, unknown>
     ...(typeof profile.maxRetries === "number" ? { maxRetries: profile.maxRetries } : {}),
     ...(typeof profile.retryBackoffMs === "number" ? { retryBackoffMs: profile.retryBackoffMs } : {}),
     ...(profile.proxyUrl ? { proxyUrl: profile.proxyUrl } : {}),
+    ...(profile.thinking ? { thinking: profile.thinking } : {}),
+    ...(profile.reasoningEffort ? { reasoningEffort: profile.reasoningEffort } : {}),
   };
 }
 

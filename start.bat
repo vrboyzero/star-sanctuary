@@ -135,7 +135,7 @@ echo [Star Sanctuary Launcher] Starting Gateway...
 echo [Star Sanctuary Launcher] WebChat: http://localhost:28889
 echo.
 
-call corepack pnpm dev:gateway
+call corepack pnpm bdd start
 
 if %errorlevel% equ 100 (
     echo.

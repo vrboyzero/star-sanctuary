@@ -21,39 +21,38 @@ export default defineCommand({
   },
   async run({ args }) {
     const ctx = createCLIContext({ json: args.json, stateDir: args["state-dir"] });
-
-    if (args.daemon) {
-      // Daemon mode - start in background
-      const status = getDaemonStatus(ctx.stateDir);
-      if (status.running) {
-        if (ctx.json) {
-          ctx.output({ success: false, error: `Gateway is already running (PID ${status.pid})`, pid: status.pid });
+    try {
+      if (args.daemon) {
+        const result = await startDaemon(ctx.stateDir);
+        const status = getDaemonStatus(ctx.stateDir);
+        if (result.success) {
+          if (ctx.json) {
+            ctx.output({ success: true, pid: result.pid, logFile: status.logFile });
+          } else {
+            ctx.success(`Gateway started in background (PID ${result.pid})`);
+            ctx.log(`  Log file: ${status.logFile}`);
+            ctx.log(`  Stop with: ${pc.cyan("bdd stop")}`);
+          }
         } else {
-          ctx.error(`Gateway is already running (PID ${status.pid})`);
-        }
-        process.exit(1);
-      }
-
-      const result = await startDaemon(ctx.stateDir);
-      if (result.success) {
-        if (ctx.json) {
-          ctx.output({ success: true, pid: result.pid, logFile: status.logFile });
-        } else {
-          ctx.success(`Gateway started in background (PID ${result.pid})`);
-          ctx.log(`  Log file: ${status.logFile}`);
-          ctx.log(`  Stop with: ${pc.cyan("bdd stop")}`);
+          if (ctx.json) {
+            ctx.output({ success: false, error: result.error });
+          } else {
+            ctx.error(result.error ?? "Failed to start gateway");
+          }
+          process.exit(1);
         }
       } else {
-        if (ctx.json) {
-          ctx.output({ success: false, error: result.error });
-        } else {
-          ctx.error(result.error ?? "Failed to start gateway");
-        }
-        process.exit(1);
+        // Foreground mode - existing behavior with auto-restart
+        await startForeground(ctx.stateDir);
       }
-    } else {
-      // Foreground mode - existing behavior with auto-restart
-      startForeground();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (ctx.json) {
+        ctx.output({ success: false, error: message });
+      } else {
+        ctx.error(message);
+      }
+      process.exit(1);
     }
   },
 });

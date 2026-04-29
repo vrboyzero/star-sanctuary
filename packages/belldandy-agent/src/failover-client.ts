@@ -31,6 +31,10 @@ export type ModelProfile = {
     retryBackoffMs?: number;
     /** 供应商专用代理 URL（可选） */
     proxyUrl?: string;
+    /** OpenAI-compatible 思考模式配置（按 provider 原样透传） */
+    thinking?: Record<string, unknown>;
+    /** OpenAI-compatible 推理强度（透传为 reasoning_effort） */
+    reasoningEffort?: string;
 };
 
 /** 容灾错误原因分类 */
@@ -835,6 +839,12 @@ function normalizeNonNegativeInt(value: unknown): number | undefined {
     return rounded >= 0 ? rounded : undefined;
 }
 
+function normalizeOptionalString(value: unknown): string | undefined {
+    if (typeof value !== "string") return undefined;
+    const normalized = value.trim();
+    return normalized || undefined;
+}
+
 function isSameProfileRetryable(reason: FailoverReason): boolean {
     return reason === "timeout"
         || reason === "rate_limit"
@@ -981,6 +991,8 @@ export type ModelConfigFile = {
         maxRetries?: number;
         retryBackoffMs?: number;
         proxyUrl?: string;
+        thinking?: Record<string, unknown>;
+        reasoningEffort?: string;
     }>;
 };
 
@@ -1014,9 +1026,22 @@ export async function loadModelFallbacks(filePath: string): Promise<ModelProfile
                 maxRetries: normalizeNonNegativeInt(f.maxRetries),
                 retryBackoffMs: normalizePositiveInt(f.retryBackoffMs),
                 proxyUrl: typeof f.proxyUrl === "string" ? f.proxyUrl : undefined,
+                thinking: isThinkingConfig(f.thinking) ? { ...f.thinking, type: normalizeThinkingType(f.thinking.type)! } : undefined,
+                reasoningEffort: typeof f.reasoningEffort === "string" ? normalizeOptionalString(f.reasoningEffort) : undefined,
             }));
     } catch {
         // 文件不存在或解析失败，静默返回空
         return [];
     }
+}
+
+function normalizeThinkingType(value: unknown): string | undefined {
+    return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isThinkingConfig(value: unknown): value is Record<string, unknown> {
+    return Boolean(value)
+        && typeof value === "object"
+        && !Array.isArray(value)
+        && Boolean(normalizeThinkingType((value as Record<string, unknown>).type));
 }

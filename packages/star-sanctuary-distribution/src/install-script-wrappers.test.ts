@@ -16,6 +16,12 @@ function readInstallShScript(): string {
   return fs.readFileSync(path.join(workspaceRoot, "install.sh"), "utf-8");
 }
 
+function readRootStartShScript(): string {
+  const currentDir = path.dirname(fileURLToPath(import.meta.url));
+  const workspaceRoot = path.resolve(currentDir, "..", "..", "..");
+  return fs.readFileSync(path.join(workspaceRoot, "start.sh"), "utf-8");
+}
+
 test("install.ps1 Windows start.bat wrapper defaults AUTO_OPEN_BROWSER safely", () => {
   const script = readInstallScript();
 
@@ -57,4 +63,13 @@ test("install scripts fall back to GitHub release pages when API metadata is una
   expect(shScript).toContain("falling back to GitHub release page resolution");
   expect(shScript).toContain("https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/latest/download/${asset_name}");
   expect(shScript).toContain("https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/tags/${tag_name}.tar.gz");
+});
+
+test("root start.sh uses the shared bdd start launcher path", () => {
+  const script = readRootStartShScript();
+
+  expect(script).toContain('echo "[Star Sanctuary Launcher] Starting Gateway..."');
+  expect(script).toContain('echo "[Star Sanctuary Launcher] WebChat: http://localhost:28889"');
+  expect(script).toContain("corepack pnpm bdd start");
+  expect(script).not.toContain("corepack pnpm dev:gateway");
 });

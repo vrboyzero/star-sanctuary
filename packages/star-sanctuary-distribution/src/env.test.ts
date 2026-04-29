@@ -10,6 +10,7 @@ import {
   ensureDefaultEnvFiles,
   loadRuntimeEnvFiles,
   readDefaultEnvTemplates,
+  resolveRuntimeEnvDir,
   resolveDefaultEnvTemplatePaths,
 } from "./env.js";
 
@@ -36,8 +37,8 @@ test("ensureDefaultEnvFile creates a default .env for fresh installs", async () 
   expect(result.created).toBe(true);
   const content = await fs.readFile(result.envPath, "utf-8");
   expect(content).toContain("BELLDANDY_AGENT_PROVIDER=openai");
-  expect(content).toContain("BELLDANDY_AUTH_MODE=token");
-  expect(content).toContain("BELLDANDY_ALLOWED_ORIGINS=http://127.0.0.1:28889");
+  expect(content).toContain("BELLDANDY_AUTH_MODE=none");
+  expect(content).toContain("BELLDANDY_COMMUNITY_API_ENABLED=false");
 });
 
 test("ensureDefaultEnvFile still creates .env when only .env.local exists", async () => {
@@ -49,7 +50,7 @@ test("ensureDefaultEnvFile still creates .env when only .env.local exists", asyn
 
   expect(result.created).toBe(true);
   const content = await fs.readFile(result.envPath, "utf-8");
-  expect(content).toContain("BELLDANDY_AUTH_MODE=token");
+  expect(content).toContain("BELLDANDY_AUTH_MODE=none");
   const localContent = await fs.readFile(envLocalPath, "utf-8");
   expect(localContent).toBe("BELLDANDY_OPENAI_API_KEY=test-key\n");
 });
@@ -64,7 +65,8 @@ test("ensureDefaultEnvFiles creates both .env and .env.local for a fresh state d
   await expect(fs.readFile(result.envPath, "utf-8")).resolves.toContain("BELLDANDY_AGENT_PROVIDER=openai");
   const envLocalContent = await fs.readFile(result.envLocalPath, "utf-8");
   expect(envLocalContent).toContain("BELLDANDY_AGENT_PROVIDER=openai");
-  expect(envLocalContent).toMatch(/BELLDANDY_AUTH_TOKEN=setup-[^\r\n]+/);
+  expect(envLocalContent).toContain('BELLDANDY_COMMUNITY_API_ENABLED="false"');
+  expect(envLocalContent).not.toMatch(/BELLDANDY_AUTH_TOKEN=setup-[^\r\n]+/);
 });
 
 test("ensureDefaultEnvFiles only backfills the missing file", async () => {
@@ -78,7 +80,8 @@ test("ensureDefaultEnvFiles only backfills the missing file", async () => {
   await expect(fs.readFile(result.envPath, "utf-8")).resolves.toBe("BELLDANDY_PORT=9999\n");
   const envLocalContent = await fs.readFile(result.envLocalPath, "utf-8");
   expect(envLocalContent).toContain("BELLDANDY_AGENT_PROVIDER=openai");
-  expect(envLocalContent).toMatch(/BELLDANDY_AUTH_TOKEN=setup-[^\r\n]+/);
+  expect(envLocalContent).toContain('BELLDANDY_COMMUNITY_API_ENABLED="false"');
+  expect(envLocalContent).not.toMatch(/BELLDANDY_AUTH_TOKEN=setup-[^\r\n]+/);
 });
 
 test("ensureDefaultEnvFiles prefers explicit runtime templates over bundle-relative fallback lookup", async () => {
@@ -155,6 +158,17 @@ test("loadRuntimeEnvFiles preserves explicit base env values over .env defaults"
   expect(env.BELLDANDY_AUTH_MODE).toBe("token");
 });
 
+test("resolveRuntimeEnvDir prefers explicit env dir over fallback state dir", () => {
+  const envDir = resolveRuntimeEnvDir({
+    baseEnv: {
+      BELLDANDY_ENV_DIR: "/tmp/custom-env",
+    },
+    fallbackEnvDir: "/tmp/state-dir",
+  });
+
+  expect(envDir).toBe("/tmp/custom-env");
+});
+
 test("default env template loader resolves template asset paths", () => {
   const templatePaths = resolveDefaultEnvTemplatePaths();
   const templates = readDefaultEnvTemplates();
@@ -163,4 +177,11 @@ test("default env template loader resolves template asset paths", () => {
   expect(templatePaths.envLocalTemplatePath).toContain(path.join("default-env", "runtime.env.local"));
   expect(templates.env).toContain("BELLDANDY_AGENT_PROVIDER=openai");
   expect(templates.envLocal).toContain("BELLDANDY_AGENT_PROVIDER=openai");
+});
+
+test("default env.local template keeps community api disabled by default", () => {
+  const templates = readDefaultEnvTemplates();
+
+  expect(templates.envLocal).toContain('BELLDANDY_COMMUNITY_API_ENABLED="false"');
+  expect(templates.envLocal).not.toContain('BELLDANDY_COMMUNITY_API_ENABLED="true"');
 });

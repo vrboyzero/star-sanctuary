@@ -172,3 +172,56 @@ test("resolveModelConfig accepts manual model override without falling back to n
     source: "manual",
   });
 });
+
+test("resolveModelConfig preserves primary and named reasoning config", () => {
+  const primaryResolved = resolveModelConfig(
+    "primary",
+    {
+      baseUrl: "https://api.deepseek.com",
+      apiKey: "sk-primary",
+      model: "deepseek-v4-pro",
+      wireApi: "responses",
+      thinking: { type: "enabled" },
+      reasoningEffort: "high",
+    },
+    [],
+  );
+
+  expect(primaryResolved).toEqual({
+    baseUrl: "https://api.deepseek.com",
+    apiKey: "sk-primary",
+    model: "deepseek-v4-pro",
+    wireApi: "responses",
+    thinking: { type: "enabled" },
+    reasoningEffort: "high",
+    source: "primary",
+  });
+
+  const namedResolved = resolveModelConfig(
+    "deepseek-fallback",
+    {
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-primary",
+      model: "gpt-5",
+    },
+    [
+      {
+        id: "deepseek-fallback",
+        baseUrl: "https://api.deepseek.com",
+        apiKey: "sk-deepseek",
+        model: "deepseek-v4-flash",
+        thinking: { type: "enabled" },
+        reasoningEffort: "max",
+      },
+    ],
+  );
+
+  expect(namedResolved).toEqual({
+    baseUrl: "https://api.deepseek.com",
+    apiKey: "sk-deepseek",
+    model: "deepseek-v4-flash",
+    thinking: { type: "enabled" },
+    reasoningEffort: "max",
+    source: "named",
+  });
+});

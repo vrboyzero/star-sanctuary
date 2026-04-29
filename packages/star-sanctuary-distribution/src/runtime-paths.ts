@@ -121,6 +121,16 @@ export function resolvePreferredEnvDir(
 export function resolvePreferredEnvDirInfo(
   options: ResolvePreferredEnvDirOptions = {},
 ): ResolvePreferredEnvDirResult {
+  const explicitEnvDir = resolveMaybePath(
+    options.envDir
+      ?? readTrimmedEnv(options.env ?? process.env, "STAR_SANCTUARY_ENV_DIR", "BELLDANDY_ENV_DIR"),
+  );
+  if (explicitEnvDir) {
+    return {
+      envDir: explicitEnvDir,
+      source: "explicit",
+    };
+  }
   const stateDir = path.resolve(options.stateDir ?? resolveStateDir(options.env ?? process.env));
   return {
     envDir: stateDir,

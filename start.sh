@@ -121,7 +121,7 @@ while true; do
     echo ""
 
     set +e
-    corepack pnpm dev:gateway
+    corepack pnpm bdd start
     EXIT_CODE=$?
     set -e
 

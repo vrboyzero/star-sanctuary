@@ -367,6 +367,260 @@ describe("dream runtime", () => {
     expect(result.markdown).toContain("## 已确认事实");
   });
 
+  it("passes thinking and reasoning_effort to dream chat completions payload", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-dream-runtime-reasoning-"));
+    tempDirs.push(stateDir);
+
+    const requestBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      return {
+        ok: true,
+        async json() {
+          return {
+            choices: [{
+              finish_reason: "stop",
+              message: {
+                content: JSON.stringify({
+                  headline: "Reasoning dream ready",
+                  stableInsights: ["reasoning config reached dream runtime"],
+                  corrections: [],
+                  openQuestions: [],
+                  shareCandidates: [],
+                  nextFocus: ["keep payload aligned"],
+                }),
+              },
+            }],
+          };
+        },
+      };
+    }));
+
+    const runtime = new DreamRuntime({
+      stateDir,
+      agentId: "coder",
+      model: "deepseek-v4-pro",
+      baseUrl: "https://example.com/v1",
+      apiKey: "sk-test",
+      thinking: { type: "enabled" },
+      reasoningEffort: "high",
+      now: () => new Date("2026-04-19T12:00:00.000Z"),
+      buildInputSnapshot: async () => createSnapshot(),
+    });
+
+    const result = await runtime.run({
+      conversationId: "agent:coder:main",
+      triggerMode: "manual",
+    });
+
+    expect(result.record.status).toBe("completed");
+    expect(requestBodies).toHaveLength(1);
+    expect(requestBodies[0]).toMatchObject({
+      model: "deepseek-v4-pro",
+      thinking: { type: "enabled" },
+      reasoning_effort: "high",
+    });
+  });
+
+  it("retries dream generation with larger token budget when reasoning exhausts the first attempt", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-dream-runtime-retry-budget-"));
+    tempDirs.push(stateDir);
+
+    const requestBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+      const maxTokens = Number(body.max_tokens ?? 0);
+      if (maxTokens <= 1000) {
+        return {
+          ok: true,
+          async json() {
+            return {
+              choices: [{
+                finish_reason: "length",
+                message: {
+                  content: null,
+                  reasoning_content: "reasoning filled the first budget",
+                },
+              }],
+            };
+          },
+        };
+      }
+      return {
+        ok: true,
+        async json() {
+          return {
+            choices: [{
+              finish_reason: "stop",
+              message: {
+                content: JSON.stringify({
+                  headline: "Dream retry succeeded",
+                  stableInsights: ["second attempt had enough room for final json"],
+                  corrections: [],
+                  openQuestions: [],
+                  shareCandidates: [],
+                  nextFocus: ["keep automatic retry"],
+                }),
+              },
+            }],
+          };
+        },
+      };
+    }));
+
+    const runtime = new DreamRuntime({
+      stateDir,
+      agentId: "coder",
+      model: "deepseek-v4-pro",
+      baseUrl: "https://example.com/v1",
+      apiKey: "sk-test",
+      thinking: { type: "enabled" },
+      reasoningEffort: "max",
+      now: () => new Date("2026-04-19T12:00:00.000Z"),
+      buildInputSnapshot: async () => createSnapshot(),
+    });
+
+    const result = await runtime.run({
+      conversationId: "agent:coder:main",
+      triggerMode: "manual",
+    });
+
+    expect(result.record.status).toBe("completed");
+    expect(result.record.generationMode).toBe("llm");
+    expect(requestBodies).toHaveLength(2);
+    expect(requestBodies[0]?.max_tokens).toBe(1000);
+    expect(requestBodies[1]?.max_tokens).toBe(4000);
+  });
+
+  it("logs finish_reason diagnostics when dream response has reasoning but no final content", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-dream-runtime-empty-content-"));
+    tempDirs.push(stateDir);
+
+    const warn = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      async json() {
+        return {
+          choices: [{
+            finish_reason: "length",
+            message: {
+              content: null,
+              reasoning_content: "long hidden chain of thought",
+            },
+          }],
+        };
+      },
+    })));
+
+    const runtime = new DreamRuntime({
+      stateDir,
+      agentId: "coder",
+      model: "deepseek-v4-pro",
+      baseUrl: "https://example.com/v1",
+      apiKey: "sk-test",
+      thinking: { type: "enabled" },
+      reasoningEffort: "max",
+      now: () => new Date("2026-04-19T12:00:00.000Z"),
+      buildInputSnapshot: async () => createSnapshot(),
+      logger: { warn },
+    });
+
+    const result = await runtime.run({
+      conversationId: "agent:coder:main",
+      triggerMode: "manual",
+    });
+
+    expect(result.record.status).toBe("completed");
+    expect(result.record.generationMode).toBe("fallback");
+    expect(result.record.fallbackReason).toBe("llm_call_failed");
+    expect(warn).toHaveBeenNthCalledWith(1, "dream llm returned empty assistant content", expect.objectContaining({
+      finishReason: "length",
+      hasReasoningContent: true,
+      reasoningContentLength: 28,
+      maxTokens: 1000,
+      thinkingType: "enabled",
+      reasoningEffort: "max",
+    }));
+    expect(warn).toHaveBeenNthCalledWith(2, "dream llm exhausted token budget on reasoning, retrying with larger budget", expect.objectContaining({
+      previousMaxTokens: 1000,
+      retryMaxTokens: 4000,
+      finishReason: "length",
+      reasoningEffort: "max",
+    }));
+    expect(warn).toHaveBeenNthCalledWith(3, "dream llm returned empty assistant content", expect.objectContaining({
+      finishReason: "length",
+      hasReasoningContent: true,
+      reasoningContentLength: 28,
+      maxTokens: 4000,
+      thinkingType: "enabled",
+      reasoningEffort: "max",
+    }));
+    expect(warn).toHaveBeenNthCalledWith(4, "dream llm generation failed, using fallback", expect.objectContaining({
+      error: expect.stringMatching(/finish_reason=length.*max_tokens=4000/),
+    }));
+  });
+
+  it("falls back and clears running status when the larger-budget retry times out", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-dream-runtime-timeout-"));
+    tempDirs.push(stateDir);
+
+    const warn = vi.fn();
+    let requestCount = 0;
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return {
+          ok: true,
+          async json() {
+            return {
+              choices: [{
+                finish_reason: "length",
+                message: {
+                  content: null,
+                  reasoning_content: "reasoning filled the first budget",
+                },
+              }],
+            };
+          },
+        };
+      }
+      return new Promise((_resolve, reject) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => {
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        }, { once: true });
+      });
+    }));
+
+    const runtime = new DreamRuntime({
+      stateDir,
+      agentId: "coder",
+      model: "deepseek-v4-pro",
+      baseUrl: "https://example.com/v1",
+      apiKey: "sk-test",
+      thinking: { type: "enabled" },
+      reasoningEffort: "max",
+      timeoutMs: 1000,
+      now: () => new Date("2026-04-19T12:00:00.000Z"),
+      buildInputSnapshot: async () => createSnapshot(),
+      logger: { warn },
+    });
+
+    const result = await runtime.run({
+      conversationId: "agent:coder:main",
+      triggerMode: "manual",
+    });
+
+    expect(result.record.status).toBe("completed");
+    expect(result.record.generationMode).toBe("fallback");
+    expect(result.record.fallbackReason).toBe("llm_call_failed");
+    expect(result.state.status).toBe("idle");
+    expect(warn).toHaveBeenCalledWith("dream llm generation failed, using fallback", expect.objectContaining({
+      error: expect.stringContaining("timed out after 1000ms"),
+    }));
+  });
+
   it("runs automatic dream when heartbeat signal gate passes and then enters cooldown", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-dream-runtime-auto-"));
     tempDirs.push(stateDir);

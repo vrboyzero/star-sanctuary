@@ -2,6 +2,7 @@ import type { JsonObject } from "@belldandy/protocol";
 
 import type { AgentRunInput, AgentStreamItem, BelldandyAgent } from "./index.js";
 import { FailoverClient, type ModelProfile, type FailoverExecutionSummary, type FailoverLogger } from "./failover-client.js";
+import { applyOpenAICompatibleReasoningConfig } from "./openai-reasoning.js";
 import { buildUrl, preprocessMultimodalContent, type VideoUploadConfig } from "./multimodal.js";
 import {
   createAgentPromptSnapshot,
@@ -38,6 +39,10 @@ export type OpenAIChatAgentOptions = {
   retryBackoffMs?: number;
   /** primary profile 专用代理 URL（可选） */
   proxyUrl?: string;
+  /** OpenAI-compatible 思考模式配置（primary profile） */
+  thinking?: Record<string, unknown>;
+  /** OpenAI-compatible 推理强度（primary profile） */
+  reasoningEffort?: string;
   /** 启动阶段预置冷却（毫秒） */
   bootstrapProfileCooldowns?: Record<string, number>;
   /** 记录本次 run 实际发给模型的 prompt snapshot */
@@ -164,6 +169,8 @@ export class OpenAIChatAgent implements BelldandyAgent {
         apiKey: opts.apiKey,
         model: opts.model,
         proxyUrl: opts.proxyUrl,
+        thinking: opts.thinking,
+        reasoningEffort: opts.reasoningEffort,
       },
       fallbacks: opts.fallbacks,
       logger: opts.failoverLogger,
@@ -288,7 +295,16 @@ export class OpenAIChatAgent implements BelldandyAgent {
   }
 
   private buildRequest(
-    profile: { id?: string; baseUrl: string; apiKey: string; model: string; protocol?: string; wireApi?: string },
+    profile: {
+      id?: string;
+      baseUrl: string;
+      apiKey: string;
+      model: string;
+      protocol?: string;
+      wireApi?: string;
+      thinking?: Record<string, unknown>;
+      reasoningEffort?: string;
+    },
     messages: Array<{ role: string; content: any }>
   ): { url: string; init: RequestInit } {
     // 优先使用 profile 自身的 protocol（models.json 配置），再 fallback 到 agent 级别协议
@@ -338,12 +354,13 @@ export class OpenAIChatAgent implements BelldandyAgent {
 
     // OpenAI 协议
     if (effectiveWireApi === "responses") {
-      const payload = {
+      const payload: Record<string, unknown> = {
         model: profile.model,
         input: buildResponsesInput(messages),
         max_output_tokens: this.opts.maxOutputTokens ?? 4096,
         stream: this.opts.stream,
       };
+      applyOpenAICompatibleReasoningConfig(payload, profile);
 
       return {
         url: buildUrl(profile.baseUrl, "/responses"),
@@ -358,12 +375,13 @@ export class OpenAIChatAgent implements BelldandyAgent {
       };
     }
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       model: profile.model,
       messages,
       max_tokens: this.opts.maxOutputTokens ?? 4096,
       stream: this.opts.stream,
     };
+    applyOpenAICompatibleReasoningConfig(payload, profile);
 
     return {
       url: buildUrl(profile.baseUrl, "/chat/completions"),

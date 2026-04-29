@@ -10,6 +10,16 @@ export {
   type EnsureDefaultEnvFilesResult,
 } from "./env.js";
 export {
+  getForegroundPidFile,
+  preflightGatewayCleanup,
+  removeForegroundPid,
+  writeForegroundPid,
+  type GatewayPreflightParams,
+  type GatewayPreflightResult,
+  type GatewayPreflightRunner,
+  type GatewayProcessInfo,
+} from "./gateway-preflight.js";
+export {
   resolveEnvFilePaths,
   resolvePreferredEnvDir,
   resolvePreferredEnvDirInfo,

@@ -28,17 +28,21 @@ function resolvePaths() {
   return { payloadRoot, portableRoot };
 }
 
-function ensurePortableEnv(baseEnv: NodeJS.ProcessEnv, portableRoot: string, runtimeDir: string): NodeJS.ProcessEnv {
+function ensurePortableEnv(params: {
+  baseEnv: NodeJS.ProcessEnv;
+  runtimeDir: string;
+  envDir: string;
+}): NodeJS.ProcessEnv {
   const stateDir = path.resolve(resolveRuntimeEnvDir({
-    baseEnv,
-    fallbackEnvDir: resolveStateDir(baseEnv),
+    baseEnv: params.baseEnv,
+    fallbackEnvDir: params.envDir,
   }));
-  ensureDefaultEnvFiles(stateDir, { runtimeDir });
-  const env: NodeJS.ProcessEnv = loadRuntimeEnvFiles(baseEnv, stateDir);
+  ensureDefaultEnvFiles(stateDir, { runtimeDir: params.runtimeDir });
+  const env: NodeJS.ProcessEnv = loadRuntimeEnvFiles(params.baseEnv, stateDir);
   env.STAR_SANCTUARY_RUNTIME_MODE = "portable";
   env.BELLDANDY_RUNTIME_MODE = "portable";
-  env.STAR_SANCTUARY_RUNTIME_DIR = runtimeDir;
-  env.BELLDANDY_RUNTIME_DIR = runtimeDir;
+  env.STAR_SANCTUARY_RUNTIME_DIR = params.runtimeDir;
+  env.BELLDANDY_RUNTIME_DIR = params.runtimeDir;
   env.AUTO_OPEN_BROWSER = readTrimmedEnv(env, "AUTO_OPEN_BROWSER") ?? "true";
 
   if (readTrimmedEnv(env, "BELLDANDY_AUTH_MODE") === "token" && !readTrimmedEnv(env, "BELLDANDY_AUTH_TOKEN")) {
@@ -50,7 +54,7 @@ function ensurePortableEnv(baseEnv: NodeJS.ProcessEnv, portableRoot: string, run
   return env;
 }
 
-function startGateway() {
+async function startGateway() {
   const { payloadRoot, portableRoot } = resolvePaths();
   const ensuredRuntime = ensurePortableRuntime({
     portableRoot,
@@ -58,7 +62,15 @@ function startGateway() {
   });
   const runtimeDir = ensuredRuntime.runtimeDir;
   const gatewayEntry = path.join(runtimeDir, "packages", "belldandy-core", "dist", "bin", "gateway.js");
-  const env = ensurePortableEnv(process.env, portableRoot, runtimeDir);
+  const envDir = path.resolve(resolveRuntimeEnvDir({
+    baseEnv: process.env,
+    fallbackEnvDir: resolveStateDir(process.env),
+  }));
+  const env = ensurePortableEnv({
+    baseEnv: process.env,
+    runtimeDir,
+    envDir,
+  });
 
   if (ensuredRuntime.recovered) {
     console.log(
@@ -68,12 +80,16 @@ function startGateway() {
     console.log(`[Star Sanctuary Portable] Reusing runtime at ${runtimeDir}`);
   }
 
-  startGatewaySupervisor({
+  await startGatewaySupervisor({
     label: "Star Sanctuary Portable",
     gatewayEntry,
     cwd: portableRoot,
+    stateDir: envDir,
     env,
   });
 }
 
-startGateway();
+void startGateway().catch((error) => {
+  console.error(`[Star Sanctuary Portable] Failed to start gateway: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+});

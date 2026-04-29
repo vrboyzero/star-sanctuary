@@ -2,10 +2,15 @@
  * Daemon management module for Belldandy Gateway.
  * Provides start/stop/status functionality for background process management.
  */
-import { fork, type ChildProcess } from "node:child_process";
+import { fork } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  preflightGatewayCleanup,
+  removeForegroundPid,
+  writeForegroundPid,
+} from "@star-sanctuary/distribution";
 import { resolveStateDir } from "./shared/env-loader.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -14,6 +19,7 @@ const __dirname = path.dirname(__filename);
 // 根据当前文件扩展名判断是开发模式(.ts)还是生产模式(.js)
 const EXT = path.extname(__filename);
 const GATEWAY_SCRIPT = path.resolve(__dirname, `../bin/gateway${EXT}`);
+const BDD_SCRIPT = path.resolve(__dirname, `../bin/bdd${EXT}`);
 
 function resolveGatewayScript(): string {
   const override = process.env.STAR_SANCTUARY_GATEWAY_ENTRY?.trim()
@@ -115,20 +121,16 @@ export function getDaemonStatus(stateDir?: string): DaemonStatus {
 
 /** Start gateway in daemon mode (detached background process) */
 export async function startDaemon(stateDir?: string): Promise<{ success: boolean; pid?: number; error?: string }> {
-  const status = getDaemonStatus(stateDir);
-
-  // Check if already running
-  if (status.running && status.pid) {
-    return { success: false, error: `Gateway is already running (PID ${status.pid})` };
-  }
-
-  // Clean up stale PID file if exists
-  if (status.pid && !status.running) {
-    removePid(stateDir);
-  }
+  const resolvedStateDir = stateDir ?? resolveStateDir();
+  await preflightGatewayCleanup({
+    label: "Launcher",
+    stateDir: resolvedStateDir,
+    env: process.env,
+    ownershipTokens: [resolveGatewayScript(), BDD_SCRIPT],
+  });
 
   // Ensure log directory exists
-  const logFile = getLogFile(stateDir);
+  const logFile = getLogFile(resolvedStateDir);
   fs.mkdirSync(path.dirname(logFile), { recursive: true });
 
   // Open log file for appending
@@ -148,7 +150,7 @@ export async function startDaemon(stateDir?: string): Promise<{ success: boolean
     }
 
     // Write PID file
-    writePid(child.pid, stateDir);
+    writePid(child.pid, resolvedStateDir);
 
     // Detach from parent - allow parent to exit
     child.unref();
@@ -219,7 +221,9 @@ export async function stopDaemon(stateDir?: string, timeout = 10000): Promise<{ 
  * Start gateway in foreground with supervisor (auto-restart on exit code 100).
  * This is the existing behavior of `bdd start`.
  */
-export function startForeground(): void {
+export async function startForeground(stateDir?: string): Promise<void> {
+  const resolvedStateDir = stateDir ?? resolveStateDir();
+
   function launchGateway(): void {
     console.log(`[Launcher] Starting Gateway...`);
 
@@ -227,8 +231,12 @@ export function startForeground(): void {
       stdio: "inherit",
       execArgv: EXT === ".ts" ? ["--import", "tsx"] : [],
     });
+    if (child.pid) {
+      writeForegroundPid(resolvedStateDir, child.pid);
+    }
 
     child.on("exit", (code, signal) => {
+      removeForegroundPid(resolvedStateDir);
       if (code === RESTART_EXIT_CODE) {
         console.log(`[Launcher] Gateway requested restart, restarting in ${RESTART_DELAY_MS}ms...`);
         setTimeout(() => launchGateway(), RESTART_DELAY_MS);
@@ -246,6 +254,12 @@ export function startForeground(): void {
     process.on("SIGTERM", forwardSignal);
   }
 
+  await preflightGatewayCleanup({
+    label: "Launcher",
+    stateDir: resolvedStateDir,
+    env: process.env,
+    ownershipTokens: [resolveGatewayScript(), BDD_SCRIPT],
+  });
   launchGateway();
 }
 

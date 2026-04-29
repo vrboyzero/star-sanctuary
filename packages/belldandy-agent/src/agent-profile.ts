@@ -344,7 +344,19 @@ export async function loadAgentProfiles(filePath: string): Promise<AgentProfile[
  */
 export function resolveModelConfig(
   modelRef: string,
-  primaryConfig: { baseUrl: string; apiKey: string; model: string },
+  primaryConfig: {
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+    protocol?: string;
+    wireApi?: string;
+    requestTimeoutMs?: number;
+    maxRetries?: number;
+    retryBackoffMs?: number;
+    proxyUrl?: string;
+    thinking?: Record<string, unknown>;
+    reasoningEffort?: string;
+  },
   fallbacks: ModelProfile[],
 ): {
   baseUrl: string;
@@ -356,6 +368,8 @@ export function resolveModelConfig(
   maxRetries?: number;
   retryBackoffMs?: number;
   proxyUrl?: string;
+  thinking?: Record<string, unknown>;
+  reasoningEffort?: string;
   source: "primary" | "named" | "manual";
 } {
   const normalizedModelRef = typeof modelRef === "string" ? modelRef.trim() : "";
@@ -387,6 +401,8 @@ export function resolveModelConfig(
       maxRetries: found.maxRetries,
       retryBackoffMs: found.retryBackoffMs,
       proxyUrl: found.proxyUrl,
+      thinking: found.thinking,
+      reasoningEffort: found.reasoningEffort,
       source: "named",
     };
   }

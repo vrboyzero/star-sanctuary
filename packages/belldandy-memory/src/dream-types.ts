@@ -374,7 +374,10 @@ export interface DreamRuntimeModelOptions {
   model?: string;
   baseUrl?: string;
   apiKey?: string;
+  thinking?: Record<string, unknown>;
+  reasoningEffort?: string;
   maxTokens?: number;
+  timeoutMs?: number;
   temperature?: number;
 }
 

@@ -722,6 +722,10 @@ On Windows, the common path is: `C:\Users\YourName\.star_sanctuary\models.json`
       "model": "deepseek-chat",
       "protocol": "openai",
       "wireApi": "chat_completions",
+      "thinking": {
+        "type": "enabled"
+      },
+      "reasoningEffort": "max",
       "requestTimeoutMs": 60000,
       "maxRetries": 1,
       "retryBackoffMs": 300

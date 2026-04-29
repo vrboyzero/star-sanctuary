@@ -858,6 +858,10 @@ Windows 常见路径是：`C:\Users\你的用户名\.star_sanctuary\models.json`
       "model": "deepseek-chat",
       "protocol": "openai",
       "wireApi": "chat_completions",
+      "thinking": {
+        "type": "enabled"
+      },
+      "reasoningEffort": "max",
       "requestTimeoutMs": 60000,
       "maxRetries": 1,
       "retryBackoffMs": 300

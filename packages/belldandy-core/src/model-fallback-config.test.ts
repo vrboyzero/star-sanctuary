@@ -20,6 +20,11 @@ describe("model fallback config", () => {
           wireApi: " responses ",
           requestTimeoutMs: 9000,
           maxRetries: 2,
+          thinking: {
+            type: " enabled ",
+            budget_tokens: 2048,
+          },
+          reasoningEffort: " max ",
         },
       ],
     }));
@@ -37,12 +42,19 @@ describe("model fallback config", () => {
         maxRetries: 2,
         retryBackoffMs: undefined,
         proxyUrl: undefined,
+        thinking: {
+          type: "enabled",
+          budget_tokens: 2048,
+        },
+        reasoningEffort: "max",
       },
     ]);
 
     const redacted = stringifyModelFallbackConfig(config, { redactApiKeys: true });
     expect(redacted).toContain('"id": "fallback-0"');
     expect(redacted).toContain(`"apiKey": "${REDACTED_MODEL_SECRET_PLACEHOLDER}"`);
+    expect(redacted).toContain('"thinking"');
+    expect(redacted).toContain('"reasoningEffort": "max"');
     expect(redacted).not.toContain("sk-or-test");
   });
 

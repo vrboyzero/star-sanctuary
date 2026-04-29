@@ -468,6 +468,35 @@ const preferredProviderIds = normalizePreferredProviderIds(readEnv("BELLDANDY_MO
 const openaiWireApi = (readEnv("BELLDANDY_OPENAI_WIRE_API") ?? "chat_completions").toLowerCase() === "responses"
   ? "responses"
   : "chat_completions";
+const openaiThinking = (() => {
+  const raw = readEnv("BELLDANDY_OPENAI_THINKING");
+  if (typeof raw !== "string" || !raw.trim()) return undefined;
+  const normalized = raw.trim();
+  if (normalized.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(normalized) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+      const parsedRecord = parsed as Record<string, unknown>;
+      const type = typeof parsedRecord.type === "string"
+        ? parsedRecord.type.trim()
+        : "";
+      if (!type) return undefined;
+      return {
+        ...parsedRecord,
+        type,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+  return { type: normalized };
+})();
+const openaiReasoningEffort = (() => {
+  const raw = readEnv("BELLDANDY_OPENAI_REASONING_EFFORT");
+  if (typeof raw !== "string") return undefined;
+  const normalized = raw.trim();
+  return normalized || undefined;
+})();
 const sanitizeResponsesToolSchema = (readEnv("BELLDANDY_RESPONSES_SANITIZE_TOOL_SCHEMA") ?? "false") === "true";
 const openaiMaxRetriesRaw = readEnv("BELLDANDY_OPENAI_MAX_RETRIES");
 const openaiMaxRetries = openaiMaxRetriesRaw ? Math.max(0, parseInt(openaiMaxRetriesRaw, 10) || 0) : 0;
@@ -1490,6 +1519,8 @@ const primaryModelConfig = {
   model: openaiModel ?? "",
   protocol: agentProtocol,
   wireApi: openaiWireApi,
+  thinking: openaiThinking,
+  reasoningEffort: openaiReasoningEffort,
 };
 
 let primaryBootstrapCooldownUntil = 0;
@@ -1508,9 +1539,15 @@ async function runPrimaryWarmupProbe(): Promise<void> {
   const base = /\/v\d+$/.test(trimmedBase) ? trimmedBase : `${trimmedBase}/v1`;
   const isResponsesWireApi = openaiWireApi === "responses";
   const url = isResponsesWireApi ? `${base}/responses` : `${base}/chat/completions`;
-  const body = isResponsesWireApi
+  const body: Record<string, unknown> = isResponsesWireApi
     ? { model: openaiModel, input: "ping", max_output_tokens: 8 }
     : { model: openaiModel, messages: [{ role: "user", content: "ping" }], max_tokens: 8 };
+  if (openaiThinking) {
+    body.thinking = openaiThinking;
+  }
+  if (openaiReasoningEffort) {
+    body.reasoning_effort = openaiReasoningEffort;
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), primaryWarmupTimeoutMs);
@@ -1781,6 +1818,8 @@ agentRegistry = agentProvider === "openai"
         ...(resolvedRequestTimeoutMs !== undefined && { timeoutMs: resolvedRequestTimeoutMs }),
         maxRetries: resolvedMaxRetries,
         retryBackoffMs: resolvedRetryBackoffMs,
+        thinking: resolved.thinking,
+        reasoningEffort: resolved.reasoningEffort,
         ...(resolvedProxyUrl && { proxyUrl: resolvedProxyUrl }),
         ...(bootstrapProfileCooldowns && { bootstrapProfileCooldowns }),
         fallbacks: modelFallbacks.length > 0 ? modelFallbacks : undefined,
@@ -1823,6 +1862,8 @@ agentRegistry = agentProvider === "openai"
       ...(resolvedRequestTimeoutMs !== undefined && { timeoutMs: resolvedRequestTimeoutMs }),
       maxRetries: resolvedMaxRetries,
       retryBackoffMs: resolvedRetryBackoffMs,
+      thinking: resolved.thinking,
+      reasoningEffort: resolved.reasoningEffort,
       ...(resolvedProxyUrl && { proxyUrl: resolvedProxyUrl }),
       ...(bootstrapProfileCooldowns && { bootstrapProfileCooldowns }),
       ...(profileMaxOutputTokens > 0 && { maxOutputTokens: profileMaxOutputTokens }),

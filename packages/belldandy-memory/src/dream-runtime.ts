@@ -36,6 +36,18 @@ function truncateText(value: unknown, maxLength = 240): string | undefined {
   return normalized.length > maxLength ? `${normalized.slice(0, Math.max(0, maxLength - 3))}...` : normalized;
 }
 
+function applyOpenAICompatibleReasoningConfig(
+  payload: Record<string, unknown>,
+  profile: Pick<DreamRuntimeOptions, "thinking" | "reasoningEffort">,
+): void {
+  if (profile.thinking) {
+    payload.thinking = profile.thinking;
+  }
+  if (profile.reasoningEffort) {
+    payload.reasoning_effort = profile.reasoningEffort;
+  }
+}
+
 function formatDateOnlyUtc(value: Date): string {
   const year = value.getUTCFullYear();
   const month = String(value.getUTCMonth() + 1).padStart(2, "0");
@@ -53,6 +65,34 @@ function serializeError(error: unknown): string {
     return truncateText(error.message, 240) ?? error.name;
   }
   return truncateText(String(error), 240) ?? "Unknown dream runtime error";
+}
+
+class DreamEmptyContentError extends Error {
+  readonly finishReason?: string;
+  readonly hasReasoningContent: boolean;
+  readonly reasoningContentLength: number;
+  readonly maxTokens: number;
+
+  constructor(input: {
+    finishReason?: string;
+    hasReasoningContent: boolean;
+    reasoningContentLength: number;
+    maxTokens: number;
+  }) {
+    const diagnostics = [
+      `finish_reason=${input.finishReason ?? "unknown"}`,
+      `reasoning_content=${input.hasReasoningContent ? "present" : "absent"}`,
+    ];
+    if (input.finishReason === "length") {
+      diagnostics.push(`max_tokens=${input.maxTokens}`);
+    }
+    super(`Dream LLM returned empty content (${diagnostics.join(", ")}).`);
+    this.name = "DreamEmptyContentError";
+    this.finishReason = input.finishReason;
+    this.hasReasoningContent = input.hasReasoningContent;
+    this.reasoningContentLength = input.reasoningContentLength;
+    this.maxTokens = input.maxTokens;
+  }
 }
 
 function toIsoMs(value: string | undefined): number | null {
@@ -355,7 +395,10 @@ export class DreamRuntime {
   private readonly model: string;
   private readonly baseUrl: string;
   private readonly apiKey: string;
+  private readonly thinking?: Record<string, unknown>;
+  private readonly reasoningEffort?: string;
   private readonly maxTokens: number;
+  private readonly timeoutMs: number;
   private readonly temperature: number;
   private readonly obsidianMirror?: DreamObsidianMirrorOptions;
   private readonly buildInputSnapshot: DreamRuntimeOptions["buildInputSnapshot"];
@@ -373,7 +416,10 @@ export class DreamRuntime {
     this.model = normalizeText(options.model) ?? "";
     this.baseUrl = (normalizeText(options.baseUrl) ?? "").replace(/\/+$/, "");
     this.apiKey = normalizeText(options.apiKey) ?? "";
+    this.thinking = options.thinking && typeof options.thinking === "object" ? { ...options.thinking } : undefined;
+    this.reasoningEffort = normalizeText(options.reasoningEffort);
     this.maxTokens = Math.max(400, Math.floor(options.maxTokens ?? 1_000));
+    this.timeoutMs = Math.max(1_000, Math.floor(options.timeoutMs ?? 120_000));
     this.temperature = Math.max(0, Math.min(1, Number.isFinite(options.temperature) ? Number(options.temperature) : 0.3));
     this.obsidianMirror = options.obsidianMirror
       ? {
@@ -798,22 +844,68 @@ export class DreamRuntime {
   }
 
   private async callModel(system: string, user: string): Promise<string> {
-    const response = await fetch(buildOpenAIChatCompletionsUrl(this.baseUrl), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.model,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        max_tokens: this.maxTokens,
-        temperature: this.temperature,
-      }),
+    try {
+      return await this.callModelOnce(system, user, this.maxTokens);
+    } catch (error) {
+      if (
+        error instanceof DreamEmptyContentError
+        && error.finishReason === "length"
+        && error.hasReasoningContent
+      ) {
+        const retryMaxTokens = Math.min(Math.max(error.maxTokens * 2, 4_000), 8_000);
+        if (retryMaxTokens > error.maxTokens) {
+          this.logger?.warn?.("dream llm exhausted token budget on reasoning, retrying with larger budget", {
+            model: this.model,
+            previousMaxTokens: error.maxTokens,
+            retryMaxTokens,
+            finishReason: error.finishReason ?? null,
+            reasoningContentLength: error.reasoningContentLength,
+            thinkingType: normalizeText((this.thinking as { type?: unknown } | undefined)?.type) ?? null,
+            reasoningEffort: this.reasoningEffort ?? null,
+          });
+          return this.callModelOnce(system, user, retryMaxTokens);
+        }
+      }
+      throw error;
+    }
+  }
+
+  private async callModelOnce(system: string, user: string, maxTokens: number): Promise<string> {
+    const payload: Record<string, unknown> = {
+      model: this.model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      max_tokens: maxTokens,
+      temperature: this.temperature,
+    };
+    applyOpenAICompatibleReasoningConfig(payload, {
+      thinking: this.thinking,
+      reasoningEffort: this.reasoningEffort,
     });
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    let response: Response;
+    try {
+      response = await fetch(buildOpenAIChatCompletionsUrl(this.baseUrl), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error && typeof error === "object" && "name" in error && (error as { name?: unknown }).name === "AbortError") {
+        throw new Error(`Dream LLM call timed out after ${this.timeoutMs}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!response.ok) {
       const text = await response.text().catch(() => "");
@@ -821,12 +913,35 @@ export class DreamRuntime {
     }
 
     const data = await response.json() as {
-      choices?: Array<{ message?: { content?: string } }>;
+      choices?: Array<{
+        finish_reason?: string | null;
+        message?: {
+          content?: string | null;
+          reasoning_content?: string | null;
+        };
+      }>;
     };
-    const content = data.choices?.[0]?.message?.content;
-    if (!normalizeText(content)) {
-      throw new Error("Dream LLM returned empty content.");
+    const choice = data.choices?.[0];
+    const content = normalizeText(choice?.message?.content);
+    const reasoningContent = normalizeText(choice?.message?.reasoning_content);
+    const finishReason = normalizeText(choice?.finish_reason);
+    if (!content) {
+      this.logger?.warn?.("dream llm returned empty assistant content", {
+        model: this.model,
+        finishReason: finishReason ?? null,
+        hasReasoningContent: Boolean(reasoningContent),
+        reasoningContentLength: reasoningContent?.length ?? 0,
+        maxTokens,
+        thinkingType: normalizeText((this.thinking as { type?: unknown } | undefined)?.type) ?? null,
+        reasoningEffort: this.reasoningEffort ?? null,
+      });
+      throw new DreamEmptyContentError({
+        finishReason,
+        hasReasoningContent: Boolean(reasoningContent),
+        reasoningContentLength: reasoningContent?.length ?? 0,
+        maxTokens,
+      });
     }
-    return content!;
+    return content;
   }
 }

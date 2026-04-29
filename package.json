@@ -38,6 +38,7 @@
     "smoke:install-script-build:wsl": "node packages/star-sanctuary-distribution/scripts/smoke-install-script-build-wsl.mjs",
     "smoke:install-script-lifecycle:wsl": "node packages/star-sanctuary-distribution/scripts/smoke-install-script-lifecycle-wsl.mjs",
     "smoke:install-script-rollback:wsl": "node packages/star-sanctuary-distribution/scripts/smoke-install-script-rollback-wsl.mjs",
+    "smoke:start-sh-envdir:wsl": "node packages/star-sanctuary-distribution/scripts/smoke-start-sh-envdir-wsl.mjs",
     "smoke:install-journey": "node packages/star-sanctuary-distribution/scripts/smoke-install-journey.mjs",
     "smoke:install-state": "node packages/star-sanctuary-distribution/scripts/smoke-install-state.mjs",
     "smoke:portable": "node packages/star-sanctuary-distribution/scripts/smoke-portable.mjs",

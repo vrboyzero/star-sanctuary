@@ -222,6 +222,11 @@ export function resolveRuntimeEnvDir(params: {
   baseEnv: NodeJS.ProcessEnv;
   fallbackEnvDir: string;
 }): string {
+  const explicitEnvDir = readTrimmedEnv(params.baseEnv, "STAR_SANCTUARY_ENV_DIR")
+    ?? readTrimmedEnv(params.baseEnv, "BELLDANDY_ENV_DIR");
+  if (explicitEnvDir) {
+    return explicitEnvDir;
+  }
   return params.fallbackEnvDir;
 }
 

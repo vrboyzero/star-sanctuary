@@ -39,7 +39,7 @@ function ensureSingleExeEnv(params: {
   return env;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const baseEnv = { ...process.env };
   const stateDir = resolveStateDir(baseEnv);
   const envDir = path.resolve(resolveRuntimeEnvDir({
@@ -122,13 +122,17 @@ function main(): void {
     console.warn(`[Star Sanctuary Single-Exe] Skipped runtime cleanup for ${skippedPath.path}: ${skippedPath.reason}`);
   }
 
-  startGatewaySupervisor({
+  await startGatewaySupervisor({
     label: "Star Sanctuary Single-Exe",
     gatewayEntry,
     runtimeExecutable: runningFromSea ? embeddedNodeRuntime : undefined,
     cwd: envDir,
+    stateDir: envDir,
     env,
   });
 }
 
-main();
+void main().catch((error) => {
+  console.error(`[Star Sanctuary Single-Exe] Failed to start gateway: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+});

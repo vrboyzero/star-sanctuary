@@ -175,7 +175,15 @@ export type GatewayServerOptions = {
   /** Multi-Agent registry (takes precedence over agentFactory when agentId is specified) */
   agentRegistry?: AgentRegistry;
   /** 主模型配置（用于 models.list 返回默认模型） */
-  primaryModelConfig?: { baseUrl: string; apiKey: string; model: string; protocol?: string; wireApi?: string };
+  primaryModelConfig?: {
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+    protocol?: string;
+    wireApi?: string;
+    thinking?: Record<string, unknown>;
+    reasoningEffort?: string;
+  };
   /** 备用模型配置（来自 models.json） */
   modelFallbacks?: ModelProfile[];
   /** provider 排序偏好（来自 env/config） */
@@ -414,6 +422,36 @@ function readEnvTrimmed(varName: string): string | undefined {
   if (!raw) return undefined;
   const trimmed = raw.trim();
   return trimmed || undefined;
+}
+
+function parseThinkingConfigFromEnv(varName: string): Record<string, unknown> | undefined {
+  const raw = readEnvTrimmed(varName);
+  if (!raw) return undefined;
+  if (raw.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+      const record = parsed as Record<string, unknown>;
+      const type = typeof record.type === "string" ? record.type.trim() : "";
+      if (!type) return undefined;
+      return {
+        ...record,
+        type,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+  return { type: raw };
+}
+
+function shouldDisableDreamThinkingByDefault(input: {
+  primaryThinking?: Record<string, unknown>;
+}): boolean {
+  const type = typeof input.primaryThinking?.type === "string"
+    ? input.primaryThinking.type.trim().toLowerCase()
+    : "";
+  return type === "enabled";
 }
 
 function buildDurableExtractionUnavailableError(
@@ -951,6 +989,10 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   const dreamObsidianMirrorEnabled = String(process.env.BELLDANDY_DREAM_OBSIDIAN_ENABLED ?? "false").trim().toLowerCase() === "true";
   const dreamObsidianMirrorVaultPath = readEnvTrimmed("BELLDANDY_DREAM_OBSIDIAN_VAULT_PATH");
   const dreamObsidianMirrorRootDir = readEnvTrimmed("BELLDANDY_DREAM_OBSIDIAN_ROOT_DIR");
+  const dreamOpenAIThinking = parseThinkingConfigFromEnv("BELLDANDY_DREAM_OPENAI_THINKING");
+  const dreamOpenAIReasoningEffort = readEnvTrimmed("BELLDANDY_DREAM_OPENAI_REASONING_EFFORT");
+  const dreamOpenAITimeoutMs = parsePositiveIntEnv("BELLDANDY_DREAM_OPENAI_TIMEOUT_MS", 120_000);
+  const dreamOpenAIMaxTokens = parsePositiveIntEnv("BELLDANDY_DREAM_OPENAI_MAX_TOKENS", 1_000);
   const commonsObsidianEnabled = String(
     process.env.BELLDANDY_COMMONS_OBSIDIAN_ENABLED
     ?? process.env.BELLDANDY_DREAM_OBSIDIAN_ENABLED
@@ -990,12 +1032,22 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     }
 
     const dreamStateDir = managerRecord?.stateDir ?? stateDir;
+    const dreamThinking = dreamOpenAIThinking
+      ?? (shouldDisableDreamThinkingByDefault({
+        primaryThinking: opts.primaryModelConfig?.thinking,
+      })
+        ? { type: "disabled" }
+        : undefined);
     const runtime = new DreamRuntime({
       stateDir: dreamStateDir,
       agentId: resolvedAgentId,
       model: opts.primaryModelConfig?.model,
       baseUrl: opts.primaryModelConfig?.baseUrl,
       apiKey: opts.primaryModelConfig?.apiKey,
+      thinking: dreamThinking,
+      reasoningEffort: dreamOpenAIReasoningEffort,
+      maxTokens: dreamOpenAIMaxTokens,
+      timeoutMs: dreamOpenAITimeoutMs,
       obsidianMirror: {
         enabled: dreamObsidianMirrorEnabled,
         vaultPath: dreamObsidianMirrorVaultPath,
