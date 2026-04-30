@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "隐藏了内容管理下的渠道配置按钮"
+git commit -m "实现多模态中图片、视频、语音的自动处理，QQ语音对接中"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

@@ -1007,11 +1007,40 @@ describe("doctor observability formatting", () => {
           {
             id: "native_desktop",
             headline: "native_desktop; status=degraded; helper=ready; devices 1/1 available, busy=1; issues error=0, warning=1",
+            configured: true,
+            registered: true,
+            status: "degraded",
+            permissionState: "granted",
+            helperStatus: "ready",
             launchConfig: {
+              transport: "stdio",
               command: "C:/Program Files/nodejs/node.exe",
               helperEntry: "packages/belldandy-skills/dist/builtin/multimedia/camera-native-desktop-helper.js",
               cwd: "E:/project/star-sanctuary",
+              powershellCommand: "powershell.exe",
+              ffmpegCommand: "ffmpeg.exe",
             },
+            capabilities: {
+              list: true,
+              snapshot: true,
+              screenTargetList: true,
+              screenCapture: true,
+              displayCapture: true,
+              windowCapture: true,
+              regionCapture: true,
+            },
+            issueCounts: {
+              info: 0,
+              warning: 1,
+              error: 0,
+            },
+            issues: [
+              {
+                code: "device_busy",
+                severity: "warning",
+                message: "OBSBOT Tiny 2 StreamCamera is currently busy.",
+              },
+            ],
             healthCheck: {
               provider: "native_desktop",
               status: "warn",
@@ -1064,6 +1093,8 @@ describe("doctor observability formatting", () => {
               ],
             },
             metadata: {
+              helperStatus: "ready",
+              helperVersion: "0.1.0",
               aliasMemory: {
                 entryCount: 1,
                 observedCount: 1,
@@ -1460,6 +1491,17 @@ describe("doctor observability formatting", () => {
     expect(lines.join("\n")).toContain("failure codes: device_busy:2");
     expect(lines.join("\n")).toContain("recovery actions: now/close_competing_app:关闭正在占用摄像头的会议或录制软件后重试。 | next/retry:释放占用后最多重试一次，再观察 camera runtime 状态。");
     expect(lines.join("\n")).toContain("recovery: 关闭正在占用摄像头的会议或录制软件后重试。");
+    expect(lines.join("\n")).toContain("Native Desktop Helper");
+    expect(lines.join("\n")).toContain("configured yes");
+    expect(lines.join("\n")).toContain("helper ready");
+    expect(lines.join("\n")).toContain("PowerShell ready");
+    expect(lines.join("\n")).toContain("FFmpeg ready");
+    expect(lines.join("\n")).toContain("version 0.1.0");
+    expect(lines.join("\n")).toContain("status: provider=degraded, helper=ready, permission=granted, registered=yes, configured=yes");
+    expect(lines.join("\n")).toContain("launch: transport=stdio, command=C:/Program Files/nodejs/node.exe, entry=packages/belldandy-skills/dist/builtin/multimedia/camera-native-desktop-helper.js, cwd=E:/project/star-sanctuary");
+    expect(lines.join("\n")).toContain("toolchain: powershell=powershell.exe (ready), ffmpeg=ffmpeg.exe (ready)");
+    expect(lines.join("\n")).toContain("capabilities: camera_list=yes, camera_snapshot=yes, screen_targets=yes, screen_capture=yes, display_capture=yes, window_capture=yes, region_capture=yes");
+    expect(lines.join("\n")).toContain("latest issue: device_busy / OBSBOT Tiny 2 StreamCamera is currently busy.");
     expect(lines.join("\n")).toContain("Agent Stop Runtime");
     expect(lines.join("\n")).toContain("2 stop requests");
     expect(lines.join("\n")).toContain("1 still running after stop");

@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import WebSocket from "ws";
 import { withToolContract } from "../../tool-contract.js";
 import { raceWithAbort, sleepWithAbort, throwIfAborted, toAbortError } from "../../abort-utils.js";
+import { understandCapturedImageArtifact } from "../multimedia/captured-image-understand.js";
 
 // Logger interface to avoid circular dependency
 interface Logger {
@@ -626,8 +627,40 @@ export const browserScreenshotTool: Tool = withToolContract({
 
             throwIfAborted(context.abortSignal);
             await page.screenshot({ path: filepath });
+            const imageUnderstanding = await understandCapturedImageArtifact({
+                filePath: filepath,
+                mimeType: "image/png",
+                stateDir: context.stateDir,
+                abortSignal: context.abortSignal,
+                autoUnderstandEnvName: "BELLDANDY_BROWSER_SCREENSHOT_AUTO_UNDERSTAND",
+            });
+            const payload = {
+                path: filepath,
+                pageUrl: typeof page.url === "function" ? page.url() : undefined,
+                imageUnderstandingStatus: imageUnderstanding.status,
+                ...(imageUnderstanding.status === "completed"
+                    ? {
+                        imageUnderstandingPreview: imageUnderstanding.preview,
+                        imageUnderstanding: imageUnderstanding.result,
+                    }
+                    : {}),
+                ...(imageUnderstanding.status === "failed"
+                    ? {
+                        imageUnderstandingError: imageUnderstanding.error,
+                    }
+                    : {}),
+            };
 
-            return success("unknown", "browser_screenshot", `Screenshot saved to ${filepath}`, start);
+            return {
+                id: "unknown",
+                name: "browser_screenshot",
+                success: true,
+                output: JSON.stringify(payload, null, 2),
+                durationMs: Date.now() - start,
+                metadata: {
+                    imageUnderstandingStatus: imageUnderstanding.status,
+                },
+            };
         } catch (err) {
             return failure("unknown", "browser_screenshot", err, start);
         }

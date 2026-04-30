@@ -765,6 +765,7 @@ test("config.update accepts final cleanup prompt and multimedia env settings", a
           BELLDANDY_SUB_AGENT_MAX_QUEUE_SIZE: "10",
           BELLDANDY_SUB_AGENT_TIMEOUT_MS: "120000",
           BELLDANDY_SUB_AGENT_MAX_DEPTH: "2",
+          BELLDANDY_TTS_MODEL: "qwen3-tts-plus",
           BELLDANDY_IMAGE_ENABLED: "true",
           BELLDANDY_IMAGE_PROVIDER: "openai",
           BELLDANDY_IMAGE_OPENAI_API_KEY: "image-secret",
@@ -772,7 +773,23 @@ test("config.update accepts final cleanup prompt and multimedia env settings", a
           BELLDANDY_IMAGE_MODEL: "gpt-image-2",
           BELLDANDY_IMAGE_OUTPUT_FORMAT: "png",
           BELLDANDY_IMAGE_TIMEOUT_MS: "60000",
+          BELLDANDY_IMAGE_UNDERSTAND_ENABLED: "true",
+          BELLDANDY_IMAGE_UNDERSTAND_OPENAI_API_KEY: "vision-secret",
+          BELLDANDY_IMAGE_UNDERSTAND_OPENAI_BASE_URL: "https://vision.example.com/v1",
+          BELLDANDY_IMAGE_UNDERSTAND_MODEL: "gpt-4.1-mini",
+          BELLDANDY_IMAGE_UNDERSTAND_TIMEOUT_MS: "45000",
+          BELLDANDY_IMAGE_UNDERSTAND_AUTO_ON_ATTACHMENT: "false",
+          BELLDANDY_BROWSER_SCREENSHOT_AUTO_UNDERSTAND: "false",
+          BELLDANDY_CAMERA_SNAP_AUTO_UNDERSTAND: "true",
+          BELLDANDY_SCREEN_CAPTURE_AUTO_UNDERSTAND: "false",
+          BELLDANDY_VIDEO_UNDERSTAND_ENABLED: "true",
+          BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY: "video-secret",
+          BELLDANDY_VIDEO_UNDERSTAND_OPENAI_BASE_URL: "https://video.example.com/v1",
+          BELLDANDY_VIDEO_UNDERSTAND_MODEL: "kimi-k2.5",
+          BELLDANDY_VIDEO_UNDERSTAND_TIMEOUT_MS: "90000",
+          BELLDANDY_VIDEO_UNDERSTAND_AUTO_ON_ATTACHMENT: "true",
           BELLDANDY_STT_PROVIDER: "groq",
+          BELLDANDY_STT_MODEL: "whisper-large-v3",
           BELLDANDY_STT_LANGUAGE: "zh",
           BELLDANDY_STT_GROQ_API_KEY: "gsk-secret",
           BELLDANDY_STT_GROQ_BASE_URL: "https://api.groq.com/openai/v1",
@@ -794,15 +811,29 @@ test("config.update accepts final cleanup prompt and multimedia env settings", a
     expect(readRes.payload?.config?.BELLDANDY_COMPACTION_ENABLED).toBe("true");
     expect(readRes.payload?.config?.BELLDANDY_COMPACTION_API_KEY).toBe("[REDACTED]");
     expect(readRes.payload?.config?.BELLDANDY_DANGEROUS_TOOLS_ENABLED).toBe("true");
+    expect(readRes.payload?.config?.BELLDANDY_TTS_MODEL).toBe("qwen3-tts-plus");
     expect(readRes.payload?.config?.BELLDANDY_IMAGE_ENABLED).toBe("true");
     expect(readRes.payload?.config?.BELLDANDY_IMAGE_OPENAI_API_KEY).toBe("[REDACTED]");
+    expect(readRes.payload?.config?.BELLDANDY_IMAGE_UNDERSTAND_OPENAI_API_KEY).toBe("[REDACTED]");
+    expect(readRes.payload?.config?.BELLDANDY_BROWSER_SCREENSHOT_AUTO_UNDERSTAND).toBe("false");
+    expect(readRes.payload?.config?.BELLDANDY_CAMERA_SNAP_AUTO_UNDERSTAND).toBe("true");
+    expect(readRes.payload?.config?.BELLDANDY_SCREEN_CAPTURE_AUTO_UNDERSTAND).toBe("false");
+    expect(readRes.payload?.config?.BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY).toBe("[REDACTED]");
+    expect(readRes.payload?.config?.BELLDANDY_STT_MODEL).toBe("whisper-large-v3");
     expect(readRes.payload?.config?.BELLDANDY_STT_GROQ_API_KEY).toBe("[REDACTED]");
     expect(readRes.payload?.config?.BELLDANDY_ROOM_MEMBERS_CACHE_TTL).toBe("300000");
 
     const envLocalContent = await fs.promises.readFile(path.join(envDir, ".env.local"), "utf-8");
     expect(envLocalContent).toContain('BELLDANDY_COMPACTION_API_KEY="compaction-secret"');
     expect(envLocalContent).toContain('BELLDANDY_DANGEROUS_TOOLS_ENABLED="true"');
+    expect(envLocalContent).toContain('BELLDANDY_TTS_MODEL="qwen3-tts-plus"');
     expect(envLocalContent).toContain('BELLDANDY_IMAGE_OPENAI_API_KEY="image-secret"');
+    expect(envLocalContent).toContain('BELLDANDY_IMAGE_UNDERSTAND_OPENAI_API_KEY="vision-secret"');
+    expect(envLocalContent).toContain('BELLDANDY_BROWSER_SCREENSHOT_AUTO_UNDERSTAND="false"');
+    expect(envLocalContent).toContain('BELLDANDY_CAMERA_SNAP_AUTO_UNDERSTAND="true"');
+    expect(envLocalContent).toContain('BELLDANDY_SCREEN_CAPTURE_AUTO_UNDERSTAND="false"');
+    expect(envLocalContent).toContain('BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY="video-secret"');
+    expect(envLocalContent).toContain('BELLDANDY_STT_MODEL="whisper-large-v3"');
     expect(envLocalContent).toContain('BELLDANDY_STT_GROQ_API_KEY="gsk-secret"');
     expect(envLocalContent).toContain('BELLDANDY_ROOM_INJECT_THRESHOLD="10"');
   } finally {

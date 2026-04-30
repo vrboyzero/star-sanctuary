@@ -219,4 +219,99 @@ describe("DiscordChannel", () => {
     expect(sent).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("cascades audio attachments through agent content parts and outbound reply", async () => {
+    const sendTyping = vi.fn(async () => {});
+    const send = vi.fn(async () => {});
+    const eventListener = vi.fn();
+    const upsert = vi.fn(async () => {});
+    const run = vi.fn(async function* (input: any) {
+      yield {
+        type: "final" as const,
+        text: `已收到音频附件: ${input.content[0]?.text ?? ""}`,
+      };
+    });
+
+    const channel = new DiscordChannel({
+      botToken: "discord-token",
+      agent: { run } as any,
+      currentConversationBindingStore: {
+        upsert,
+        async get() {
+          return undefined;
+        },
+        async getLatestByChannel() {
+          return undefined;
+        },
+      },
+    });
+    channel.addEventListener(eventListener);
+
+    const message = {
+      id: "discord-audio-1",
+      author: {
+        id: "user-a",
+        username: "Alice",
+        bot: false,
+      },
+      content: "",
+      channelId: "dm-a",
+      guildId: null,
+      attachments: new Map([
+        ["att-1", {
+          name: "voice.ogg",
+          url: "https://cdn.example.com/voice.ogg",
+          contentType: "audio/ogg",
+        }],
+      ]),
+      mentions: {
+        users: [],
+        has: () => false,
+      },
+      channel: {
+        isTextBased: () => true,
+        sendTyping,
+        send,
+      },
+      reply: vi.fn(async () => {}),
+    };
+
+    await (channel as any).handleMessage(message);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({
+      text: "",
+      conversationId: "dm-a",
+      content: [
+        {
+          type: "text",
+          text: "[用户发送了音频文件: voice.ogg]",
+        },
+      ],
+      meta: expect.objectContaining({
+        channel: "discord",
+        userId: "user-a",
+        username: "Alice",
+        channelId: "dm-a",
+        sessionScope: "per-peer",
+        sessionKey: "channel=discord:scope=per-peer:chatKind=dm:chat=dm-a:peer=user-a",
+        legacyConversationId: "dm-a",
+      }),
+    }));
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(sendTyping).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith("已收到音频附件: [用户发送了音频文件: voice.ogg]");
+    expect(eventListener).toHaveBeenCalledWith(expect.objectContaining({
+      type: "media_received",
+      channel: "discord",
+      messageId: "discord-audio-1",
+      chatId: "dm-a",
+      mediaType: "audio",
+    }));
+    expect(eventListener).toHaveBeenCalledWith(expect.objectContaining({
+      type: "message_sent",
+      channel: "discord",
+      chatId: "dm-a",
+    }));
+  });
 });

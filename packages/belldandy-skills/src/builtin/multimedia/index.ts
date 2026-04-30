@@ -1,16 +1,47 @@
 import type { Tool } from "../../types.js";
 import { withToolContract } from "../../tool-contract.js";
 import { imageGenerateTool as baseImageGenerateTool } from "./image.js";
+import {
+  imageUnderstandTool as baseImageUnderstandTool,
+  readImageUnderstandConfig,
+  understandImageFile,
+} from "./image-understand.js";
+import type { ImageUnderstandConfig, ImageUnderstandOptions, ImageUnderstandResult } from "./image-understand.js";
+import {
+  createMediaFingerprint,
+  createMediaFingerprintFromFile,
+  readCachedAudioTranscription,
+  readCachedImageUnderstanding,
+  writeCachedImageUnderstanding,
+  writeCachedAudioTranscription,
+  readCachedVideoUnderstanding,
+  writeCachedVideoUnderstanding,
+} from "./understanding-cache.js";
+import type {
+  CachedAudioTranscriptionRecord,
+  CachedImageUnderstandingRecord,
+  CachedVideoUnderstandingRecord,
+} from "./understanding-cache.js";
+import {
+  videoUnderstandTool as baseVideoUnderstandTool,
+  readVideoUnderstandConfig,
+  understandVideoFile,
+} from "./video-understand.js";
+import type { VideoUnderstandConfig, VideoUnderstandOptions, VideoUnderstandResult } from "./video-understand.js";
 import { textToSpeechTool as baseTextToSpeechTool } from "./tts.js";
 import { synthesizeSpeech } from "./tts-synthesize.js";
 import type { SynthesizeResult, SynthesizeOptions } from "./tts-synthesize.js";
-import { transcribeSpeech } from "./stt-transcribe.js";
-import type { TranscribeResult, TranscribeOptions } from "./stt-transcribe.js";
+import { transcribeSpeech, transcribeSpeechWithCache } from "./stt-transcribe.js";
+import type { TranscribeResult, TranscribeOptions, TranscribeWithCacheResult } from "./stt-transcribe.js";
 import {
   cameraDeviceMemoryTool as baseCameraDeviceMemoryTool,
   cameraListTool as baseCameraListTool,
   cameraSnapTool as baseCameraSnapTool,
 } from "./camera.js";
+import {
+  screenCaptureTool as baseScreenCaptureTool,
+  screenListTargetsTool as baseScreenListTargetsTool,
+} from "./screen.js";
 export {
   buildCameraRuntimeDoctorReport,
 } from "./camera-doctor.js";
@@ -27,12 +58,14 @@ function withMultimediaContract(
     safeScopes: readonly ("remote-safe" | "bridge-safe" | "local-safe")[];
     riskLevel?: "low" | "medium" | "high";
     needsPermission?: boolean;
+    isReadOnly?: boolean;
+    isConcurrencySafe?: boolean;
   },
 ): Tool {
   return withToolContract(tool, {
     family: "other",
-    isReadOnly: false,
-    isConcurrencySafe: false,
+    isReadOnly: options.isReadOnly ?? false,
+    isConcurrencySafe: options.isConcurrencySafe ?? false,
     needsPermission: options.needsPermission ?? true,
     riskLevel: options.riskLevel ?? "medium",
     channels: ["gateway", "web"],
@@ -50,14 +83,45 @@ export const imageGenerateTool = withMultimediaContract(baseImageGenerateTool, {
   activityDescription: "Generate an image from a text prompt",
   safeScopes: ["remote-safe"],
 });
+export const imageUnderstandTool = withMultimediaContract(baseImageUnderstandTool, {
+  activityDescription: "Analyze an image file with the configured standalone image understanding model",
+  safeScopes: ["remote-safe", "local-safe"],
+  isReadOnly: true,
+  isConcurrencySafe: true,
+});
+export const videoUnderstandTool = withMultimediaContract(baseVideoUnderstandTool, {
+  activityDescription: "Analyze a video file with the configured standalone video understanding model",
+  safeScopes: ["remote-safe", "local-safe"],
+  isReadOnly: true,
+  isConcurrencySafe: true,
+});
 export const textToSpeechTool = withMultimediaContract(baseTextToSpeechTool, {
   activityDescription: "Synthesize spoken audio from text",
   safeScopes: ["remote-safe", "local-safe"],
 });
+export { readImageUnderstandConfig, understandImageFile };
+export type { ImageUnderstandConfig, ImageUnderstandOptions, ImageUnderstandResult };
+export { readVideoUnderstandConfig, understandVideoFile };
+export type { VideoUnderstandConfig, VideoUnderstandOptions, VideoUnderstandResult };
+export {
+  createMediaFingerprint,
+  createMediaFingerprintFromFile,
+  readCachedAudioTranscription,
+  readCachedImageUnderstanding,
+  writeCachedImageUnderstanding,
+  writeCachedAudioTranscription,
+  readCachedVideoUnderstanding,
+  writeCachedVideoUnderstanding,
+};
+export type {
+  CachedAudioTranscriptionRecord,
+  CachedImageUnderstandingRecord,
+  CachedVideoUnderstandingRecord,
+};
 export { synthesizeSpeech };
 export type { SynthesizeResult, SynthesizeOptions };
-export { transcribeSpeech };
-export type { TranscribeResult, TranscribeOptions };
+export { transcribeSpeech, transcribeSpeechWithCache };
+export type { TranscribeResult, TranscribeOptions, TranscribeWithCacheResult };
 export const cameraListTool = withMultimediaContract(baseCameraListTool, {
   activityDescription: "List available camera devices through the connected browser",
   safeScopes: ["bridge-safe"],
@@ -71,5 +135,17 @@ export const cameraDeviceMemoryTool = withMultimediaContract(baseCameraDeviceMem
 export const cameraSnapTool = withMultimediaContract(baseCameraSnapTool, {
   activityDescription: "Capture a camera snapshot through the connected browser",
   safeScopes: ["bridge-safe"],
+  riskLevel: "high",
+});
+export const screenListTargetsTool = withMultimediaContract(baseScreenListTargetsTool, {
+  activityDescription: "List available desktop display and window capture targets on the local machine",
+  safeScopes: ["local-safe"],
+  riskLevel: "medium",
+  isReadOnly: true,
+  isConcurrencySafe: true,
+});
+export const screenCaptureTool = withMultimediaContract(baseScreenCaptureTool, {
+  activityDescription: "Capture a desktop, display, window, or region screenshot on the local machine",
+  safeScopes: ["local-safe"],
   riskLevel: "high",
 });

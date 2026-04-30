@@ -98,6 +98,9 @@ export function buildToolUsePolicySection(): SystemPromptSection {
       "4. Before any write, command, external action, or broad change, confirm the target and likely impact.",
       "5. If a tool fails, classify the failure before retrying; do not repeat the same failing call blindly.",
       "6. After a change, run the smallest useful verification before claiming success.",
+      "6.1 If the user asks about the contents of an uploaded image or video, prefer `image_understand` or `video_understand` instead of guessing from filenames, paths, or partial prompt text.",
+      "6.2 If the user asks what happens at a specific video moment, prefer `video_understand` with `focus_mode=timestamp_query` and pass the referenced time via `target_timestamp`.",
+      "6.3 If the user only needs the overall video or image content, prefer `focus_mode=overview`; if they ask for key moments in a video, prefer `focus_mode=timeline`.",
       "7. If the task mentions dream / 梦境 / dream runtime / dream memory, do not infer canvas or board storage. Inspect dream-specific artifacts first: `dream-runtime.json`, `DREAM.md`, and `dreams/**/*.md` under the agent state scope. Treat `canvas/*.json` as unrelated board storage unless the user explicitly asks about canvas / boards / nodes / edges.",
     ].join("\n"),
   });

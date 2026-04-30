@@ -109,6 +109,7 @@ star-sanctuary/
 - `packages/belldandy-core/src/server-http-routes.ts`: `/health`、`/api/message`、webhook、静态资源
 - `packages/belldandy-core/src/query-runtime-artifact.ts`: `/generated` 产物 reveal，本地打开保存目录/定位文件
 - `packages/belldandy-core/src/query-runtime-message-send.ts`: `message.send` 主执行链、tool result metadata / `failureKind` / follow-up runtime marks 透传
+- `packages/belldandy-core/src/attachment-understanding-runner.ts`: 附件落盘、图片/视频自动识别摘要注入、音频转写缓存复用
 
 ### UI / WebChat
 - `apps/web/public/app.js`: 前端总装配
@@ -168,6 +169,7 @@ star-sanctuary/
 - `packages/belldandy-skills/src/tool-contract-v2.ts`: 工具治理契约与 V2 聚合
 - `packages/belldandy-skills/src/tool-contract-render.ts`: 工具治理 prompt 摘要渲染
 - `packages/belldandy-skills/src/builtin/`: 内置工具集合
+- `packages/belldandy-skills/src/builtin/multimedia/`: 图片生成、图片识别、视频识别、TTS/STT、摄像头与屏幕截图工具
 - `packages/belldandy-skills/src/skill-registry.ts`: skills 汇总与 eligibility
 - `packages/belldandy-plugins/src/registry.ts`: plugin 加载和 hooks 聚合
 - `packages/belldandy-mcp/src/manager.ts`: MCP server 连接管理

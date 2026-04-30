@@ -325,10 +325,29 @@ function createSettingsRefs(overrides = {}) {
     cfgImageModel: overrides.cfgImageModel || createInput(""),
     cfgImageOutputFormat: overrides.cfgImageOutputFormat || createInput(""),
     cfgImageTimeoutMs: overrides.cfgImageTimeoutMs || createInput(""),
+    cfgImageUnderstandEnabled: overrides.cfgImageUnderstandEnabled || createCheckbox(false),
+    cfgImageUnderstandApiKey: overrides.cfgImageUnderstandApiKey || createInput(""),
+    cfgImageUnderstandBaseUrl: overrides.cfgImageUnderstandBaseUrl || createInput(""),
+    cfgImageUnderstandModel: overrides.cfgImageUnderstandModel || createInput(""),
+    cfgImageUnderstandTimeoutMs: overrides.cfgImageUnderstandTimeoutMs || createInput(""),
+    cfgImageUnderstandAutoOnAttachment: overrides.cfgImageUnderstandAutoOnAttachment || createCheckbox(true),
+    cfgBrowserScreenshotAutoUnderstand: overrides.cfgBrowserScreenshotAutoUnderstand || createCheckbox(true),
+    cfgCameraSnapAutoUnderstand: overrides.cfgCameraSnapAutoUnderstand || createCheckbox(true),
+    cfgScreenCaptureAutoUnderstand: overrides.cfgScreenCaptureAutoUnderstand || createCheckbox(true),
+    cfgVideoUnderstandEnabled: overrides.cfgVideoUnderstandEnabled || createCheckbox(false),
+    cfgVideoUnderstandApiKey: overrides.cfgVideoUnderstandApiKey || createInput(""),
+    cfgVideoUnderstandBaseUrl: overrides.cfgVideoUnderstandBaseUrl || createInput(""),
+    cfgVideoUnderstandModel: overrides.cfgVideoUnderstandModel || createInput(""),
+    cfgVideoUnderstandTimeoutMs: overrides.cfgVideoUnderstandTimeoutMs || createInput(""),
+    cfgVideoUnderstandAutoOnAttachment: overrides.cfgVideoUnderstandAutoOnAttachment || createCheckbox(true),
     cfgSttProvider: overrides.cfgSttProvider || createInput(""),
+    cfgSttModel: overrides.cfgSttModel || createInput(""),
+    cfgSttOpenAiBaseUrl: overrides.cfgSttOpenAiBaseUrl || createInput(""),
+    cfgSttOpenAiApiKey: overrides.cfgSttOpenAiApiKey || createInput(""),
     cfgSttLanguage: overrides.cfgSttLanguage || createInput(""),
     cfgSttGroqApiKey: overrides.cfgSttGroqApiKey || createInput(""),
     cfgSttGroqBaseUrl: overrides.cfgSttGroqBaseUrl || createInput(""),
+    cfgQqSttFallbackProviders: overrides.cfgQqSttFallbackProviders || createInput(""),
     cfgCameraNativeHelperCommand: overrides.cfgCameraNativeHelperCommand || createInput(""),
     cfgCameraNativeHelperArgsJson: overrides.cfgCameraNativeHelperArgsJson || createInput(""),
     cfgCameraNativeHelperCwd: overrides.cfgCameraNativeHelperCwd || createInput(""),
@@ -1497,10 +1516,29 @@ describe("settings controller", () => {
       BELLDANDY_IMAGE_MODEL: "gpt-image-2",
       BELLDANDY_IMAGE_OUTPUT_FORMAT: "png",
       BELLDANDY_IMAGE_TIMEOUT_MS: "60000",
+      BELLDANDY_IMAGE_UNDERSTAND_ENABLED: "true",
+      BELLDANDY_IMAGE_UNDERSTAND_OPENAI_API_KEY: "[REDACTED]",
+      BELLDANDY_IMAGE_UNDERSTAND_OPENAI_BASE_URL: "https://vision.example.com/v1",
+      BELLDANDY_IMAGE_UNDERSTAND_MODEL: "gpt-4.1-mini",
+      BELLDANDY_IMAGE_UNDERSTAND_TIMEOUT_MS: "45000",
+      BELLDANDY_IMAGE_UNDERSTAND_AUTO_ON_ATTACHMENT: "false",
+      BELLDANDY_BROWSER_SCREENSHOT_AUTO_UNDERSTAND: "false",
+      BELLDANDY_CAMERA_SNAP_AUTO_UNDERSTAND: "true",
+      BELLDANDY_SCREEN_CAPTURE_AUTO_UNDERSTAND: "false",
+      BELLDANDY_VIDEO_UNDERSTAND_ENABLED: "true",
+      BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY: "[REDACTED]",
+      BELLDANDY_VIDEO_UNDERSTAND_OPENAI_BASE_URL: "https://video.example.com/v1",
+      BELLDANDY_VIDEO_UNDERSTAND_MODEL: "kimi-k2.5",
+      BELLDANDY_VIDEO_UNDERSTAND_TIMEOUT_MS: "90000",
+      BELLDANDY_VIDEO_UNDERSTAND_AUTO_ON_ATTACHMENT: "true",
       BELLDANDY_STT_PROVIDER: "groq",
+      BELLDANDY_STT_MODEL: "whisper-large-v3-turbo",
       BELLDANDY_STT_LANGUAGE: "zh",
+      BELLDANDY_STT_OPENAI_API_KEY: "[REDACTED]",
+      BELLDANDY_STT_OPENAI_BASE_URL: "https://audio.example.com/v1",
       BELLDANDY_STT_GROQ_API_KEY: "[REDACTED]",
       BELLDANDY_STT_GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      BELLDANDY_QQ_STT_FALLBACK_PROVIDERS: "openai,dashscope",
       BELLDANDY_ROOM_INJECT_THRESHOLD: "10",
       BELLDANDY_ROOM_MEMBERS_CACHE_TTL: "300000",
     });
@@ -1518,8 +1556,27 @@ describe("settings controller", () => {
     expect(refs.cfgSubAgentMaxDepth.value).toBe("2");
     expect(refs.cfgImageEnabled.checked).toBe(true);
     expect(refs.cfgImageApiKey.value).toBe("[REDACTED]");
+    expect(refs.cfgImageUnderstandEnabled.checked).toBe(true);
+    expect(refs.cfgImageUnderstandApiKey.value).toBe("[REDACTED]");
+    expect(refs.cfgImageUnderstandBaseUrl.value).toBe("https://vision.example.com/v1");
+    expect(refs.cfgImageUnderstandModel.value).toBe("gpt-4.1-mini");
+    expect(refs.cfgImageUnderstandTimeoutMs.value).toBe("45000");
+    expect(refs.cfgImageUnderstandAutoOnAttachment.checked).toBe(false);
+    expect(refs.cfgBrowserScreenshotAutoUnderstand.checked).toBe(false);
+    expect(refs.cfgCameraSnapAutoUnderstand.checked).toBe(true);
+    expect(refs.cfgScreenCaptureAutoUnderstand.checked).toBe(false);
+    expect(refs.cfgVideoUnderstandEnabled.checked).toBe(true);
+    expect(refs.cfgVideoUnderstandApiKey.value).toBe("[REDACTED]");
+    expect(refs.cfgVideoUnderstandBaseUrl.value).toBe("https://video.example.com/v1");
+    expect(refs.cfgVideoUnderstandModel.value).toBe("kimi-k2.5");
+    expect(refs.cfgVideoUnderstandTimeoutMs.value).toBe("90000");
+    expect(refs.cfgVideoUnderstandAutoOnAttachment.checked).toBe(true);
     expect(refs.cfgSttProvider.value).toBe("groq");
+    expect(refs.cfgSttModel.value).toBe("whisper-large-v3-turbo");
+    expect(refs.cfgSttOpenAiApiKey.value).toBe("[REDACTED]");
+    expect(refs.cfgSttOpenAiBaseUrl.value).toBe("https://audio.example.com/v1");
     expect(refs.cfgSttGroqApiKey.value).toBe("[REDACTED]");
+    expect(refs.cfgQqSttFallbackProviders.value).toBe("openai,dashscope");
     expect(refs.cfgRoomInjectThreshold.value).toBe("10");
     expect(refs.cfgRoomMembersCacheTtl.value).toBe("300000");
   });
@@ -1559,10 +1616,29 @@ describe("settings controller", () => {
       cfgImageModel: createInput(" gpt-image-2 "),
       cfgImageOutputFormat: createInput(" png "),
       cfgImageTimeoutMs: createInput("60000"),
+      cfgImageUnderstandEnabled: createCheckbox(true),
+      cfgImageUnderstandApiKey: createInput("vision-secret"),
+      cfgImageUnderstandBaseUrl: createInput(" https://vision.example.com/v1 "),
+      cfgImageUnderstandModel: createInput(" gpt-4.1-mini "),
+      cfgImageUnderstandTimeoutMs: createInput("45000"),
+      cfgImageUnderstandAutoOnAttachment: createCheckbox(false),
+      cfgBrowserScreenshotAutoUnderstand: createCheckbox(false),
+      cfgCameraSnapAutoUnderstand: createCheckbox(true),
+      cfgScreenCaptureAutoUnderstand: createCheckbox(false),
+      cfgVideoUnderstandEnabled: createCheckbox(true),
+      cfgVideoUnderstandApiKey: createInput("video-secret"),
+      cfgVideoUnderstandBaseUrl: createInput(" https://video.example.com/v1 "),
+      cfgVideoUnderstandModel: createInput(" kimi-k2.5 "),
+      cfgVideoUnderstandTimeoutMs: createInput("90000"),
+      cfgVideoUnderstandAutoOnAttachment: createCheckbox(true),
       cfgSttProvider: createInput(" groq "),
+      cfgSttModel: createInput(" whisper-large-v3-turbo "),
+      cfgSttOpenAiApiKey: createInput("stt-openai-secret"),
+      cfgSttOpenAiBaseUrl: createInput(" https://audio.example.com/v1 "),
       cfgSttLanguage: createInput(" zh "),
       cfgSttGroqApiKey: createInput("gsk-secret"),
       cfgSttGroqBaseUrl: createInput(" https://api.groq.com/openai/v1 "),
+      cfgQqSttFallbackProviders: createInput(" openai,dashscope "),
       cfgRoomInjectThreshold: createInput("10"),
       cfgRoomMembersCacheTtl: createInput("300000"),
     });
@@ -1620,10 +1696,29 @@ describe("settings controller", () => {
       BELLDANDY_IMAGE_MODEL: "gpt-image-2",
       BELLDANDY_IMAGE_OUTPUT_FORMAT: "png",
       BELLDANDY_IMAGE_TIMEOUT_MS: "60000",
+      BELLDANDY_IMAGE_UNDERSTAND_ENABLED: "true",
+      BELLDANDY_IMAGE_UNDERSTAND_OPENAI_API_KEY: "vision-secret",
+      BELLDANDY_IMAGE_UNDERSTAND_OPENAI_BASE_URL: "https://vision.example.com/v1",
+      BELLDANDY_IMAGE_UNDERSTAND_MODEL: "gpt-4.1-mini",
+      BELLDANDY_IMAGE_UNDERSTAND_TIMEOUT_MS: "45000",
+      BELLDANDY_IMAGE_UNDERSTAND_AUTO_ON_ATTACHMENT: "false",
+      BELLDANDY_BROWSER_SCREENSHOT_AUTO_UNDERSTAND: "false",
+      BELLDANDY_CAMERA_SNAP_AUTO_UNDERSTAND: "true",
+      BELLDANDY_SCREEN_CAPTURE_AUTO_UNDERSTAND: "false",
+      BELLDANDY_VIDEO_UNDERSTAND_ENABLED: "true",
+      BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY: "video-secret",
+      BELLDANDY_VIDEO_UNDERSTAND_OPENAI_BASE_URL: "https://video.example.com/v1",
+      BELLDANDY_VIDEO_UNDERSTAND_MODEL: "kimi-k2.5",
+      BELLDANDY_VIDEO_UNDERSTAND_TIMEOUT_MS: "90000",
+      BELLDANDY_VIDEO_UNDERSTAND_AUTO_ON_ATTACHMENT: "true",
       BELLDANDY_STT_PROVIDER: "groq",
+      BELLDANDY_STT_MODEL: "whisper-large-v3-turbo",
+      BELLDANDY_STT_OPENAI_API_KEY: "stt-openai-secret",
+      BELLDANDY_STT_OPENAI_BASE_URL: "https://audio.example.com/v1",
       BELLDANDY_STT_LANGUAGE: "zh",
       BELLDANDY_STT_GROQ_API_KEY: "gsk-secret",
       BELLDANDY_STT_GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      BELLDANDY_QQ_STT_FALLBACK_PROVIDERS: "openai,dashscope",
       BELLDANDY_ROOM_INJECT_THRESHOLD: "10",
       BELLDANDY_ROOM_MEMBERS_CACHE_TTL: "300000",
     });

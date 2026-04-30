@@ -7,6 +7,7 @@ import { buildAutoOpenTargetUrl, resolveLauncherSetupAuth } from "./launcher-aut
 import { startBrowserRelayRuntime, startCronRuntime, startHeartbeatRuntime } from "./gateway-background-runtime.js";
 import { createCapabilityPlanGenerator } from "./gateway-capability-runtime.js";
 import { createGatewayChannelsRuntime } from "./gateway-channels-runtime.js";
+import { createCachedChannelSttTranscribe } from "./gateway-channel-stt.js";
 import { parseConversationAllowedKinds, readEnv } from "./gateway-config.js";
 import { createGatewayPromptInspectionRuntime } from "./gateway-prompt-inspection-runtime.js";
 import {
@@ -141,7 +142,11 @@ import {
   cameraDeviceMemoryTool,
   cameraListTool,
   cameraSnapTool,
+  screenListTargetsTool,
+  screenCaptureTool,
   imageGenerateTool,
+  imageUnderstandTool,
+  videoUnderstandTool,
   textToSpeechTool,
   synthesizeSpeech,
   transcribeSpeech,
@@ -897,7 +902,11 @@ const gatewayToolPoolAssembler = new ToolPoolAssembler([
       cameraDeviceMemoryTool,
       cameraListTool,
       cameraSnapTool,
+      screenListTargetsTool,
+      screenCaptureTool,
       imageGenerateTool,
+      imageUnderstandTool,
+      videoUnderstandTool,
       textToSpeechTool,
     ],
   },
@@ -3060,6 +3069,11 @@ const sttTranscribe = async (opts: Parameters<typeof transcribeSpeech>[0]) => {
   }
   return result;
 };
+const cachedSttTranscribe = createCachedChannelSttTranscribe({
+  stateDir,
+  logger,
+  transcribe: transcribeSpeech,
+});
 const channelRuntime = createGatewayChannelsRuntime({
   stateDir,
   logger,
@@ -3076,7 +3090,7 @@ const channelRuntime = createGatewayChannelsRuntime({
   toolsEnabled,
   toolExecutor,
   serverBroadcast: (message) => serverBroadcast?.(message),
-  sttTranscribe,
+  sttTranscribe: cachedSttTranscribe,
   feishuAppId,
   feishuAppSecret,
   feishuAgentId,

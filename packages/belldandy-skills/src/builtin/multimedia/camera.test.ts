@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtimeMocks = vi.hoisted(() => ({
   normalizeCameraCaptureOptions: vi.fn((args: Record<string, unknown>) => args),
@@ -14,6 +18,11 @@ const aliasStateMocks = vi.hoisted(() => ({
   listCameraDeviceAliasMemoryEntries: vi.fn(),
   upsertCameraDeviceAliasMemoryEntry: vi.fn(),
   removeCameraDeviceAliasMemoryEntry: vi.fn(),
+}));
+
+const imageUnderstandMocks = vi.hoisted(() => ({
+  readImageUnderstandConfig: vi.fn(),
+  understandImageFile: vi.fn(),
 }));
 
 vi.mock("./camera-runtime.js", () => ({
@@ -32,9 +41,30 @@ vi.mock("./camera-device-alias-state.js", () => ({
   removeCameraDeviceAliasMemoryEntry: aliasStateMocks.removeCameraDeviceAliasMemoryEntry,
 }));
 
+vi.mock("./image-understand.js", () => ({
+  readImageUnderstandConfig: imageUnderstandMocks.readImageUnderstandConfig,
+  understandImageFile: imageUnderstandMocks.understandImageFile,
+}));
+
 import { cameraDeviceMemoryTool, cameraListTool, cameraSnapTool } from "./camera.js";
 
 describe("camera tools", () => {
+  beforeEach(() => {
+    runtimeMocks.normalizeCameraCaptureOptions.mockClear();
+    runtimeMocks.normalizeCameraListOptions.mockClear();
+    registryMocks.captureCameraSnapshot.mockReset();
+    registryMocks.listCameraDevices.mockReset();
+    aliasStateMocks.listCameraDeviceAliasMemoryEntries.mockReset();
+    aliasStateMocks.upsertCameraDeviceAliasMemoryEntry.mockReset();
+    aliasStateMocks.removeCameraDeviceAliasMemoryEntry.mockReset();
+    imageUnderstandMocks.readImageUnderstandConfig.mockReset();
+    imageUnderstandMocks.understandImageFile.mockReset();
+    imageUnderstandMocks.readImageUnderstandConfig.mockReturnValue({
+      enabled: false,
+    });
+    delete process.env.BELLDANDY_CAMERA_SNAP_AUTO_UNDERSTAND;
+  });
+
   it("returns a stop error when camera_snap is aborted", async () => {
     const error = new Error("Stopped by user.");
     error.name = "AbortError";
@@ -170,6 +200,225 @@ describe("camera tools", () => {
     expect(result.error).toContain("当前摄像头 provider 环境未就绪");
     expect(result.error).toContain("核对 helper 启动命令、cwd、helper entry 与相关环境变量");
     expect(result.error).not.toContain("请确认所选 provider 已注册");
+  });
+
+  it("automatically appends image understanding after a successful camera snapshot", async () => {
+    registryMocks.captureCameraSnapshot.mockResolvedValueOnce({
+      provider: "browser_loopback",
+      path: "/tmp/test/screenshots/camera-front.png",
+      mirrorUrl: "http://127.0.0.1:28889/mirror.html",
+      state: {
+        status: "ready",
+        selectedFacing: "front",
+        devices: [],
+      },
+    });
+    imageUnderstandMocks.readImageUnderstandConfig.mockReturnValue({
+      enabled: true,
+    });
+    imageUnderstandMocks.understandImageFile.mockResolvedValueOnce({
+      summary: "画面中是一张桌面前的人像截图。",
+      tags: ["person", "desk"],
+      ocrText: "HELLO",
+      content: "画面中是一张桌面前的人像截图。",
+      keyRegions: [
+        { label: "主体", summary: "中间是人物上半身。", ocrText: "" },
+      ],
+      targetDetail: undefined,
+      focusMode: "overview",
+      focusTarget: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      mimeType: "image/png",
+      sourcePath: "/tmp/test/screenshots/camera-front.png",
+    });
+
+    const result = await cameraSnapTool.execute({}, {
+      conversationId: "conv-camera",
+      workspaceRoot: "/tmp/test",
+      policy: {
+        allowedPaths: [],
+        deniedPaths: [],
+        allowedDomains: [],
+        deniedDomains: [],
+        maxTimeoutMs: 5_000,
+        maxResponseBytes: 1024 * 1024,
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.metadata).toMatchObject({
+      imageUnderstandingStatus: "completed",
+    });
+    expect(imageUnderstandMocks.understandImageFile).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: "/tmp/test/screenshots/camera-front.png",
+      focusMode: "overview",
+      includeKeyRegions: true,
+    }));
+    const payload = JSON.parse(result.output);
+    expect(payload).toMatchObject({
+      path: "/tmp/test/screenshots/camera-front.png",
+      imageUnderstandingStatus: "completed",
+      imageUnderstanding: {
+        summary: "画面中是一张桌面前的人像截图。",
+        ocrText: "HELLO",
+      },
+    });
+    expect(payload.imageUnderstandingPreview).toContain("图片识别摘要");
+    expect(payload.imageUnderstandingPreview).toContain("图片重点区域");
+  });
+
+  it("marks camera snapshot image understanding as disabled when image understanding is not enabled", async () => {
+    registryMocks.captureCameraSnapshot.mockResolvedValueOnce({
+      provider: "browser_loopback",
+      path: "/tmp/test/screenshots/camera-front.png",
+      mirrorUrl: "http://127.0.0.1:28889/mirror.html",
+      state: {
+        status: "ready",
+        selectedFacing: "front",
+        devices: [],
+      },
+    });
+
+    const result = await cameraSnapTool.execute({}, {
+      conversationId: "conv-camera",
+      workspaceRoot: "/tmp/test",
+      policy: {
+        allowedPaths: [],
+        deniedPaths: [],
+        allowedDomains: [],
+        deniedDomains: [],
+        maxTimeoutMs: 5_000,
+        maxResponseBytes: 1024 * 1024,
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.metadata).toMatchObject({
+      imageUnderstandingStatus: "disabled",
+    });
+    expect(imageUnderstandMocks.understandImageFile).not.toHaveBeenCalled();
+    const payload = JSON.parse(result.output);
+    expect(payload.imageUnderstandingStatus).toBe("disabled");
+    expect(payload.imageUnderstanding).toBeUndefined();
+  });
+
+  it("keeps camera_snap successful when image understanding fails after capture", async () => {
+    registryMocks.captureCameraSnapshot.mockResolvedValueOnce({
+      provider: "browser_loopback",
+      path: "/tmp/test/screenshots/camera-front.png",
+      mirrorUrl: "http://127.0.0.1:28889/mirror.html",
+      state: {
+        status: "ready",
+        selectedFacing: "front",
+        devices: [],
+      },
+    });
+    imageUnderstandMocks.readImageUnderstandConfig.mockReturnValue({
+      enabled: true,
+    });
+    imageUnderstandMocks.understandImageFile.mockRejectedValueOnce(new Error("vision timeout"));
+
+    const result = await cameraSnapTool.execute({}, {
+      conversationId: "conv-camera",
+      workspaceRoot: "/tmp/test",
+      policy: {
+        allowedPaths: [],
+        deniedPaths: [],
+        allowedDomains: [],
+        deniedDomains: [],
+        maxTimeoutMs: 5_000,
+        maxResponseBytes: 1024 * 1024,
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.metadata).toMatchObject({
+      imageUnderstandingStatus: "failed",
+    });
+    const payload = JSON.parse(result.output);
+    expect(payload).toMatchObject({
+      path: "/tmp/test/screenshots/camera-front.png",
+      imageUnderstandingStatus: "failed",
+      imageUnderstandingError: "vision timeout",
+    });
+  });
+
+  it("reuses the shared image understanding cache for repeated camera snapshots", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-camera-cache-"));
+    const screenshotPath = path.join(stateDir, "screenshots", "camera-front.png");
+    await fs.mkdir(path.dirname(screenshotPath), { recursive: true });
+    await fs.writeFile(screenshotPath, Buffer.from("same-camera-image"));
+
+    registryMocks.captureCameraSnapshot.mockResolvedValue({
+      provider: "browser_loopback",
+      path: screenshotPath,
+      mirrorUrl: "http://127.0.0.1:28889/mirror.html",
+      state: {
+        status: "ready",
+        selectedFacing: "front",
+        devices: [],
+      },
+    });
+    imageUnderstandMocks.readImageUnderstandConfig.mockReturnValue({
+      enabled: true,
+    });
+    imageUnderstandMocks.understandImageFile.mockResolvedValue({
+      summary: "同一张摄像头截图。",
+      tags: ["person"],
+      ocrText: "",
+      content: "同一张摄像头截图。",
+      keyRegions: [],
+      targetDetail: undefined,
+      focusMode: "overview",
+      focusTarget: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      mimeType: "image/png",
+      sourcePath: screenshotPath,
+    });
+
+    try {
+      const first = await cameraSnapTool.execute({}, {
+        conversationId: "conv-camera",
+        workspaceRoot: stateDir,
+        stateDir,
+        policy: {
+          allowedPaths: [],
+          deniedPaths: [],
+          allowedDomains: [],
+          deniedDomains: [],
+          maxTimeoutMs: 5_000,
+          maxResponseBytes: 1024 * 1024,
+        },
+      });
+      const second = await cameraSnapTool.execute({}, {
+        conversationId: "conv-camera",
+        workspaceRoot: stateDir,
+        stateDir,
+        policy: {
+          allowedPaths: [],
+          deniedPaths: [],
+          allowedDomains: [],
+          deniedDomains: [],
+          maxTimeoutMs: 5_000,
+          maxResponseBytes: 1024 * 1024,
+        },
+      });
+
+      expect(first.success).toBe(true);
+      expect(second.success).toBe(true);
+      expect(imageUnderstandMocks.understandImageFile).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(second.output)).toMatchObject({
+        path: screenshotPath,
+        imageUnderstandingStatus: "completed",
+        imageUnderstanding: {
+          summary: "同一张摄像头截图。",
+        },
+      });
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("lists remembered camera device memory entries from stateDir", async () => {

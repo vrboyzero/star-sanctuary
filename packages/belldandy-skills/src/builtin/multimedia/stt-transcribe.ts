@@ -7,11 +7,14 @@
  * - DashScope Paraformer (paraformer-v2，阿里云原生异步 API)
  *
  * 环境变量：
- *   BELLDANDY_STT_PROVIDER   - openai | groq | dashscope (默认 openai)
- *   BELLDANDY_STT_LANGUAGE    - 语言提示 (默认 zh)
- *   BELLDANDY_STT_GROQ_API_KEY   - Groq 专用 Key
- *   BELLDANDY_STT_GROQ_BASE_URL  - Groq Base URL (默认 https://api.groq.com/openai/v1)
- *   DASHSCOPE_API_KEY         - 复用 TTS 的 DashScope Key
+ *   BELLDANDY_STT_PROVIDER         - openai | groq | dashscope (默认 openai)
+ *   BELLDANDY_STT_MODEL            - STT 模型名（按 provider 生效，可选）
+ *   BELLDANDY_STT_LANGUAGE         - 语言提示 (默认 zh)
+ *   BELLDANDY_STT_OPENAI_API_KEY   - OpenAI STT 专用 Key（可选，优先于 OPENAI_API_KEY）
+ *   BELLDANDY_STT_OPENAI_BASE_URL  - OpenAI STT 专用 Base URL（可选，优先于 OPENAI_BASE_URL）
+ *   BELLDANDY_STT_GROQ_API_KEY     - Groq 专用 Key
+ *   BELLDANDY_STT_GROQ_BASE_URL    - Groq Base URL (默认 https://api.groq.com/openai/v1)
+ *   DASHSCOPE_API_KEY              - 复用 TTS 的 DashScope Key
  */
 
 import OpenAI, { toFile } from "openai";
@@ -22,6 +25,11 @@ import {
     throwIfAborted,
     toAbortError,
 } from "../../abort-utils.js";
+import {
+    createMediaFingerprint,
+    readCachedAudioTranscription,
+    writeCachedAudioTranscription,
+} from "./understanding-cache.js";
 
 // ─── 类型定义 ───────────────────────────────────────────────
 
@@ -34,6 +42,8 @@ export type TranscribeOptions = {
     mime?: string;
     /** Provider 覆盖 (默认读 BELLDANDY_STT_PROVIDER) */
     provider?: string;
+    /** 模型覆盖（默认按 provider 读 BELLDANDY_STT_MODEL 或内置默认值） */
+    model?: string;
     /** 语言提示，ISO 639-1 (例如 "zh", "en") */
     language?: string;
     /** 上下文提示词，帮助提高识别准确率 */
@@ -51,6 +61,12 @@ export type TranscribeResult = {
     model: string;
     /** 音频时长（秒），部分 Provider 可能不返回 */
     durationSec?: number;
+};
+
+export type TranscribeWithCacheResult = {
+    result: TranscribeResult | null;
+    cacheHit: boolean;
+    fingerprint: string;
 };
 
 type TranscriptionResponse = {
@@ -81,16 +97,17 @@ export async function transcribeSpeech(
         opts.language?.trim() ||
         process.env.BELLDANDY_STT_LANGUAGE?.trim() ||
         "zh";
+    const model = resolveSttModel(provider, opts.model);
 
     try {
         switch (provider) {
             case "groq":
-                return await transcribeGroq(opts.buffer, opts.fileName, language, opts.prompt, opts.abortSignal);
+                return await transcribeGroq(opts.buffer, opts.fileName, language, model, opts.prompt, opts.abortSignal);
             case "dashscope":
-                return await transcribeDashScope(opts.buffer, opts.fileName, language, opts.prompt, opts.abortSignal);
+                return await transcribeDashScope(opts.buffer, opts.fileName, language, model, opts.prompt, opts.abortSignal);
             case "openai":
             default:
-                return await transcribeOpenAI(opts.buffer, opts.fileName, language, opts.prompt, opts.abortSignal);
+                return await transcribeOpenAI(opts.buffer, opts.fileName, language, model, opts.prompt, opts.abortSignal);
         }
     } catch (err) {
         if (isAbortError(err) || opts.abortSignal?.aborted) {
@@ -102,21 +119,74 @@ export async function transcribeSpeech(
     }
 }
 
+export async function transcribeSpeechWithCache(
+    input: TranscribeOptions & {
+        stateDir: string;
+        transcribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
+    },
+): Promise<TranscribeWithCacheResult> {
+    const fingerprint = createMediaFingerprint({
+        buffer: input.buffer,
+        mime: input.mime,
+    });
+    const cached = await readCachedAudioTranscription({
+        stateDir: input.stateDir,
+        fingerprint,
+    });
+    if (cached?.result) {
+        return {
+            result: cached.result,
+            cacheHit: true,
+            fingerprint,
+        };
+    }
+
+    const result = await (input.transcribe ?? transcribeSpeech)({
+        buffer: input.buffer,
+        fileName: input.fileName,
+        mime: input.mime,
+        provider: input.provider,
+        model: input.model,
+        language: input.language,
+        prompt: input.prompt,
+        abortSignal: input.abortSignal,
+    });
+    if (result?.text) {
+        await writeCachedAudioTranscription({
+            stateDir: input.stateDir,
+            fingerprint,
+            mime: input.mime,
+            result,
+        });
+    }
+    return {
+        result,
+        cacheHit: false,
+        fingerprint,
+    };
+}
+
 // ─── OpenAI Whisper ─────────────────────────────────────────
 
 async function transcribeOpenAI(
     buffer: Buffer,
     fileName: string,
     language: string,
+    model: string,
     prompt?: string,
     abortSignal?: AbortSignal,
 ): Promise<TranscribeResult> {
-    const apiKey = process.env.OPENAI_API_KEY;
-    const baseURL = process.env.OPENAI_BASE_URL;
-    if (!apiKey) throw new Error("OPENAI_API_KEY 未设置，无法使用 OpenAI STT");
+    const apiKey =
+        process.env.BELLDANDY_STT_OPENAI_API_KEY?.trim()
+        || process.env.OPENAI_API_KEY?.trim();
+    const baseURL =
+        process.env.BELLDANDY_STT_OPENAI_BASE_URL?.trim()
+        || process.env.OPENAI_BASE_URL?.trim();
+    if (!apiKey) {
+        throw new Error("BELLDANDY_STT_OPENAI_API_KEY 或 OPENAI_API_KEY 未设置，无法使用 OpenAI STT");
+    }
 
     throwIfAborted(abortSignal);
-    const model = "whisper-1";
     const openai = new OpenAI({ apiKey, baseURL });
 
     // OpenAI SDK 接受 File 对象用于 multipart/form-data 上传
@@ -150,6 +220,7 @@ async function transcribeGroq(
     buffer: Buffer,
     fileName: string,
     language: string,
+    model: string,
     prompt?: string,
     abortSignal?: AbortSignal,
 ): Promise<TranscribeResult> {
@@ -164,7 +235,6 @@ async function transcribeGroq(
     if (!apiKey) throw new Error("BELLDANDY_STT_GROQ_API_KEY 或 GROQ_API_KEY 未设置");
 
     throwIfAborted(abortSignal);
-    const model = "whisper-large-v3-turbo";
     const openai = new OpenAI({ apiKey, baseURL });
 
     const file = await bufferToUploadable(buffer, fileName);
@@ -197,6 +267,7 @@ async function transcribeDashScope(
     buffer: Buffer,
     fileName: string,
     language: string,
+    model: string,
     prompt?: string,
     abortSignal?: AbortSignal,
 ): Promise<TranscribeResult> {
@@ -204,7 +275,6 @@ async function transcribeDashScope(
     if (!apiKey) throw new Error("DASHSCOPE_API_KEY 未设置，无法使用 DashScope STT");
 
     throwIfAborted(abortSignal);
-    const model = "paraformer-v2";
     const submitUrl =
         "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription";
 
@@ -354,4 +424,20 @@ function parseTranscriptionResponse(response: unknown): TranscriptionResponse {
         text: typeof candidate.text === "string" ? candidate.text.trim() : "",
         durationSec: typeof candidate.duration === "number" ? candidate.duration : undefined,
     };
+}
+
+function resolveSttModel(provider: string, explicitModel?: string): string {
+    const configuredModel = explicitModel?.trim() || process.env.BELLDANDY_STT_MODEL?.trim();
+    if (configuredModel) {
+        return configuredModel;
+    }
+    switch (provider) {
+        case "groq":
+            return "whisper-large-v3-turbo";
+        case "dashscope":
+            return "paraformer-v2";
+        case "openai":
+        default:
+            return "whisper-1";
+    }
 }

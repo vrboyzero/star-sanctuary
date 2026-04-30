@@ -16,14 +16,26 @@ import {
   normalizeCameraListOptions,
 } from "./camera-runtime.js";
 import { getCameraRecoveryHintText } from "./camera-governance.js";
+import {
+  understandCapturedImageArtifact,
+  type CapturedImageUnderstandingResult,
+} from "./captured-image-understand.js";
 
-function success(name: string, output: unknown, startedAt: number): ToolCallResult {
+type CameraSnapImageUnderstandingStatus = "completed" | "disabled" | "failed";
+
+function success(
+  name: string,
+  output: unknown,
+  startedAt: number,
+  metadata?: ToolCallResult["metadata"],
+): ToolCallResult {
   return {
     id: "generated-in-execute",
     name,
     success: true,
     output: JSON.stringify(output, null, 2),
     durationMs: Date.now() - startedAt,
+    ...(metadata ? { metadata } : {}),
   };
 }
 
@@ -93,6 +105,20 @@ function requireCameraStateDir(stateDir: string | undefined): string {
   throw new Error("camera_device_memory requires stateDir.");
 }
 
+async function understandCameraSnapshotImage(input: {
+  filePath: string;
+  stateDir?: string;
+  abortSignal?: AbortSignal;
+}): Promise<CapturedImageUnderstandingResult> {
+  return understandCapturedImageArtifact({
+    filePath: input.filePath,
+    mimeType: "image/png",
+    stateDir: input.stateDir,
+    abortSignal: input.abortSignal,
+    autoUnderstandEnvName: "BELLDANDY_CAMERA_SNAP_AUTO_UNDERSTAND",
+  });
+}
+
 export const cameraSnapTool: Tool = {
   definition: {
     name: "camera_snap",
@@ -156,12 +182,34 @@ export const cameraSnapTool: Tool = {
     try {
       const options = normalizeCameraCaptureOptions(args as Record<string, unknown>);
       const result = await captureCameraSnapshot(context, options);
-      return success("camera_snap", {
+      const imageUnderstanding = await understandCameraSnapshotImage({
+        filePath: result.path,
+        stateDir: context.stateDir,
+        abortSignal: context.abortSignal,
+      });
+      const payload = {
         provider: result.provider,
         path: result.path,
         mirrorUrl: result.mirrorUrl,
         state: result.state,
-      }, startedAt);
+        imageUnderstandingStatus: imageUnderstanding.status as CameraSnapImageUnderstandingStatus,
+        ...(imageUnderstanding.status === "completed"
+          ? {
+            imageUnderstandingPreview: imageUnderstanding.preview,
+            imageUnderstanding: imageUnderstanding.result,
+          }
+          : {}),
+        ...(imageUnderstanding.status === "failed"
+          ? {
+            imageUnderstandingError: imageUnderstanding.error,
+          }
+          : {}),
+      };
+      return success("camera_snap", {
+        ...payload,
+      }, startedAt, {
+        imageUnderstandingStatus: imageUnderstanding.status,
+      });
     } catch (error) {
       if (isAbortError(error) || context.abortSignal?.aborted) {
         return failure("camera_snap", readAbortReason(context.abortSignal), startedAt);

@@ -172,6 +172,7 @@ export function createSettingsController({
     cfgTtsEnabled,
     cfgTtsProvider,
     cfgTtsVoice,
+    cfgTtsModel,
     cfgTtsOpenAIBaseUrl,
     cfgTtsOpenAIApiKey,
     cfgImageEnabled,
@@ -181,10 +182,29 @@ export function createSettingsController({
     cfgImageModel,
     cfgImageOutputFormat,
     cfgImageTimeoutMs,
+    cfgImageUnderstandEnabled,
+    cfgImageUnderstandApiKey,
+    cfgImageUnderstandBaseUrl,
+    cfgImageUnderstandModel,
+    cfgImageUnderstandTimeoutMs,
+    cfgImageUnderstandAutoOnAttachment,
+    cfgBrowserScreenshotAutoUnderstand,
+    cfgCameraSnapAutoUnderstand,
+    cfgScreenCaptureAutoUnderstand,
+    cfgVideoUnderstandEnabled,
+    cfgVideoUnderstandApiKey,
+    cfgVideoUnderstandBaseUrl,
+    cfgVideoUnderstandModel,
+    cfgVideoUnderstandTimeoutMs,
+    cfgVideoUnderstandAutoOnAttachment,
     cfgSttProvider,
+    cfgSttModel,
+    cfgSttOpenAiBaseUrl,
+    cfgSttOpenAiApiKey,
     cfgSttLanguage,
     cfgSttGroqApiKey,
     cfgSttGroqBaseUrl,
+    cfgQqSttFallbackProviders,
     cfgCameraNativeHelperCommand,
     cfgCameraNativeHelperArgsJson,
     cfgCameraNativeHelperCwd,
@@ -776,6 +796,7 @@ export function createSettingsController({
     if (cfgTtsEnabled) cfgTtsEnabled.checked = c["BELLDANDY_TTS_ENABLED"] === "true";
     if (cfgTtsProvider) cfgTtsProvider.value = c["BELLDANDY_TTS_PROVIDER"] || "edge";
     if (cfgTtsVoice) cfgTtsVoice.value = c["BELLDANDY_TTS_VOICE"] || "";
+    if (cfgTtsModel) cfgTtsModel.value = c["BELLDANDY_TTS_MODEL"] || "";
     if (cfgTtsOpenAIBaseUrl) cfgTtsOpenAIBaseUrl.value = c["BELLDANDY_TTS_OPENAI_BASE_URL"] || "";
     if (cfgTtsOpenAIApiKey) cfgTtsOpenAIApiKey.value = c["BELLDANDY_TTS_OPENAI_API_KEY"] || "";
     if (cfgImageEnabled) cfgImageEnabled.checked = c["BELLDANDY_IMAGE_ENABLED"] !== "false";
@@ -785,10 +806,29 @@ export function createSettingsController({
     if (cfgImageModel) cfgImageModel.value = c["BELLDANDY_IMAGE_MODEL"] || "";
     if (cfgImageOutputFormat) cfgImageOutputFormat.value = c["BELLDANDY_IMAGE_OUTPUT_FORMAT"] || "";
     if (cfgImageTimeoutMs) cfgImageTimeoutMs.value = c["BELLDANDY_IMAGE_TIMEOUT_MS"] || "";
+    if (cfgImageUnderstandEnabled) cfgImageUnderstandEnabled.checked = c["BELLDANDY_IMAGE_UNDERSTAND_ENABLED"] === "true";
+    if (cfgImageUnderstandApiKey) cfgImageUnderstandApiKey.value = c["BELLDANDY_IMAGE_UNDERSTAND_OPENAI_API_KEY"] || "";
+    if (cfgImageUnderstandBaseUrl) cfgImageUnderstandBaseUrl.value = c["BELLDANDY_IMAGE_UNDERSTAND_OPENAI_BASE_URL"] || "";
+    if (cfgImageUnderstandModel) cfgImageUnderstandModel.value = c["BELLDANDY_IMAGE_UNDERSTAND_MODEL"] || "";
+    if (cfgImageUnderstandTimeoutMs) cfgImageUnderstandTimeoutMs.value = c["BELLDANDY_IMAGE_UNDERSTAND_TIMEOUT_MS"] || "";
+    if (cfgImageUnderstandAutoOnAttachment) cfgImageUnderstandAutoOnAttachment.checked = c["BELLDANDY_IMAGE_UNDERSTAND_AUTO_ON_ATTACHMENT"] !== "false";
+    if (cfgBrowserScreenshotAutoUnderstand) cfgBrowserScreenshotAutoUnderstand.checked = c["BELLDANDY_BROWSER_SCREENSHOT_AUTO_UNDERSTAND"] !== "false";
+    if (cfgCameraSnapAutoUnderstand) cfgCameraSnapAutoUnderstand.checked = c["BELLDANDY_CAMERA_SNAP_AUTO_UNDERSTAND"] !== "false";
+    if (cfgScreenCaptureAutoUnderstand) cfgScreenCaptureAutoUnderstand.checked = c["BELLDANDY_SCREEN_CAPTURE_AUTO_UNDERSTAND"] !== "false";
+    if (cfgVideoUnderstandEnabled) cfgVideoUnderstandEnabled.checked = c["BELLDANDY_VIDEO_UNDERSTAND_ENABLED"] === "true";
+    if (cfgVideoUnderstandApiKey) cfgVideoUnderstandApiKey.value = c["BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY"] || "";
+    if (cfgVideoUnderstandBaseUrl) cfgVideoUnderstandBaseUrl.value = c["BELLDANDY_VIDEO_UNDERSTAND_OPENAI_BASE_URL"] || "";
+    if (cfgVideoUnderstandModel) cfgVideoUnderstandModel.value = c["BELLDANDY_VIDEO_UNDERSTAND_MODEL"] || "";
+    if (cfgVideoUnderstandTimeoutMs) cfgVideoUnderstandTimeoutMs.value = c["BELLDANDY_VIDEO_UNDERSTAND_TIMEOUT_MS"] || "";
+    if (cfgVideoUnderstandAutoOnAttachment) cfgVideoUnderstandAutoOnAttachment.checked = c["BELLDANDY_VIDEO_UNDERSTAND_AUTO_ON_ATTACHMENT"] !== "false";
     if (cfgSttProvider) cfgSttProvider.value = c["BELLDANDY_STT_PROVIDER"] || "";
+    if (cfgSttModel) cfgSttModel.value = c["BELLDANDY_STT_MODEL"] || "";
+    if (cfgSttOpenAiBaseUrl) cfgSttOpenAiBaseUrl.value = c["BELLDANDY_STT_OPENAI_BASE_URL"] || "";
+    if (cfgSttOpenAiApiKey) cfgSttOpenAiApiKey.value = c["BELLDANDY_STT_OPENAI_API_KEY"] || "";
     if (cfgSttLanguage) cfgSttLanguage.value = c["BELLDANDY_STT_LANGUAGE"] || "";
     if (cfgSttGroqApiKey) cfgSttGroqApiKey.value = c["BELLDANDY_STT_GROQ_API_KEY"] || "";
     if (cfgSttGroqBaseUrl) cfgSttGroqBaseUrl.value = c["BELLDANDY_STT_GROQ_BASE_URL"] || "";
+    if (cfgQqSttFallbackProviders) cfgQqSttFallbackProviders.value = c["BELLDANDY_QQ_STT_FALLBACK_PROVIDERS"] || "";
     if (cfgCameraNativeHelperCommand) cfgCameraNativeHelperCommand.value = c["BELLDANDY_CAMERA_NATIVE_HELPER_COMMAND"] || "";
     if (cfgCameraNativeHelperArgsJson) cfgCameraNativeHelperArgsJson.value = c["BELLDANDY_CAMERA_NATIVE_HELPER_ARGS_JSON"] || "";
     if (cfgCameraNativeHelperCwd) cfgCameraNativeHelperCwd.value = c["BELLDANDY_CAMERA_NATIVE_HELPER_CWD"] || "";
@@ -1524,6 +1564,7 @@ export function createSettingsController({
     if (cfgTtsEnabled) updates["BELLDANDY_TTS_ENABLED"] = cfgTtsEnabled.checked ? "true" : "false";
     if (cfgTtsProvider) updates["BELLDANDY_TTS_PROVIDER"] = cfgTtsProvider.value.trim() || "edge";
     if (cfgTtsVoice) updates["BELLDANDY_TTS_VOICE"] = cfgTtsVoice.value.trim();
+    if (cfgTtsModel) updates["BELLDANDY_TTS_MODEL"] = cfgTtsModel.value.trim();
     if (cfgTtsOpenAIBaseUrl) updates["BELLDANDY_TTS_OPENAI_BASE_URL"] = cfgTtsOpenAIBaseUrl.value.trim();
     assignSecretUpdate(updates, "BELLDANDY_TTS_OPENAI_API_KEY", cfgTtsOpenAIApiKey);
     if (cfgImageEnabled) updates["BELLDANDY_IMAGE_ENABLED"] = cfgImageEnabled.checked ? "true" : "false";
@@ -1532,10 +1573,27 @@ export function createSettingsController({
     if (cfgImageModel) updates["BELLDANDY_IMAGE_MODEL"] = cfgImageModel.value.trim();
     if (cfgImageOutputFormat) updates["BELLDANDY_IMAGE_OUTPUT_FORMAT"] = cfgImageOutputFormat.value.trim();
     if (cfgImageTimeoutMs) updates["BELLDANDY_IMAGE_TIMEOUT_MS"] = cfgImageTimeoutMs.value.trim();
+    if (cfgImageUnderstandEnabled) updates["BELLDANDY_IMAGE_UNDERSTAND_ENABLED"] = cfgImageUnderstandEnabled.checked ? "true" : "false";
+    if (cfgImageUnderstandBaseUrl) updates["BELLDANDY_IMAGE_UNDERSTAND_OPENAI_BASE_URL"] = cfgImageUnderstandBaseUrl.value.trim();
+    if (cfgImageUnderstandModel) updates["BELLDANDY_IMAGE_UNDERSTAND_MODEL"] = cfgImageUnderstandModel.value.trim();
+    if (cfgImageUnderstandTimeoutMs) updates["BELLDANDY_IMAGE_UNDERSTAND_TIMEOUT_MS"] = cfgImageUnderstandTimeoutMs.value.trim();
+    if (cfgImageUnderstandAutoOnAttachment) updates["BELLDANDY_IMAGE_UNDERSTAND_AUTO_ON_ATTACHMENT"] = cfgImageUnderstandAutoOnAttachment.checked ? "true" : "false";
+    if (cfgBrowserScreenshotAutoUnderstand) updates["BELLDANDY_BROWSER_SCREENSHOT_AUTO_UNDERSTAND"] = cfgBrowserScreenshotAutoUnderstand.checked ? "true" : "false";
+    if (cfgCameraSnapAutoUnderstand) updates["BELLDANDY_CAMERA_SNAP_AUTO_UNDERSTAND"] = cfgCameraSnapAutoUnderstand.checked ? "true" : "false";
+    if (cfgScreenCaptureAutoUnderstand) updates["BELLDANDY_SCREEN_CAPTURE_AUTO_UNDERSTAND"] = cfgScreenCaptureAutoUnderstand.checked ? "true" : "false";
+    if (cfgVideoUnderstandEnabled) updates["BELLDANDY_VIDEO_UNDERSTAND_ENABLED"] = cfgVideoUnderstandEnabled.checked ? "true" : "false";
+    if (cfgVideoUnderstandBaseUrl) updates["BELLDANDY_VIDEO_UNDERSTAND_OPENAI_BASE_URL"] = cfgVideoUnderstandBaseUrl.value.trim();
+    if (cfgVideoUnderstandModel) updates["BELLDANDY_VIDEO_UNDERSTAND_MODEL"] = cfgVideoUnderstandModel.value.trim();
+    if (cfgVideoUnderstandTimeoutMs) updates["BELLDANDY_VIDEO_UNDERSTAND_TIMEOUT_MS"] = cfgVideoUnderstandTimeoutMs.value.trim();
+    if (cfgVideoUnderstandAutoOnAttachment) updates["BELLDANDY_VIDEO_UNDERSTAND_AUTO_ON_ATTACHMENT"] = cfgVideoUnderstandAutoOnAttachment.checked ? "true" : "false";
     if (cfgSttProvider) updates["BELLDANDY_STT_PROVIDER"] = cfgSttProvider.value.trim();
+    if (cfgSttModel) updates["BELLDANDY_STT_MODEL"] = cfgSttModel.value.trim();
+    if (cfgSttOpenAiBaseUrl) updates["BELLDANDY_STT_OPENAI_BASE_URL"] = cfgSttOpenAiBaseUrl.value.trim();
+    assignSecretUpdate(updates, "BELLDANDY_STT_OPENAI_API_KEY", cfgSttOpenAiApiKey);
     if (cfgSttLanguage) updates["BELLDANDY_STT_LANGUAGE"] = cfgSttLanguage.value.trim();
     assignSecretUpdate(updates, "BELLDANDY_STT_GROQ_API_KEY", cfgSttGroqApiKey);
     if (cfgSttGroqBaseUrl) updates["BELLDANDY_STT_GROQ_BASE_URL"] = cfgSttGroqBaseUrl.value.trim();
+    if (cfgQqSttFallbackProviders) updates["BELLDANDY_QQ_STT_FALLBACK_PROVIDERS"] = cfgQqSttFallbackProviders.value.trim();
     if (cfgCameraNativeHelperCommand) updates["BELLDANDY_CAMERA_NATIVE_HELPER_COMMAND"] = cfgCameraNativeHelperCommand.value.trim();
     if (cfgCameraNativeHelperArgsJson) updates["BELLDANDY_CAMERA_NATIVE_HELPER_ARGS_JSON"] = cfgCameraNativeHelperArgsJson.value.trim();
     if (cfgCameraNativeHelperCwd) updates["BELLDANDY_CAMERA_NATIVE_HELPER_CWD"] = cfgCameraNativeHelperCwd.value.trim();
@@ -1554,6 +1612,8 @@ export function createSettingsController({
     assignSecretOverrideUpdate(updates, "BELLDANDY_MEMORY_EVOLUTION_API_KEY", cfgMemoryEvolutionApiKey);
     assignSecretOverrideUpdate(updates, "BELLDANDY_TASK_SUMMARY_API_KEY", cfgTaskSummaryApiKey);
     assignSecretUpdate(updates, "BELLDANDY_IMAGE_OPENAI_API_KEY", cfgImageApiKey);
+    assignSecretUpdate(updates, "BELLDANDY_IMAGE_UNDERSTAND_OPENAI_API_KEY", cfgImageUnderstandApiKey);
+    assignSecretUpdate(updates, "BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY", cfgVideoUnderstandApiKey);
     updates["BELLDANDY_FACET_ANCHOR"] = cfgFacetAnchor.value.trim();
     updates["BELLDANDY_INJECT_AGENTS"] = cfgInjectAgents.checked ? "true" : "false";
     updates["BELLDANDY_INJECT_SOUL"] = cfgInjectSoul.checked ? "true" : "false";

@@ -36,6 +36,7 @@ export async function synthesizeSpeech(opts: SynthesizeOptions): Promise<Synthes
   const envProvider = process.env.BELLDANDY_TTS_PROVIDER?.trim().toLowerCase();
   const provider = (opts.provider?.trim() || envProvider || "edge").toLowerCase();
   const shouldUseEnvVoice = !opts.provider || envProvider === provider;
+  const model = resolveTtsModel(provider, opts.model);
 
   let voice = opts.voice;
   if (!voice) {
@@ -60,9 +61,9 @@ export async function synthesizeSpeech(opts: SynthesizeOptions): Promise<Synthes
     const filepath = path.join(generatedDir, filename);
 
     if (provider === "openai") {
-      await synthesizeOpenAI(filepath, text, voice!, opts.model, opts.abortSignal);
+      await synthesizeOpenAI(filepath, text, voice!, model, opts.abortSignal);
     } else if (provider === "dashscope") {
-      await synthesizeDashScope(filepath, text, voice!, opts.abortSignal);
+      await synthesizeDashScope(filepath, text, voice!, model, opts.abortSignal);
     } else {
       await synthesizeEdge(filepath, text, voice!, opts.abortSignal);
     }
@@ -79,7 +80,7 @@ export async function synthesizeSpeech(opts: SynthesizeOptions): Promise<Synthes
   }
 }
 
-async function synthesizeOpenAI(filepath: string, text: string, voice: string, model?: string, abortSignal?: AbortSignal): Promise<void> {
+async function synthesizeOpenAI(filepath: string, text: string, voice: string, model: string, abortSignal?: AbortSignal): Promise<void> {
   const apiKey = readOptionalEnv(
     "BELLDANDY_TTS_OPENAI_API_KEY",
     "BELLDANDY_OPENAI_API_KEY",
@@ -98,7 +99,7 @@ async function synthesizeOpenAI(filepath: string, text: string, voice: string, m
   const openai = new OpenAI({ apiKey, baseURL });
   const mp3 = await raceWithAbort(
     (openai.audio.speech.create as any)({
-      model: (model as any) || "tts-1",
+      model: model as any,
       voice: voice as any,
       input: text,
     }, {
@@ -111,7 +112,7 @@ async function synthesizeOpenAI(filepath: string, text: string, voice: string, m
   await fs.writeFile(filepath, buffer);
 }
 
-async function synthesizeDashScope(filepath: string, text: string, voice: string, abortSignal?: AbortSignal): Promise<void> {
+async function synthesizeDashScope(filepath: string, text: string, voice: string, model: string, abortSignal?: AbortSignal): Promise<void> {
   const apiKey = process.env.DASHSCOPE_API_KEY;
   if (!apiKey) throw new Error("DASHSCOPE_API_KEY required for DashScope provider.");
 
@@ -129,7 +130,7 @@ async function synthesizeDashScope(filepath: string, text: string, voice: string
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "qwen3-tts-flash",
+          model,
           input: { text, voice },
           parameters: { format: "mp3" },
         }),
@@ -223,4 +224,18 @@ function readOptionalEnv(...keys: string[]): string | undefined {
     }
   }
   return undefined;
+}
+
+function resolveTtsModel(provider: string, explicitModel?: string): string {
+  const configuredModel = explicitModel?.trim() || process.env.BELLDANDY_TTS_MODEL?.trim();
+  if (configuredModel) {
+    return configuredModel;
+  }
+  if (provider === "dashscope") {
+    return "qwen3-tts-flash";
+  }
+  if (provider === "openai") {
+    return "tts-1";
+  }
+  return "";
 }

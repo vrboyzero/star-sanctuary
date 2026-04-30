@@ -574,4 +574,212 @@ describe("camera native desktop helper runtime", () => {
       message: "Requested native_desktop camera device is not currently available.",
     }));
   });
+
+  it("lists desktop displays and windows as capture targets", async () => {
+    const runtime = new NativeDesktopWindowsHelperRuntime({
+      runCommand: vi.fn(async (input) => {
+        if (input.command === "powershell.exe") {
+          if (input.args.includes("Write-Output 'ok'")) {
+            return {
+              exitCode: 0,
+              stdout: "ok\n",
+              stderr: "",
+            };
+          }
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              displays: [
+                {
+                  id: "\\\\.\\DISPLAY1",
+                  name: "\\\\.\\DISPLAY1",
+                  isPrimary: true,
+                  bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+                  workArea: { x: 0, y: 0, width: 1920, height: 1040 },
+                },
+              ],
+              windows: [
+                {
+                  id: "0x001A02BC",
+                  title: "Belldandy Control Center",
+                  appName: "belldandy",
+                  processId: 4242,
+                  isVisible: true,
+                  isMinimized: false,
+                  bounds: { x: 100, y: 120, width: 1280, height: 720 },
+                  displayId: "\\\\.\\DISPLAY1",
+                },
+              ],
+            }),
+            stderr: "",
+          };
+        }
+        return {
+          exitCode: 0,
+          stdout: "ffmpeg version n7",
+          stderr: "",
+        };
+      }),
+    });
+
+    const result = await runtime.listCaptureTargets({
+      includeDisplays: true,
+      includeWindows: true,
+    });
+
+    expect(result.displays).toContainEqual(expect.objectContaining({
+      id: "\\\\.\\DISPLAY1",
+      displayRef: "native_desktop:display:%5C%5C.%5CDISPLAY1",
+      isPrimary: true,
+    }));
+    expect(result.windows).toContainEqual(expect.objectContaining({
+      id: "0x001A02BC",
+      windowRef: "native_desktop:window:0x001A02BC",
+      title: "Belldandy Control Center",
+      processId: 4242,
+    }));
+  });
+
+  it("captures a desktop region through gdigrab", async () => {
+    const tempDir = await createTempDir();
+    const outputPath = path.join(tempDir, "screen-region.png");
+    const pngBuffer = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0r0AAAAASUVORK5CYII=",
+      "base64",
+    );
+    const runCommand = vi.fn(async (input) => {
+      if (input.command === "powershell.exe") {
+        return {
+          exitCode: 0,
+          stdout: "ok\n",
+          stderr: "",
+        };
+      }
+      if (input.args.includes("-version")) {
+        return {
+          exitCode: 0,
+          stdout: "ffmpeg version n7",
+          stderr: "",
+        };
+      }
+      await fs.writeFile(outputPath, pngBuffer);
+      return {
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+      };
+    });
+    const runtime = new NativeDesktopWindowsHelperRuntime({
+      runCommand,
+      now: () => new Date("2026-04-30T10:20:00.000Z"),
+    });
+
+    const result = await runtime.captureScreen({
+      target: {
+        kind: "region",
+        x: 50,
+        y: 60,
+        width: 640,
+        height: 360,
+      },
+      output: {
+        filePath: outputPath,
+        format: "png",
+      },
+      includeCursor: false,
+      timeoutMs: 5_000,
+    });
+
+    expect(result.artifact.path).toBe(outputPath);
+    expect(result.target).toEqual({
+      kind: "region",
+      x: 50,
+      y: 60,
+      width: 640,
+      height: 360,
+    });
+    expect(runCommand).toHaveBeenCalledWith(expect.objectContaining({
+      command: "ffmpeg",
+      args: expect.arrayContaining(["-f", "gdigrab", "-draw_mouse", "0", "-offset_x", "50", "-offset_y", "60", "-video_size", "640x360", "-i", "desktop"]),
+    }));
+  });
+
+  it("captures a window target through gdigrab hwnd input", async () => {
+    const tempDir = await createTempDir();
+    const outputPath = path.join(tempDir, "window.png");
+    const pngBuffer = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0r0AAAAASUVORK5CYII=",
+      "base64",
+    );
+    const runCommand = vi.fn(async (input) => {
+      if (input.command === "powershell.exe") {
+        if (input.args.includes("Write-Output 'ok'")) {
+          return {
+            exitCode: 0,
+            stdout: "ok\n",
+            stderr: "",
+          };
+        }
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            displays: [],
+            windows: [
+              {
+                id: "0x00010203",
+                title: "Target Window",
+                appName: "demo",
+                processId: 1234,
+                isVisible: true,
+                isMinimized: false,
+                bounds: { x: 200, y: 150, width: 900, height: 600 },
+                displayId: "\\\\.\\DISPLAY1",
+              },
+            ],
+          }),
+          stderr: "",
+        };
+      }
+      if (input.args.includes("-version")) {
+        return {
+          exitCode: 0,
+          stdout: "ffmpeg version n7",
+          stderr: "",
+        };
+      }
+      await fs.writeFile(outputPath, pngBuffer);
+      return {
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+      };
+    });
+    const runtime = new NativeDesktopWindowsHelperRuntime({
+      runCommand,
+    });
+
+    const result = await runtime.captureScreen({
+      target: {
+        kind: "window",
+        windowTitle: "Target Window",
+      },
+      output: {
+        filePath: outputPath,
+        format: "png",
+      },
+      timeoutMs: 5_000,
+    });
+
+    expect(result.window?.id).toBe("0x00010203");
+    expect(result.target).toEqual({
+      kind: "window",
+      windowId: "0x00010203",
+      windowRef: "native_desktop:window:0x00010203",
+      windowTitle: "Target Window",
+    });
+    expect(runCommand).toHaveBeenCalledWith(expect.objectContaining({
+      command: "ffmpeg",
+      args: expect.arrayContaining(["-f", "gdigrab", "-i", "hwnd=0x00010203"]),
+    }));
+  });
 });

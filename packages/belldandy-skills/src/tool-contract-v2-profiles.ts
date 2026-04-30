@@ -732,7 +732,8 @@ const TOOL_CONTRACT_V2_PROFILES: Record<string, ToolContractV2Profile> = {
     activityDescription: "Capture a screenshot from the active browser page",
     outputPersistencePolicy: "artifact",
     expectedOutput: [
-      "Screenshot file path text pointing to the stored PNG artifact",
+      "JSON text containing the stored PNG path and image understanding status",
+      "When automatic image understanding is enabled, a concise screenshot summary and structured understanding payload",
     ],
     confirmWhen: [
       "The page contains sensitive account, personal, or internal data that should not be persisted as an artifact",
@@ -785,6 +786,84 @@ const TOOL_CONTRACT_V2_PROFILES: Record<string, ToolContractV2Profile> = {
     ],
     userVisibleRiskNote: "快照本身只读，但后续若拿旧快照的元素 ID 去操作页面，风险会迅速上升。",
   }),
+  screen_list_targets: {
+    family: "other",
+    riskLevel: "low",
+    needsPermission: true,
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    activityDescription: "List local desktop display and window targets that can be used for screen capture",
+    outputPersistencePolicy: "conversation",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["local-safe"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need to discover available displays or windows before choosing a screen capture target",
+      "Need a stable displayRef or windowRef for a later screen_capture call",
+    ],
+    avoidWhen: [
+      "You already know the exact target and can capture it directly without enumerating the whole desktop state",
+      "The task only needs browser-page visuals and browser_screenshot already covers it",
+    ],
+    confirmWhen: [
+      "The machine may be presenting sensitive window titles or application names that should not be listed broadly",
+    ],
+    preflightChecks: [
+      "Confirm the native desktop helper is configured and available on the current host",
+      "Use includeDisplays/includeWindows filters to keep the listing focused when possible",
+    ],
+    fallbackStrategy: [
+      "If helper capabilities are unavailable, fall back to browser_screenshot for browser-only tasks",
+      "If only one known window is relevant, pass title filters instead of listing every window",
+    ],
+    expectedOutput: [
+      "JSON text containing helper status plus available displays and windows with stable refs",
+    ],
+    sideEffectSummary: [
+      "Read-only enumeration of local desktop targets, but it can expose visible application names and window titles",
+    ],
+    userVisibleRiskNote: "这是本机桌面目标枚举工具。虽然只读，但会暴露当前窗口标题、应用名和显示器信息。",
+  },
+  screen_capture: {
+    family: "other",
+    riskLevel: "high",
+    needsPermission: true,
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    activityDescription: "Capture a local desktop, display, window, or region screenshot and optionally auto-analyze it",
+    outputPersistencePolicy: "artifact",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["local-safe"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need to inspect the actual local desktop, a native application window, or a screen region outside the browser relay",
+      "Need a screenshot artifact whose result should immediately feed into image understanding",
+    ],
+    avoidWhen: [
+      "The target is only a browser page and browser_screenshot is sufficient with less host exposure",
+      "The required answer can be obtained from DOM, file content, or structured app state without capturing the screen",
+    ],
+    confirmWhen: [
+      "The capture may include private messages, credentials, internal dashboards, or unrelated windows on the host machine",
+      "You are about to capture the full desktop when a narrower window or region target would suffice",
+    ],
+    preflightChecks: [
+      "Confirm the native desktop helper, ffmpeg, and any target refs are available on the current host",
+      "Prefer window or region capture over full desktop capture when the scope can be narrowed",
+      "Check whether automatic image understanding should stay enabled for this screenshot path",
+    ],
+    fallbackStrategy: [
+      "Use screen_list_targets first when the target window or display is not yet stable",
+      "Fall back to browser_screenshot for browser content or to camera_snap for camera-origin visuals",
+    ],
+    expectedOutput: [
+      "JSON text containing the saved screenshot artifact path, capture target metadata, and image understanding status",
+      "When automatic image understanding succeeds, a concise preview and structured image understanding payload",
+    ],
+    sideEffectSummary: [
+      "Writes a screenshot artifact to the workspace and may also trigger a follow-up image understanding model call",
+      "Can persist sensitive host-screen content that was visible at capture time",
+    ],
+    userVisibleRiskNote: "这是本机屏幕截图工具。它会把桌面/窗口内容落盘，且可能继续触发图片识别；涉及隐私和账号态时要先收窄范围。",
+  },
 };
 
 export function getToolContractV2Profile(name: string): ToolContractV2Profile | undefined {

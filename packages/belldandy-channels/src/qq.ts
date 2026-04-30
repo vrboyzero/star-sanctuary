@@ -1,3 +1,7 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { spawn } from "node:child_process";
 import { WebSocket } from "ws";
 import type { BelldandyAgent, ConversationStore } from "@belldandy/agent";
 import type { ChatKind, ChannelRouter } from "./router/types.js";
@@ -12,6 +16,11 @@ export interface QqChannelConfig extends ChannelConfig {
     sandbox?: boolean;
     conversationStore: ConversationStore;
     agentId?: string;
+    sttTranscribe?: (opts: { buffer: Buffer; fileName: string; mime?: string; provider?: string }) => Promise<{ text: string } | null>;
+    eventSampleCapture?: {
+        enabled: boolean;
+        dir: string;
+    };
 }
 
 interface WsPayload {
@@ -19,6 +28,7 @@ interface WsPayload {
     d?: any;
     s?: number;
     t?: string;
+    id?: string;
 }
 
 type QqReplyContext = {
@@ -61,6 +71,12 @@ const Intents = {
     PUBLIC_GUILD_MESSAGES: 1 << 30,  // 公域消息（需要@）
 } as const;
 
+const QQ_EVENT_SAMPLE_CAPTURE_TIMEOUT_MS = 5_000;
+const QQ_VOICE_DOWNLOAD_TIMEOUT_MS = 15_000;
+const QQ_VOICE_STT_TIMEOUT_MS = 30_000;
+const QQ_VOICE_TRANSCODE_TIMEOUT_MS = 30_000;
+const DEFAULT_FFMPEG_COMMAND = "ffmpeg";
+
 export class QqChannel implements Channel {
     readonly name = "qq";
 
@@ -72,6 +88,8 @@ export class QqChannel implements Channel {
     private readonly replyChunkingConfig?: QqChannelConfig["replyChunkingConfig"];
     private readonly currentConversationBindingStore?: CurrentConversationBindingStore;
     private readonly onChannelSecurityApprovalRequired?: QqChannelConfig["onChannelSecurityApprovalRequired"];
+    private readonly sttTranscribe?: QqChannelConfig["sttTranscribe"];
+    private readonly eventSampleCapture?: QqChannelConfig["eventSampleCapture"];
 
     private _running = false;
     private readonly replyContextByChatId = new Map<string, QqReplyContext>();
@@ -106,6 +124,8 @@ export class QqChannel implements Channel {
         this.replyChunkingConfig = config.replyChunkingConfig;
         this.currentConversationBindingStore = config.currentConversationBindingStore;
         this.onChannelSecurityApprovalRequired = config.onChannelSecurityApprovalRequired;
+        this.sttTranscribe = config.sttTranscribe;
+        this.eventSampleCapture = config.eventSampleCapture?.enabled ? config.eventSampleCapture : undefined;
     }
 
     private resolveAgent(agentId?: string): BelldandyAgent {
@@ -128,6 +148,420 @@ export class QqChannel implements Channel {
     private resolveChatId(message: any): string | undefined {
         const chatId = message.channel_id || message.guild_id || message.group_openid || message.author?.id;
         return typeof chatId === "string" && chatId.length > 0 ? chatId : undefined;
+    }
+
+    private isMessageDispatchEventType(eventType: string | undefined): boolean {
+        return eventType === "AT_MESSAGE_CREATE"
+            || eventType === "MESSAGE_CREATE"
+            || eventType === "DIRECT_MESSAGE_CREATE"
+            || eventType === "C2C_MESSAGE_CREATE"
+            || eventType === "GROUP_AT_MESSAGE_CREATE";
+    }
+
+    private sanitizeSampleFileSegment(value: unknown, fallback: string): string {
+        if (typeof value !== "string") return fallback;
+        const trimmed = value.trim();
+        if (!trimmed) return fallback;
+        return trimmed.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 80) || fallback;
+    }
+
+    private normalizeOptionalString(value: unknown): string | undefined {
+        if (typeof value !== "string") return undefined;
+        const trimmed = value.trim();
+        return trimmed || undefined;
+    }
+
+    private normalizeDispatchMessage(payload: WsPayload): any {
+        const message = (payload.d && typeof payload.d === "object")
+            ? { ...payload.d }
+            : {};
+        if (typeof payload.id === "string" && !this.normalizeOptionalString(message.id)) {
+            message.id = payload.id;
+        }
+        return message;
+    }
+
+    private async captureEventSample(payload: WsPayload, eventType: string, sequence?: number): Promise<void> {
+        if (!this.eventSampleCapture?.enabled) return;
+
+        try {
+            const dir = this.eventSampleCapture.dir;
+            await fs.mkdir(dir, { recursive: true });
+            const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+            const messageId = this.sanitizeSampleFileSegment(
+                typeof payload.id === "string" ? payload.id : payload.d?.id,
+                "no-message-id",
+            );
+            const eventSegment = this.sanitizeSampleFileSegment(eventType, "unknown-event");
+            const sequenceSegment = Number.isFinite(sequence) ? String(sequence) : "na";
+            const filePath = path.join(
+                dir,
+                `${timestamp}_${eventSegment}_s${sequenceSegment}_${messageId.slice(0, 24)}.json`,
+            );
+            const message = this.normalizeDispatchMessage(payload);
+            const sampleRecord = {
+                capturedAt: new Date().toISOString(),
+                channel: "qq",
+                eventType,
+                sequence,
+                messageId: typeof message?.id === "string" ? message.id : undefined,
+                chatId: this.resolveChatId(message),
+                payload,
+            };
+            await fs.writeFile(filePath, `${JSON.stringify(sampleRecord, null, 2)}\n`, "utf8");
+            console.log(`[${this.name}] Captured QQ event sample: ${filePath}`);
+        } catch (error) {
+            console.warn(`[${this.name}] Failed to capture QQ event sample:`, error);
+        }
+    }
+
+    private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+        let timer: NodeJS.Timeout | undefined;
+        try {
+            return await Promise.race([
+                promise,
+                new Promise<T>((_, reject) => {
+                    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+                }),
+            ]);
+        } finally {
+            if (timer) {
+                clearTimeout(timer);
+            }
+        }
+    }
+
+    private readFfmpegCommand(): string {
+        const configured = this.normalizeOptionalString(process.env.BELLDANDY_CAMERA_NATIVE_HELPER_FFMPEG_COMMAND);
+        return configured ?? DEFAULT_FFMPEG_COMMAND;
+    }
+
+    private async runCommand(input: {
+        command: string;
+        args: string[];
+        timeoutMs: number;
+    }): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+        return await new Promise((resolve, reject) => {
+            const child = spawn(input.command, input.args, {
+                stdio: ["ignore", "pipe", "pipe"],
+                windowsHide: true,
+                shell: false,
+            });
+            let stdout = "";
+            let stderr = "";
+            let settled = false;
+            const timer = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                child.kill();
+                reject(new Error(`Command timed out after ${input.timeoutMs}ms: ${input.command}`));
+            }, input.timeoutMs);
+
+            child.stdout.setEncoding("utf8");
+            child.stderr.setEncoding("utf8");
+            child.stdout.on("data", (chunk) => {
+                stdout += String(chunk);
+            });
+            child.stderr.on("data", (chunk) => {
+                stderr += String(chunk);
+            });
+            child.on("error", (error) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                reject(error);
+            });
+            child.on("close", (exitCode) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                resolve({
+                    exitCode,
+                    stdout,
+                    stderr,
+                });
+            });
+        });
+    }
+
+    private async transcodeAmrBufferToWav(buffer: Buffer, fileName: string): Promise<Buffer> {
+        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-qq-amr-"));
+        const inputPath = path.join(tempDir, fileName || "voice.amr");
+        const outputPath = path.join(tempDir, `${path.parse(fileName || "voice").name}.wav`);
+        try {
+            await fs.writeFile(inputPath, buffer);
+            const result = await this.runCommand({
+                command: this.readFfmpegCommand(),
+                args: [
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    inputPath,
+                    "-ar",
+                    "16000",
+                    "-ac",
+                    "1",
+                    outputPath,
+                ],
+                timeoutMs: QQ_VOICE_TRANSCODE_TIMEOUT_MS,
+            });
+            if (result.exitCode !== 0) {
+                throw new Error(result.stderr || result.stdout || `ffmpeg exit=${result.exitCode ?? "null"}`);
+            }
+            return await fs.readFile(outputPath);
+        } finally {
+            await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+        }
+    }
+
+    private extractVoiceAttachment(message: any): {
+        url: string;
+        filename: string;
+        mime?: string;
+        wavUrl?: string;
+    } | undefined {
+        const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
+        for (const attachment of attachments) {
+            if (!attachment || typeof attachment !== "object") continue;
+            const url = this.normalizeOptionalString((attachment as Record<string, unknown>).url);
+            if (!url) continue;
+            const contentType = this.normalizeOptionalString((attachment as Record<string, unknown>).content_type)
+                ?? this.normalizeOptionalString((attachment as Record<string, unknown>).contentType);
+            const filename = this.normalizeOptionalString((attachment as Record<string, unknown>).filename)
+                ?? this.normalizeOptionalString((attachment as Record<string, unknown>).name)
+                ?? "voice.amr";
+            const wavUrl = this.normalizeOptionalString((attachment as Record<string, unknown>).voice_wav_url)
+                ?? this.normalizeOptionalString((attachment as Record<string, unknown>).voiceWavUrl);
+            const lowerName = filename.toLowerCase();
+            if (contentType === "voice" || contentType?.startsWith("audio/") || lowerName.endsWith(".amr")) {
+                const mime = contentType === "voice"
+                    ? "audio/amr"
+                    : contentType?.startsWith("audio/")
+                        ? contentType
+                        : lowerName.endsWith(".amr")
+                            ? "audio/amr"
+                            : undefined;
+                return { url, filename, mime, wavUrl };
+            }
+        }
+        return undefined;
+    }
+
+    private async downloadVoiceAttachmentBuffer(url: string, label: string): Promise<Buffer> {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), QQ_VOICE_DOWNLOAD_TIMEOUT_MS);
+        let response: Response;
+        try {
+            response = await fetch(url, {
+                signal: controller.signal,
+            });
+        } finally {
+            clearTimeout(timeout);
+        }
+        if (!response.ok) {
+            const text = await response.text().catch(() => "");
+            throw new Error(`Failed to download QQ voice attachment (${response.status}) ${text}`.trim());
+        }
+        const buffer = Buffer.from(await response.arrayBuffer());
+        console.log(`[${this.name}] Downloaded QQ voice attachment ${label}: ${buffer.length} bytes`);
+        return buffer;
+    }
+
+    private detectVoiceBufferFormat(buffer: Buffer): "silk" | "wav" | undefined {
+        if (buffer.length >= 9) {
+            const headerAt0 = buffer.subarray(0, 9).toString("ascii");
+            const headerAt1 = buffer.length >= 10 ? buffer.subarray(1, 10).toString("ascii") : "";
+            if (headerAt0 === "#!SILK_V3" || headerAt1 === "#!SILK_V3") {
+                return "silk";
+            }
+        }
+        if (buffer.length >= 12
+            && buffer.subarray(0, 4).toString("ascii") === "RIFF"
+            && buffer.subarray(8, 12).toString("ascii") === "WAVE") {
+            return "wav";
+        }
+        return undefined;
+    }
+
+    private getQqVoiceFallbackProviders(): string[] {
+        const configured = (process.env.BELLDANDY_QQ_STT_FALLBACK_PROVIDERS ?? "")
+            .split(",")
+            .map((item) => item.trim().toLowerCase())
+            .filter(Boolean);
+        if (configured.length > 0) {
+            return Array.from(new Set(configured)).filter((provider) => this.hasConfiguredSttProvider(provider));
+        }
+        const primary = (process.env.BELLDANDY_STT_PROVIDER ?? "openai").trim().toLowerCase();
+        return ["groq", "openai", "dashscope"].filter((provider) => provider !== primary && this.hasConfiguredSttProvider(provider));
+    }
+
+    private hasConfiguredSttProvider(provider: string): boolean {
+        switch (provider) {
+            case "groq":
+                return Boolean(
+                    process.env.BELLDANDY_STT_GROQ_API_KEY?.trim()
+                    || process.env.GROQ_API_KEY?.trim(),
+                );
+            case "openai":
+                return Boolean(
+                    process.env.BELLDANDY_STT_OPENAI_API_KEY?.trim()
+                    || process.env.OPENAI_API_KEY?.trim(),
+                );
+            case "dashscope":
+                return Boolean(process.env.DASHSCOPE_API_KEY?.trim());
+            default:
+                return true;
+        }
+    }
+
+    private async tryTranscribeWithFallbackProviders(input: {
+        buffer: Buffer;
+        fileName: string;
+        mime?: string;
+        msgId: string;
+        sourceLabel: string;
+    }): Promise<string | undefined> {
+        if (!this.sttTranscribe) {
+            return undefined;
+        }
+        for (const provider of this.getQqVoiceFallbackProviders()) {
+            try {
+                console.warn(`[${this.name}] QQ voice ${input.sourceLabel} STT returned empty for ${input.msgId}, retrying with provider=${provider}...`);
+                const result = await this.withTimeout(
+                    this.sttTranscribe({
+                        buffer: input.buffer,
+                        fileName: input.fileName,
+                        mime: input.mime,
+                        provider,
+                    }),
+                    QQ_VOICE_STT_TIMEOUT_MS,
+                    `QQ voice STT ${input.sourceLabel} fallback(${provider}) for ${input.msgId}`,
+                );
+                const text = this.normalizeOptionalString(result?.text);
+                if (text) {
+                    return text;
+                }
+            } catch (error) {
+                console.warn(`[${this.name}] QQ voice ${input.sourceLabel} fallback provider ${provider} failed for ${input.msgId}:`, error);
+            }
+        }
+        return undefined;
+    }
+
+    private async transcribeVoiceAttachment(message: any, msgId: string): Promise<string | undefined> {
+        const voiceAttachment = this.extractVoiceAttachment(message);
+        if (!voiceAttachment || !this.sttTranscribe) {
+            return undefined;
+        }
+
+        const originalFileName = voiceAttachment.filename || `qq_${msgId}.amr`;
+
+        if (voiceAttachment.wavUrl) {
+            console.log(`[${this.name}] Downloading QQ voice attachment WAV for ${msgId}: ${originalFileName}`);
+            const wavBuffer = await this.downloadVoiceAttachmentBuffer(voiceAttachment.wavUrl, `${msgId} (wav)`);
+            const wavFileName = `${path.parse(originalFileName).name}.wav`;
+            const wavResult = await this.withTimeout(
+                this.sttTranscribe({
+                    buffer: wavBuffer,
+                    fileName: wavFileName,
+                    mime: "audio/wav",
+                }),
+                QQ_VOICE_STT_TIMEOUT_MS,
+                `QQ voice STT wav for ${msgId}`,
+            );
+            const wavText = this.normalizeOptionalString(wavResult?.text);
+            if (wavText) {
+                return wavText;
+            }
+            const fallbackText = await this.tryTranscribeWithFallbackProviders({
+                buffer: wavBuffer,
+                fileName: wavFileName,
+                mime: "audio/wav",
+                msgId,
+                sourceLabel: "WAV",
+            });
+            if (fallbackText) {
+                return fallbackText;
+            }
+            console.warn(`[${this.name}] QQ voice WAV STT returned empty for ${msgId}, falling back to original attachment...`);
+        }
+
+        console.log(`[${this.name}] Downloading QQ voice attachment for ${msgId}: ${originalFileName}`);
+        const buffer = await this.downloadVoiceAttachmentBuffer(voiceAttachment.url, msgId);
+        const detectedFormat = this.detectVoiceBufferFormat(buffer);
+        if (detectedFormat === "silk") {
+            console.warn(`[${this.name}] QQ original voice attachment for ${msgId} is SILK_V3, skipping AMR->WAV transcode fallback.`);
+            return undefined;
+        }
+
+        let firstPassText: string | undefined;
+        try {
+            const result = await this.withTimeout(
+                this.sttTranscribe({
+                    buffer,
+                    fileName: originalFileName,
+                    mime: voiceAttachment.mime,
+                }),
+                QQ_VOICE_STT_TIMEOUT_MS,
+                `QQ voice STT for ${msgId}`,
+            );
+            firstPassText = this.normalizeOptionalString(result?.text);
+            if (firstPassText) {
+                return firstPassText;
+            }
+            if (voiceAttachment.mime !== "audio/amr") {
+                return undefined;
+            }
+            console.warn(`[${this.name}] QQ voice STT returned empty for ${msgId}, retrying after AMR->WAV transcode...`);
+        } catch (error) {
+            const messageText = error instanceof Error ? error.message : String(error);
+            const shouldRetryAsWav = voiceAttachment.mime === "audio/amr" && /decode_error/i.test(messageText);
+            if (!shouldRetryAsWav) {
+                throw error;
+            }
+            console.warn(`[${this.name}] QQ voice STT decode failed for ${msgId}, retrying after AMR->WAV transcode...`);
+        }
+
+        const wavBuffer = await this.transcodeAmrBufferToWav(buffer, originalFileName);
+        const wavFileName = `${path.parse(originalFileName).name}.wav`;
+        const retryResult = await this.withTimeout(
+            this.sttTranscribe({
+                buffer: wavBuffer,
+                fileName: wavFileName,
+                mime: "audio/wav",
+            }),
+            QQ_VOICE_STT_TIMEOUT_MS,
+            `QQ voice STT retry for ${msgId}`,
+        );
+        return this.normalizeOptionalString(retryResult?.text);
+    }
+
+    private async buildInboundText(message: any, msgId: string): Promise<string | undefined> {
+        const content = this.normalizeOptionalString(message?.content);
+        const voiceAttachment = this.extractVoiceAttachment(message);
+        if (!voiceAttachment) {
+            return content;
+        }
+
+        let transcript: string | undefined;
+        try {
+            transcript = await this.transcribeVoiceAttachment(message, msgId);
+        } catch (error) {
+            console.warn(`[${this.name}] Failed to transcribe QQ voice attachment for ${msgId}:`, error);
+        }
+
+        if (content && transcript) {
+            return `${content}\n\n[QQ 音频转写]\n${transcript}`;
+        }
+        if (transcript) {
+            return transcript;
+        }
+        if (content) {
+            return content;
+        }
+        return `[用户发送了 QQ 语音消息: ${voiceAttachment.filename}]`;
     }
 
     private rememberReplyContext(chatId: string, replyContext: QqReplyContext): void {
@@ -277,7 +711,7 @@ export class QqChannel implements Channel {
                 if (payload.op !== OpCode.HEARTBEAT_ACK) {
                     console.log(`[${this.name}] Raw WS message:`, JSON.stringify(payload).substring(0, 500));
                 }
-                this.handleWsMessage(payload);
+                void this.handleWsMessage(payload);
             } catch (error) {
                 console.error(`[${this.name}] Failed to parse WebSocket message:`, error);
             }
@@ -333,7 +767,7 @@ export class QqChannel implements Channel {
     /**
      * 处理 WebSocket 消息
      */
-    private handleWsMessage(payload: WsPayload): void {
+    private async handleWsMessage(payload: WsPayload): Promise<void> {
         const { op, d, s, t } = payload;
 
         // 更新序列号
@@ -370,7 +804,16 @@ export class QqChannel implements Channel {
                     t === "C2C_MESSAGE_CREATE" ||
                     t === "GROUP_AT_MESSAGE_CREATE"
                 ) {
-                    this.handleMessage(d, t);
+                    if (this.isMessageDispatchEventType(t)) {
+                        void this.withTimeout(
+                            this.captureEventSample(payload, t, s),
+                            QQ_EVENT_SAMPLE_CAPTURE_TIMEOUT_MS,
+                            `QQ event sample capture (${t})`,
+                        ).catch((error) => {
+                            console.warn(`[${this.name}] QQ event sample capture failed for ${t}:`, error);
+                        });
+                    }
+                    await this.handleMessage(this.normalizeDispatchMessage(payload), t);
                 } else {
                     console.log(`[${this.name}] Unhandled event type: ${t}`);
                 }
@@ -505,7 +948,7 @@ export class QqChannel implements Channel {
             return;
         }
 
-        const content = message.content?.trim();
+        const content = await this.buildInboundText(message, msgId);
         if (!content) return;
 
         console.log(`[${this.name}] Received message: ${content.substring(0, 50)}...`);

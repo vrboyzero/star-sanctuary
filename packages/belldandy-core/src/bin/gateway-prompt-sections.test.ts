@@ -99,6 +99,8 @@ describe("buildAgentRuntimePromptSections", () => {
       .toContain("do not infer canvas or board storage");
     expect(sections.find((section) => section.id === "tool-use-policy")?.text)
       .toContain("dream-runtime.json");
+    expect(sections.find((section) => section.id === "tool-use-policy")?.text)
+      .toContain("prefer `video_understand` with `focus_mode=timestamp_query`");
   });
 
   it("skips delegation and role sections when they do not apply", () => {

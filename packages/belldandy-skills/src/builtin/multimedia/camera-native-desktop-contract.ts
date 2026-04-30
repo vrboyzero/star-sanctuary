@@ -44,6 +44,11 @@ export type CameraNativeDesktopHelperCapabilities = CameraProviderCapabilities &
   clipFormats: CameraNativeDesktopClipFormat[];
   selectionByStableKey: boolean;
   deviceChangeEvents: boolean;
+  screenTargetList?: boolean;
+  screenCapture?: boolean;
+  windowCapture?: boolean;
+  displayCapture?: boolean;
+  regionCapture?: boolean;
 };
 
 export type CameraNativeDesktopHelperIssue = {
@@ -56,6 +61,7 @@ export type CameraNativeDesktopHelperIssue = {
     | "device_busy"
     | "driver_error"
     | "capture_failed"
+    | "target_not_found"
     | "timeout"
     | "unsupported_method"
     | "unknown";
@@ -120,6 +126,34 @@ export type CameraNativeDesktopSnapshotArtifact = {
   height?: number;
   sizeBytes?: number;
   capturedAt: string;
+};
+
+export type CameraNativeDesktopScreenRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type CameraNativeDesktopDisplayTarget = {
+  id: string;
+  displayRef: string;
+  name: string;
+  isPrimary: boolean;
+  bounds: CameraNativeDesktopScreenRect;
+  workArea?: CameraNativeDesktopScreenRect;
+};
+
+export type CameraNativeDesktopWindowTarget = {
+  id: string;
+  windowRef: string;
+  title: string;
+  appName?: string;
+  processId?: number;
+  isVisible: boolean;
+  isMinimized: boolean;
+  bounds: CameraNativeDesktopScreenRect;
+  displayId?: string;
 };
 
 export type CameraNativeDesktopClipArtifact = {
@@ -225,6 +259,63 @@ export type CameraNativeDesktopHelperCaptureClipResponse = {
   issues?: CameraNativeDesktopHelperIssue[];
 };
 
+export type CameraNativeDesktopListCaptureTargetsRequest = {
+  includeDisplays?: boolean;
+  includeWindows?: boolean;
+  includeMinimizedWindows?: boolean;
+  windowTitleFilter?: string;
+};
+
+export type CameraNativeDesktopListCaptureTargetsResponse = {
+  observedAt: string;
+  helperStatus: CameraNativeDesktopHelperStatus;
+  permissionState: CameraNativeDesktopPermissionState;
+  displays?: CameraNativeDesktopDisplayTarget[];
+  windows?: CameraNativeDesktopWindowTarget[];
+  issues?: CameraNativeDesktopHelperIssue[];
+};
+
+export type CameraNativeDesktopScreenCaptureTarget =
+  | {
+    kind: "desktop";
+  }
+  | {
+    kind: "display";
+    displayId?: string;
+    displayRef?: string;
+  }
+  | {
+    kind: "window";
+    windowId?: string;
+    windowRef?: string;
+    windowTitle?: string;
+  }
+  | ({
+    kind: "region";
+  } & CameraNativeDesktopScreenRect);
+
+export type CameraNativeDesktopCaptureScreenRequest = {
+  target: CameraNativeDesktopScreenCaptureTarget;
+  output?: {
+    filePath?: string;
+    format?: CameraNativeDesktopSnapshotFormat;
+  };
+  delayMs?: number;
+  timeoutMs?: number;
+  includeCursor?: boolean;
+};
+
+export type CameraNativeDesktopCaptureScreenResponse = {
+  observedAt: string;
+  helperStatus: CameraNativeDesktopHelperStatus;
+  permissionState: CameraNativeDesktopPermissionState;
+  target: CameraNativeDesktopScreenCaptureTarget;
+  artifact: CameraNativeDesktopSnapshotArtifact;
+  display?: CameraNativeDesktopDisplayTarget;
+  window?: CameraNativeDesktopWindowTarget;
+  issues?: CameraNativeDesktopHelperIssue[];
+};
+
 export type CameraNativeDesktopHelperShutdownRequest = {
   reason?: "manual" | "idle-timeout" | "upgrade";
 };
@@ -247,10 +338,18 @@ export interface CameraNativeDesktopHelperClient {
     input: CameraNativeDesktopHelperListDevicesRequest,
     context: CameraProviderContext,
   ): Promise<CameraNativeDesktopHelperListDevicesResponse>;
+  listCaptureTargets?(
+    input: CameraNativeDesktopListCaptureTargetsRequest,
+    context: CameraProviderContext,
+  ): Promise<CameraNativeDesktopListCaptureTargetsResponse>;
   captureSnapshot(
     input: CameraNativeDesktopHelperCaptureSnapshotRequest,
     context: CameraProviderContext,
   ): Promise<CameraNativeDesktopHelperCaptureSnapshotResponse>;
+  captureScreen?(
+    input: CameraNativeDesktopCaptureScreenRequest,
+    context: CameraProviderContext,
+  ): Promise<CameraNativeDesktopCaptureScreenResponse>;
   captureClip?(
     input: CameraNativeDesktopHelperCaptureClipRequest,
     context: CameraProviderContext,
@@ -272,6 +371,14 @@ export function buildNativeDesktopDeviceRef(stableKey: string): string {
 
 export function buildNativeDesktopFacingDeviceRef(facing: CameraFacing): string {
   return `native_desktop:facing:${facing}`;
+}
+
+export function buildNativeDesktopDisplayRef(displayId: string): string {
+  return `native_desktop:display:${encodeURIComponent(displayId)}`;
+}
+
+export function buildNativeDesktopWindowRef(windowId: string): string {
+  return `native_desktop:window:${encodeURIComponent(windowId)}`;
 }
 
 export function parseNativeDesktopDeviceRef(
@@ -322,5 +429,45 @@ export function resolveNativeDesktopSelection(
     deviceRef: input.deviceRef,
     stableKey: parsedRef.stableKey,
     facing: parsedRef.facing ?? input.facing,
+  };
+}
+
+export function parseNativeDesktopDisplayRef(displayRef: string | undefined): {
+  displayId?: string;
+} {
+  const normalized = typeof displayRef === "string" ? displayRef.trim() : "";
+  if (!normalized) {
+    return {};
+  }
+  const parts = normalized.split(":");
+  if (parts[0] !== "native_desktop" || parts[1] !== "display") {
+    throw new Error(`displayRef does not belong to native_desktop display: ${normalized}`);
+  }
+  const encodedDisplayId = parts.slice(2).join(":");
+  if (!encodedDisplayId) {
+    throw new Error(`Invalid native_desktop displayRef: ${normalized}`);
+  }
+  return {
+    displayId: decodeURIComponent(encodedDisplayId),
+  };
+}
+
+export function parseNativeDesktopWindowRef(windowRef: string | undefined): {
+  windowId?: string;
+} {
+  const normalized = typeof windowRef === "string" ? windowRef.trim() : "";
+  if (!normalized) {
+    return {};
+  }
+  const parts = normalized.split(":");
+  if (parts[0] !== "native_desktop" || parts[1] !== "window") {
+    throw new Error(`windowRef does not belong to native_desktop window: ${normalized}`);
+  }
+  const encodedWindowId = parts.slice(2).join(":");
+  if (!encodedWindowId) {
+    throw new Error(`Invalid native_desktop windowRef: ${normalized}`);
+  }
+  return {
+    windowId: decodeURIComponent(encodedWindowId),
   };
 }

@@ -3,12 +3,24 @@ import path from "node:path";
 
 import type { AgentPromptDelta } from "@belldandy/agent";
 import type { MessageSendParams } from "@belldandy/protocol";
-import type { TranscribeOptions, TranscribeResult } from "@belldandy/skills";
+import {
+  readImageUnderstandConfig,
+  readVideoUnderstandConfig,
+  transcribeSpeechWithCache,
+  understandImageFile,
+  understandVideoFile,
+  type ImageUnderstandResult,
+  type TranscribeOptions,
+  type TranscribeResult,
+  type VideoUnderstandResult,
+} from "@belldandy/skills";
 
 import {
   createAttachmentFingerprint,
-  readCachedAudioTranscription,
-  writeCachedAudioTranscription,
+  readCachedImageUnderstanding,
+  readCachedVideoUnderstanding,
+  writeCachedImageUnderstanding,
+  writeCachedVideoUnderstanding,
 } from "./attachment-understanding-cache.js";
 import { hasMediaCapability, type MediaCapability } from "./media-capability-registry.js";
 
@@ -100,31 +112,36 @@ export async function preparePromptWithAttachments(input: {
       });
 
       if (normalized.kind === "image") {
-        const imageHandled = handleImageAttachment({
-          index,
-          attachment,
-          fingerprint: normalized.fingerprint,
-          promptPath: toAttachmentPromptPath(input.stateDir, normalized.savePath),
-          acceptedContentCapabilities: input.acceptedContentCapabilities,
-        });
-        attachmentPrompts.push(imageHandled.prompt);
-        if (imageHandled.contentPart) contentParts.push(imageHandled.contentPart);
-        promptDeltas.push(imageHandled.promptDelta);
-        continue;
-      }
-
-      if (normalized.kind === "video") {
-        const videoHandled = handleVideoAttachment({
+        const imageHandled = await buildImageAttachmentPrompt({
           index,
           attachment,
           fingerprint: normalized.fingerprint,
           savePath: normalized.savePath,
+          stateDir: input.stateDir,
+          log: input.log,
           promptPath: toAttachmentPromptPath(input.stateDir, normalized.savePath),
           acceptedContentCapabilities: input.acceptedContentCapabilities,
         });
-        attachmentPrompts.push(videoHandled.prompt);
+        attachmentPrompts.push(...imageHandled.prompts);
+        if (imageHandled.contentPart) contentParts.push(imageHandled.contentPart);
+        promptDeltas.push(...imageHandled.promptDeltas);
+        continue;
+      }
+
+      if (normalized.kind === "video") {
+        const videoHandled = await buildVideoAttachmentPrompt({
+          index,
+          attachment,
+          fingerprint: normalized.fingerprint,
+          savePath: normalized.savePath,
+          stateDir: input.stateDir,
+          log: input.log,
+          promptPath: toAttachmentPromptPath(input.stateDir, normalized.savePath),
+          acceptedContentCapabilities: input.acceptedContentCapabilities,
+        });
+        attachmentPrompts.push(...videoHandled.prompts);
         if (videoHandled.contentPart) contentParts.push(videoHandled.contentPart);
-        promptDeltas.push(videoHandled.promptDelta);
+        promptDeltas.push(...videoHandled.promptDeltas);
         continue;
       }
 
@@ -257,42 +274,45 @@ async function resolveAttachmentSavePath(input: {
   return path.join(input.attachmentDir, dedupedName);
 }
 
-function handleImageAttachment(input: {
+async function buildImageAttachmentPrompt(input: {
   index: number;
   attachment: NonNullable<MessageSendParams["attachments"]>[number];
   fingerprint: string;
+  savePath: string;
+  stateDir: string;
+  log: QueryRuntimeLogger;
   promptPath: string;
   acceptedContentCapabilities?: readonly MediaCapability[];
-}): {
-  prompt: string;
+}): Promise<{
+  prompts: string[];
   contentPart?: Record<string, unknown>;
-  promptDelta: AgentPromptDelta;
-} {
-  if (hasMediaCapability(input.acceptedContentCapabilities, "image_input")) {
-    return {
-      prompt: `\n[用户上传了图片: ${input.attachment.name}]`,
-      contentPart: {
-        type: "image_url",
-        image_url: { url: `data:${input.attachment.type};base64,${input.attachment.base64}` },
-      },
-      promptDelta: createPromptDelta({
-        id: `attachment-image-${input.index + 1}`,
-        deltaType: "attachment",
-        role: "attachment",
-        text: `[用户上传了图片: ${input.attachment.name}]`,
-        metadata: {
-          name: input.attachment.name,
-          mime: input.attachment.type,
-          kind: "image",
-          fingerprint: input.fingerprint,
-        },
-      }),
-    };
-  }
+  promptDeltas: AgentPromptDelta[];
+}> {
+  const prompts: string[] = [];
+  const promptDeltas: AgentPromptDelta[] = [];
+  let contentPart: Record<string, unknown> | undefined;
 
-  return {
-    prompt: `\n[用户上传了图片: ${input.attachment.name}（当前模型未声明 image_input，未走多模态注入）; workspace path: ${input.promptPath}]`,
-    promptDelta: createPromptDelta({
+  if (hasMediaCapability(input.acceptedContentCapabilities, "image_input")) {
+    prompts.push(`\n[用户上传了图片: ${input.attachment.name}]`);
+    contentPart = {
+      type: "image_url",
+      image_url: { url: `data:${input.attachment.type};base64,${input.attachment.base64}` },
+    };
+    promptDeltas.push(createPromptDelta({
+      id: `attachment-image-${input.index + 1}`,
+      deltaType: "attachment",
+      role: "attachment",
+      text: `[用户上传了图片: ${input.attachment.name}]`,
+      metadata: {
+        name: input.attachment.name,
+        mime: input.attachment.type,
+        kind: "image",
+        fingerprint: input.fingerprint,
+      },
+    }));
+  } else {
+    prompts.push(`\n[用户上传了图片: ${input.attachment.name}（当前模型未声明 image_input，未走多模态注入）; workspace path: ${input.promptPath}]`);
+    promptDeltas.push(createPromptDelta({
       id: `attachment-image-${input.index + 1}-degraded`,
       deltaType: "attachment",
       role: "attachment",
@@ -305,8 +325,229 @@ function handleImageAttachment(input: {
         status: "capability-missing",
         path: input.promptPath,
       },
-    }),
+    }));
+  }
+
+  const understanding = await maybeUnderstandImageAttachment({
+    attachment: input.attachment,
+    fingerprint: input.fingerprint,
+    savePath: input.savePath,
+    stateDir: input.stateDir,
+    log: input.log,
+  });
+  if (understanding) {
+    const rendered = renderImageUnderstandingText(understanding.result);
+    prompts.push(`\n${rendered}`);
+    promptDeltas.push(createPromptDelta({
+      id: `attachment-image-understanding-${input.index + 1}`,
+      deltaType: "attachment",
+      role: "attachment",
+      text: rendered,
+      metadata: {
+        name: input.attachment.name,
+        mime: input.attachment.type,
+        kind: "image_understanding",
+        fingerprint: input.fingerprint,
+        cacheHit: understanding.cacheHit,
+        model: understanding.result.model,
+        provider: understanding.result.provider,
+      },
+    }));
+  }
+
+  return {
+    prompts,
+    contentPart,
+    promptDeltas,
   };
+}
+
+async function maybeUnderstandImageAttachment(input: {
+  attachment: NonNullable<MessageSendParams["attachments"]>[number];
+  fingerprint: string;
+  savePath: string;
+  stateDir: string;
+  log: QueryRuntimeLogger;
+}): Promise<{ result: ImageUnderstandResult; cacheHit: boolean } | undefined> {
+  const config = readImageUnderstandConfig();
+  if (!config.enabled || !config.autoOnAttachment) {
+    return undefined;
+  }
+
+  try {
+    const cached = await readCachedImageUnderstanding({
+      stateDir: input.stateDir,
+      fingerprint: input.fingerprint,
+    });
+    if (cached?.result) {
+      return {
+        result: cached.result,
+        cacheHit: true,
+      };
+    }
+
+    const result = await understandImageFile({
+      filePath: input.savePath,
+      mimeType: input.attachment.type,
+    });
+    await writeCachedImageUnderstanding({
+      stateDir: input.stateDir,
+      fingerprint: input.fingerprint,
+      mime: input.attachment.type,
+      result,
+    });
+    return {
+      result,
+      cacheHit: false,
+    };
+  } catch (error) {
+    input.log.warn("message", "Image attachment auto understanding failed", {
+      name: input.attachment.name,
+      mime: input.attachment.type,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+}
+
+function renderImageUnderstandingText(result: ImageUnderstandResult): string {
+  const lines = [`[图片识别摘要: ${truncateInlineText(result.summary, 320)}]`];
+  if (result.tags.length > 0) {
+    lines.push(`[图片标签: ${result.tags.slice(0, 8).join("，")}]`);
+  }
+  if (result.keyRegions.length > 0) {
+    lines.push(`[图片重点区域: ${result.keyRegions.slice(0, 3).map((item) => `${truncateInlineText(item.label, 24)} ${truncateInlineText(item.summary, 48)}`).join("；")}]`);
+  }
+  if (result.ocrText) {
+    lines.push(`[图片可见文字: ${truncateInlineText(result.ocrText, 800)}]`);
+  }
+  return lines.join("\n");
+}
+
+function truncateInlineText(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+async function buildVideoAttachmentPrompt(input: {
+  index: number;
+  attachment: NonNullable<MessageSendParams["attachments"]>[number];
+  fingerprint: string;
+  savePath: string;
+  stateDir: string;
+  log: QueryRuntimeLogger;
+  promptPath: string;
+  acceptedContentCapabilities?: readonly MediaCapability[];
+}): Promise<{
+  prompts: string[];
+  contentPart?: Record<string, unknown>;
+  promptDeltas: AgentPromptDelta[];
+}> {
+  const baseHandled = handleVideoAttachment({
+    index: input.index,
+    attachment: input.attachment,
+    fingerprint: input.fingerprint,
+    savePath: input.savePath,
+    promptPath: input.promptPath,
+    acceptedContentCapabilities: input.acceptedContentCapabilities,
+  });
+  const prompts = [baseHandled.prompt];
+  const promptDeltas = [baseHandled.promptDelta];
+
+  const understanding = await maybeUnderstandVideoAttachment({
+    attachment: input.attachment,
+    fingerprint: input.fingerprint,
+    savePath: input.savePath,
+    stateDir: input.stateDir,
+    log: input.log,
+  });
+  if (understanding) {
+    const rendered = renderVideoUnderstandingText(understanding.result);
+    prompts.push(`\n${rendered}`);
+    promptDeltas.push(createPromptDelta({
+      id: `attachment-video-understanding-${input.index + 1}`,
+      deltaType: "attachment",
+      role: "attachment",
+      text: rendered,
+      metadata: {
+        name: input.attachment.name,
+        mime: input.attachment.type,
+        kind: "video_understanding",
+        fingerprint: input.fingerprint,
+        cacheHit: understanding.cacheHit,
+        model: understanding.result.model,
+        provider: understanding.result.provider,
+      },
+    }));
+  }
+
+  return {
+    prompts,
+    contentPart: baseHandled.contentPart,
+    promptDeltas,
+  };
+}
+
+async function maybeUnderstandVideoAttachment(input: {
+  attachment: NonNullable<MessageSendParams["attachments"]>[number];
+  fingerprint: string;
+  savePath: string;
+  stateDir: string;
+  log: QueryRuntimeLogger;
+}): Promise<{ result: VideoUnderstandResult; cacheHit: boolean } | undefined> {
+  const config = readVideoUnderstandConfig();
+  if (!config.enabled || !config.autoOnAttachment) {
+    return undefined;
+  }
+
+  try {
+    const cached = await readCachedVideoUnderstanding({
+      stateDir: input.stateDir,
+      fingerprint: input.fingerprint,
+    });
+    if (cached?.result) {
+      return {
+        result: cached.result,
+        cacheHit: true,
+      };
+    }
+
+    const result = await understandVideoFile({
+      filePath: input.savePath,
+      mimeType: input.attachment.type,
+    });
+    await writeCachedVideoUnderstanding({
+      stateDir: input.stateDir,
+      fingerprint: input.fingerprint,
+      mime: input.attachment.type,
+      result,
+    });
+    return {
+      result,
+      cacheHit: false,
+    };
+  } catch (error) {
+    input.log.warn("message", "Video attachment auto understanding failed", {
+      name: input.attachment.name,
+      mime: input.attachment.type,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+}
+
+function renderVideoUnderstandingText(result: VideoUnderstandResult): string {
+  const lines = [`[视频识别摘要: ${truncateInlineText(result.summary, 320)}]`];
+  if (result.tags.length > 0) {
+    lines.push(`[视频标签: ${result.tags.slice(0, 8).join("，")}]`);
+  }
+  if (result.timeline.length > 0) {
+    lines.push(`[视频关键片段: ${result.timeline.slice(0, 3).map((item) => `${item.timestamp} ${truncateInlineText(item.summary, 48)}`).join("；")}]`);
+  }
+  if (result.ocrText) {
+    lines.push(`[视频可见文字: ${truncateInlineText(result.ocrText, 800)}]`);
+  }
+  return lines.join("\n");
 }
 
 function handleVideoAttachment(input: {
@@ -468,27 +709,18 @@ async function buildAudioAttachmentPrompt(input: {
 
   input.log.debug("stt", "Transcribing audio attachment", { name: input.attachment.name });
   try {
-    const cached = await readCachedAudioTranscription({
+    const { result: sttResult, cacheHit } = await transcribeSpeechWithCache({
       stateDir: input.stateDir,
-      fingerprint: input.fingerprint,
-    });
-    const sttResult = cached?.result ?? await input.sttTranscribe({
       buffer: input.buffer,
       fileName: input.attachment.name,
       mime: input.attachment.type,
+      transcribe: input.sttTranscribe,
     });
-    if (cached?.result) {
+    if (cacheHit) {
       audioTranscriptCacheHits += 1;
       input.log.debug("stt", "Audio transcript cache hit", {
         name: input.attachment.name,
         fingerprint: input.fingerprint,
-      });
-    } else if (sttResult?.text) {
-      await writeCachedAudioTranscription({
-        stateDir: input.stateDir,
-        fingerprint: input.fingerprint,
-        mime: input.attachment.type,
-        result: sttResult,
       });
     }
 
@@ -512,7 +744,7 @@ async function buildAudioAttachmentPrompt(input: {
     input.log.debug("stt", "Audio transcribed", {
       name: input.attachment.name,
       textLength: sttResult.text.length,
-      cacheHit: cached?.result ? true : false,
+      cacheHit,
     });
 
     if (!promptText.trim()) {
@@ -551,7 +783,7 @@ async function buildAudioAttachmentPrompt(input: {
           mime: input.attachment.type,
           status: "budget-exhausted",
           fingerprint: input.fingerprint,
-          cacheHit: cached?.result ? true : false,
+          cacheHit,
         },
       }));
       return { promptText, audioTranscriptChars, audioTranscriptCacheHits, prompts, promptDeltas };
@@ -585,7 +817,7 @@ async function buildAudioAttachmentPrompt(input: {
         mime: input.attachment.type,
         fingerprint: input.fingerprint,
         truncated: truncatedTranscript.truncated,
-        cacheHit: cached?.result ? true : false,
+        cacheHit,
       },
     }));
     return { promptText, audioTranscriptChars, audioTranscriptCacheHits, prompts, promptDeltas };

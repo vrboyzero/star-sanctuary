@@ -2477,6 +2477,153 @@ function buildCameraRuntimeCard(payload, t) {
   };
 }
 
+function resolveNativeDesktopHelperProvider(payload) {
+  const providers = Array.isArray(payload?.cameraRuntime?.providers) ? payload.cameraRuntime.providers : [];
+  return providers.find((provider) => provider && provider.id === "native_desktop");
+}
+
+function formatDoctorBinaryState(value, labels = {}) {
+  if (value === true) {
+    return labels.trueText || "yes";
+  }
+  if (value === false) {
+    return labels.falseText || "no";
+  }
+  return labels.unknownText || "-";
+}
+
+function buildNativeDesktopHelperCard(payload, t) {
+  const provider = resolveNativeDesktopHelperProvider(payload);
+  if (!provider) {
+    return undefined;
+  }
+
+  const metadata = provider.metadata && typeof provider.metadata === "object"
+    ? provider.metadata
+    : {};
+  const launchConfig = provider.launchConfig && typeof provider.launchConfig === "object"
+    ? provider.launchConfig
+    : {};
+  const capabilities = provider.capabilities && typeof provider.capabilities === "object"
+    ? provider.capabilities
+    : {};
+  const issues = Array.isArray(provider.issues) ? provider.issues : [];
+  const recoveryHints = Array.isArray(provider.recoveryHints) ? provider.recoveryHints : [];
+  const healthCheck = provider.healthCheck && typeof provider.healthCheck === "object"
+    ? provider.healthCheck
+    : undefined;
+  const runtimeHealth = provider.runtimeHealth && typeof provider.runtimeHealth === "object"
+    ? provider.runtimeHealth
+    : undefined;
+  const helperStatus = provider.helperStatus
+    || (typeof metadata.helperStatus === "string" ? metadata.helperStatus : "")
+    || provider.status
+    || "-";
+  const helperVersion = typeof metadata.helperVersion === "string" ? metadata.helperVersion : "";
+  const permissionState = provider.permissionState || healthCheck?.permission?.state || "-";
+  const powershellReady = capabilities.screenTargetList === true || capabilities.list === true;
+  const ffmpegReady = capabilities.screenCapture === true || capabilities.snapshot === true;
+  const cardStatus = provider.issueCounts?.error > 0
+    || provider.issueCounts?.warning > 0
+    || healthCheck?.status === "fail"
+    || healthCheck?.status === "warn"
+    || provider.status === "degraded"
+    || provider.status === "unavailable"
+    || provider.configured === false
+    ? "warn"
+    : "pass";
+  const latestIssue = issues[0];
+  const lastFailure = runtimeHealth?.lastFailure;
+  const nextAction = healthCheck?.recoveryActions?.[0]?.label || recoveryHints[0] || provider.fix;
+
+  const badges = [
+    tr(
+      t,
+      "settings.doctorNativeDesktopHelperConfigured",
+      { state: provider.configured === false ? "no" : "yes" },
+      `configured ${provider.configured === false ? "no" : "yes"}`,
+    ),
+    tr(
+      t,
+      "settings.doctorNativeDesktopHelperStatus",
+      { status: helperStatus },
+      `helper ${helperStatus}`,
+    ),
+    tr(
+      t,
+      "settings.doctorNativeDesktopHelperPowerShell",
+      { status: formatDoctorBinaryState(powershellReady, { trueText: "ready", falseText: "missing" }) },
+      `PowerShell ${formatDoctorBinaryState(powershellReady, { trueText: "ready", falseText: "missing" })}`,
+    ),
+    tr(
+      t,
+      "settings.doctorNativeDesktopHelperFfmpeg",
+      { status: formatDoctorBinaryState(ffmpegReady, { trueText: "ready", falseText: "missing" }) },
+      `FFmpeg ${formatDoctorBinaryState(ffmpegReady, { trueText: "ready", falseText: "missing" })}`,
+    ),
+  ];
+  if (helperVersion) {
+    badges.push(tr(
+      t,
+      "settings.doctorNativeDesktopHelperVersion",
+      { version: helperVersion },
+      `version ${helperVersion}`,
+    ));
+  }
+
+  const notes = [
+    tr(
+      t,
+      "settings.doctorNativeDesktopHelperHeadline",
+      { headline: provider.headline || "-" },
+      provider.headline || "-",
+    ),
+    `status: provider=${provider.status || "-"}, helper=${helperStatus}, permission=${permissionState}, registered=${provider.registered === false ? "no" : "yes"}, configured=${provider.configured === false ? "no" : "yes"}`,
+  ];
+
+  const launchBits = [
+    launchConfig.transport ? `transport=${launchConfig.transport}` : "",
+    launchConfig.command ? `command=${launchConfig.command}` : "",
+    launchConfig.resolvedCommand ? `resolvedCommand=${launchConfig.resolvedCommand}` : "",
+    launchConfig.helperEntry ? `entry=${launchConfig.helperEntry}` : "",
+    launchConfig.resolvedHelperEntry ? `resolvedEntry=${launchConfig.resolvedHelperEntry}` : "",
+    launchConfig.cwd ? `cwd=${launchConfig.cwd}` : "",
+    launchConfig.runtimeDir ? `runtimeDir=${launchConfig.runtimeDir}` : "",
+  ].filter(Boolean);
+  if (launchBits.length) {
+    notes.push(`launch: ${launchBits.join(", ")}`);
+  }
+
+  const toolchainBits = [
+    `powershell=${launchConfig.powershellCommand || "powershell.exe"} (${formatDoctorBinaryState(powershellReady, { trueText: "ready", falseText: "missing" })})`,
+    `ffmpeg=${launchConfig.ffmpegCommand || "ffmpeg"} (${formatDoctorBinaryState(ffmpegReady, { trueText: "ready", falseText: "missing" })})`,
+  ];
+  notes.push(`toolchain: ${toolchainBits.join(", ")}`);
+
+  notes.push(
+    `capabilities: camera_list=${formatDoctorBinaryState(capabilities.list)}, camera_snapshot=${formatDoctorBinaryState(capabilities.snapshot)}, screen_targets=${formatDoctorBinaryState(capabilities.screenTargetList)}, screen_capture=${formatDoctorBinaryState(capabilities.screenCapture)}, display_capture=${formatDoctorBinaryState(capabilities.displayCapture)}, window_capture=${formatDoctorBinaryState(capabilities.windowCapture)}, region_capture=${formatDoctorBinaryState(capabilities.regionCapture)}`,
+  );
+
+  if (latestIssue) {
+    notes.push(`latest issue: ${latestIssue.code || "unknown"} / ${latestIssue.message || "-"}`);
+  }
+  if (lastFailure) {
+    notes.push(
+      `last failure: ${lastFailure.code || "unknown"} @ ${lastFailure.at || "-"} (${lastFailure.operation || "-"}) ${lastFailure.message || "-"}`,
+    );
+  }
+  if (nextAction) {
+    notes.push(`next action: ${nextAction}`);
+  }
+
+  return {
+    title: tr(t, "settings.doctorNativeDesktopHelperTitle", {}, "Native Desktop Helper"),
+    badges,
+    notes,
+    status: cardStatus,
+  };
+}
+
 function buildDeploymentBackendsCard(payload, t) {
   const runtime = payload?.deploymentBackends;
   if (!runtime?.summary || !Array.isArray(runtime?.items)) {
@@ -3195,6 +3342,7 @@ export function renderDoctorObservabilityCards(container, payload, t, handlers =
     buildEmailOutboundRuntimeCard(payload, t),
     buildEmailInboundRuntimeCard(payload, t),
     buildCameraRuntimeCard(payload, t),
+    buildNativeDesktopHelperCard(payload, t),
     buildDeploymentBackendsCard(payload, t),
     buildAgentStopRuntimeCard(payload, t),
     buildRuntimeResilienceCard(payload, t),
@@ -3391,6 +3539,14 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(`${cameraRuntimeCard.title}:`);
     lines.push(...cameraRuntimeCard.badges.map((badge) => `- ${badge}`));
     lines.push(...cameraRuntimeCard.notes.map((note) => `- ${formatNote(note)}`));
+  }
+
+  const nativeDesktopHelperCard = buildNativeDesktopHelperCard(payload, t);
+  if (nativeDesktopHelperCard) {
+    lines.push(``);
+    lines.push(`${nativeDesktopHelperCard.title}:`);
+    lines.push(...nativeDesktopHelperCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...nativeDesktopHelperCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
   const deploymentBackendsCard = buildDeploymentBackendsCard(payload, t);

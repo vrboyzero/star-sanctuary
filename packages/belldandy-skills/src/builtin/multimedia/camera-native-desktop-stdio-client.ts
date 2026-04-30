@@ -12,12 +12,16 @@ import {
 } from "../../abort-utils.js";
 import {
   CAMERA_NATIVE_DESKTOP_PROTOCOL_ID,
+  type CameraNativeDesktopCaptureScreenRequest,
+  type CameraNativeDesktopCaptureScreenResponse,
   type CameraNativeDesktopHelperClient,
   type CameraNativeDesktopHelperConfig,
   type CameraNativeDesktopHelperDiagnoseRequest,
   type CameraNativeDesktopHelperDiagnoseResponse,
   type CameraNativeDesktopHelperHelloRequest,
   type CameraNativeDesktopHelperHelloResponse,
+  type CameraNativeDesktopListCaptureTargetsRequest,
+  type CameraNativeDesktopListCaptureTargetsResponse,
   type CameraNativeDesktopHelperListDevicesRequest,
   type CameraNativeDesktopHelperListDevicesResponse,
   type CameraNativeDesktopHelperShutdownRequest,
@@ -286,12 +290,30 @@ export class NativeDesktopStdioHelperClient implements CameraNativeDesktopHelper
     return this.sendRequest("list_devices", input, context);
   }
 
+  async listCaptureTargets(
+    input: CameraNativeDesktopListCaptureTargetsRequest,
+    context: CameraProviderContext,
+  ): Promise<CameraNativeDesktopListCaptureTargetsResponse> {
+    await this.ensureReady(context);
+    return this.sendRequest("list_capture_targets", input, context);
+  }
+
   async captureSnapshot(
     input: CameraNativeDesktopHelperCaptureSnapshotRequest,
     context: CameraProviderContext,
   ): Promise<CameraNativeDesktopHelperCaptureSnapshotResponse> {
     await this.ensureReady(context);
     return this.sendRequest("capture_snapshot", input, context, {
+      timeoutMs: input.timeoutMs,
+    });
+  }
+
+  async captureScreen(
+    input: CameraNativeDesktopCaptureScreenRequest,
+    context: CameraProviderContext,
+  ): Promise<CameraNativeDesktopCaptureScreenResponse> {
+    await this.ensureReady(context);
+    return this.sendRequest("capture_screen", input, context, {
       timeoutMs: input.timeoutMs,
     });
   }

@@ -11,9 +11,16 @@ import type {
 } from "./camera-contract.js";
 import {
   CAMERA_NATIVE_DESKTOP_PROTOCOL_ID,
+  buildNativeDesktopDisplayRef,
   buildNativeDesktopFacingDeviceRef,
+  buildNativeDesktopWindowRef,
+  parseNativeDesktopDisplayRef,
+  parseNativeDesktopWindowRef,
   resolveNativeDesktopSelection,
+  type CameraNativeDesktopCaptureScreenRequest,
+  type CameraNativeDesktopCaptureScreenResponse,
   type CameraNativeDesktopCaptureConstraints,
+  type CameraNativeDesktopDisplayTarget,
   type CameraNativeDesktopHelperCaptureSnapshotRequest,
   type CameraNativeDesktopHelperCaptureSnapshotResponse,
   type CameraNativeDesktopHelperConfig,
@@ -25,11 +32,16 @@ import {
   type CameraNativeDesktopHelperIssue,
   type CameraNativeDesktopHelperListDevicesRequest,
   type CameraNativeDesktopHelperListDevicesResponse,
+  type CameraNativeDesktopListCaptureTargetsRequest,
+  type CameraNativeDesktopListCaptureTargetsResponse,
   type CameraNativeDesktopHelperShutdownRequest,
   type CameraNativeDesktopHelperShutdownResponse,
   type CameraNativeDesktopHelperCapabilities,
+  type CameraNativeDesktopScreenCaptureTarget,
+  type CameraNativeDesktopScreenRect,
   type CameraNativeDesktopSelectionReason,
   type CameraNativeDesktopSnapshotFormat,
+  type CameraNativeDesktopWindowTarget,
 } from "./camera-native-desktop-contract.js";
 
 export const BELLDANDY_CAMERA_NATIVE_HELPER_POWERSHELL_COMMAND_ENV =
@@ -88,6 +100,30 @@ type RuntimeCameraDevice = CameraNativeDesktopHelperDevice & {
   ffmpegAlternativeNames?: string[];
 };
 
+type RawScreenDisplayRecord = {
+  id?: string;
+  name?: string;
+  isPrimary?: boolean;
+  bounds?: Partial<CameraNativeDesktopScreenRect>;
+  workArea?: Partial<CameraNativeDesktopScreenRect>;
+};
+
+type RawScreenWindowRecord = {
+  id?: string;
+  title?: string;
+  appName?: string;
+  processId?: number;
+  isVisible?: boolean;
+  isMinimized?: boolean;
+  bounds?: Partial<CameraNativeDesktopScreenRect>;
+  displayId?: string;
+};
+
+type ScreenEnumerationPayload = {
+  displays?: RawScreenDisplayRecord[];
+  windows?: RawScreenWindowRecord[];
+};
+
 type PnpDeviceIdentity = {
   vendorId?: string;
   productId?: string;
@@ -105,6 +141,7 @@ export class NativeDesktopHelperRuntimeError extends Error {
     | "device_not_found"
     | "device_busy"
     | "capture_failed"
+    | "target_not_found"
     | "timeout"
     | "unsupported_method"
     | "unknown";
@@ -121,6 +158,7 @@ export class NativeDesktopHelperRuntimeError extends Error {
       | "device_not_found"
       | "device_busy"
       | "capture_failed"
+      | "target_not_found"
       | "timeout"
       | "unsupported_method"
       | "unknown";
@@ -485,6 +523,14 @@ async function readImageSize(
   return {};
 }
 
+function toPowerShellBoolean(value: boolean): string {
+  return value ? "$true" : "$false";
+}
+
+function toPowerShellSingleQuoted(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
 function buildPowerShellListCommand(): string {
   return [
     "$devices = Get-CimInstance Win32_PnPEntity | Where-Object {",
@@ -502,6 +548,115 @@ function buildPowerShellListCommand(): string {
     "  }",
     "}",
     "@($devices) | ConvertTo-Json -Compress -Depth 5",
+  ].join("\n");
+}
+
+function buildPowerShellCaptureTargetsCommand(input: {
+  includeDisplays: boolean;
+  includeWindows: boolean;
+  includeMinimizedWindows: boolean;
+  windowTitleFilter?: string;
+}): string {
+  const titleFilter = normalizeString(input.windowTitleFilter);
+  return [
+    `$includeDisplays = ${toPowerShellBoolean(input.includeDisplays)}`,
+    `$includeWindows = ${toPowerShellBoolean(input.includeWindows)}`,
+    `$includeMinimizedWindows = ${toPowerShellBoolean(input.includeMinimizedWindows)}`,
+    `$windowTitleFilter = ${toPowerShellSingleQuoted(titleFilter)}`,
+    "Add-Type -AssemblyName System.Windows.Forms",
+    "Add-Type @\"",
+    "using System;",
+    "using System.Runtime.InteropServices;",
+    "using System.Text;",
+    "public static class BelldandyWindowInterop {",
+    "  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);",
+    "  [DllImport(\"user32.dll\")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);",
+    "  [DllImport(\"user32.dll\", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);",
+    "  [DllImport(\"user32.dll\")] public static extern int GetWindowTextLength(IntPtr hWnd);",
+    "  [DllImport(\"user32.dll\")] public static extern bool IsWindowVisible(IntPtr hWnd);",
+    "  [DllImport(\"user32.dll\")] public static extern bool IsIconic(IntPtr hWnd);",
+    "  [DllImport(\"user32.dll\")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);",
+    "  [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);",
+    "  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }",
+    "}",
+    "\"@",
+    "$displays = @()",
+    "if ($includeDisplays) {",
+    "  $displays = [System.Windows.Forms.Screen]::AllScreens | ForEach-Object {",
+    "    $bounds = $_.Bounds",
+    "    $workArea = $_.WorkingArea",
+    "    [PSCustomObject]@{",
+    "      id = $_.DeviceName",
+    "      name = $_.DeviceName",
+    "      isPrimary = [bool]$_.Primary",
+    "      bounds = [PSCustomObject]@{ x = $bounds.X; y = $bounds.Y; width = $bounds.Width; height = $bounds.Height }",
+    "      workArea = [PSCustomObject]@{ x = $workArea.X; y = $workArea.Y; width = $workArea.Width; height = $workArea.Height }",
+    "    }",
+    "  }",
+    "}",
+    "$windows = @()",
+    "if ($includeWindows) {",
+    "  $screenList = [System.Windows.Forms.Screen]::AllScreens",
+    "  $processNameCache = @{}",
+    "  $collectedWindows = New-Object System.Collections.Generic.List[object]",
+    "  $null = [BelldandyWindowInterop]::EnumWindows({",
+    "    param($hWnd, $lParam)",
+    "    if (-not [BelldandyWindowInterop]::IsWindowVisible($hWnd)) { return $true }",
+    "    $isMinimized = [BelldandyWindowInterop]::IsIconic($hWnd)",
+    "    if (-not $includeMinimizedWindows -and $isMinimized) { return $true }",
+    "    $length = [BelldandyWindowInterop]::GetWindowTextLength($hWnd)",
+    "    if ($length -le 0) { return $true }",
+    "    $builder = New-Object System.Text.StringBuilder ($length + 1)",
+    "    [void][BelldandyWindowInterop]::GetWindowText($hWnd, $builder, $builder.Capacity)",
+    "    $title = $builder.ToString().Trim()",
+    "    if ([string]::IsNullOrWhiteSpace($title)) { return $true }",
+    "    if ($windowTitleFilter -and $title.IndexOf($windowTitleFilter, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) { return $true }",
+    "    $rect = New-Object BelldandyWindowInterop+RECT",
+    "    if (-not [BelldandyWindowInterop]::GetWindowRect($hWnd, [ref]$rect)) { return $true }",
+    "    $width = [Math]::Max(0, $rect.Right - $rect.Left)",
+    "    $height = [Math]::Max(0, $rect.Bottom - $rect.Top)",
+    "    if ($width -le 0 -or $height -le 0) { return $true }",
+    "    [uint32]$processId = 0",
+    "    [void][BelldandyWindowInterop]::GetWindowThreadProcessId($hWnd, [ref]$processId)",
+    "    $processName = $null",
+    "    if ($processId -gt 0) {",
+    "      if ($processNameCache.ContainsKey($processId)) {",
+    "        $processName = $processNameCache[$processId]",
+    "      } else {",
+    "        try {",
+    "          $processName = (Get-Process -Id $processId -ErrorAction Stop).ProcessName",
+    "        } catch {",
+    "          $processName = $null",
+    "        }",
+    "        $processNameCache[$processId] = $processName",
+    "      }",
+    "    }",
+    "    $centerX = $rect.Left + [int]($width / 2)",
+    "    $centerY = $rect.Top + [int]($height / 2)",
+    "    $displayId = $null",
+    "    foreach ($screen in $screenList) {",
+    "      $screenBounds = $screen.Bounds",
+    "      if ($centerX -ge $screenBounds.X -and $centerX -lt ($screenBounds.X + $screenBounds.Width) -and $centerY -ge $screenBounds.Y -and $centerY -lt ($screenBounds.Y + $screenBounds.Height)) {",
+    "        $displayId = $screen.DeviceName",
+    "        break",
+    "      }",
+    "    }",
+    "    $hwndHex = ('0x{0:x}' -f $hWnd.ToInt64())",
+    "    $collectedWindows.Add([PSCustomObject]@{",
+    "      id = $hwndHex",
+    "      title = $title",
+    "      appName = $processName",
+    "      processId = if ($processId -gt 0) { [int]$processId } else { $null }",
+    "      isVisible = $true",
+    "      isMinimized = [bool]$isMinimized",
+    "      bounds = [PSCustomObject]@{ x = $rect.Left; y = $rect.Top; width = $width; height = $height }",
+    "      displayId = $displayId",
+    "    }) | Out-Null",
+    "    return $true",
+    "  }, [IntPtr]::Zero)",
+    "  $windows = $collectedWindows",
+    "}",
+    "[PSCustomObject]@{ displays = @($displays); windows = @($windows) } | ConvertTo-Json -Compress -Depth 6",
   ].join("\n");
 }
 
@@ -614,6 +769,29 @@ export class NativeDesktopWindowsHelperRuntime {
     };
   }
 
+  async listCaptureTargets(
+    input: CameraNativeDesktopListCaptureTargetsRequest,
+  ): Promise<CameraNativeDesktopListCaptureTargetsResponse> {
+    const issues: CameraNativeDesktopHelperIssue[] = [];
+    const capabilities = await this.detectCapabilities(issues);
+    if (!capabilities.screenTargetList) {
+      throw new NativeDesktopHelperRuntimeError({
+        code: "helper_unavailable",
+        message: "Screen target enumeration is unavailable because PowerShell screen inspection is not ready.",
+        issues,
+      });
+    }
+    const targets = await this.enumerateCaptureTargets(issues, input);
+    return {
+      observedAt: this.now().toISOString(),
+      helperStatus: "ready",
+      permissionState: "not_applicable",
+      ...(input.includeDisplays !== false ? { displays: targets.displays } : {}),
+      ...(input.includeWindows !== false ? { windows: targets.windows } : {}),
+      ...(issues.length > 0 ? { issues } : {}),
+    };
+  }
+
   async captureSnapshot(
     input: CameraNativeDesktopHelperCaptureSnapshotRequest,
   ): Promise<CameraNativeDesktopHelperCaptureSnapshotResponse> {
@@ -673,6 +851,112 @@ export class NativeDesktopWindowsHelperRuntime {
         capturedAt: observedAt,
       },
       ...(diagnostics.issues.length > 0 ? { issues: diagnostics.issues } : {}),
+    };
+  }
+
+  async captureScreen(
+    input: CameraNativeDesktopCaptureScreenRequest,
+  ): Promise<CameraNativeDesktopCaptureScreenResponse> {
+    const issues: CameraNativeDesktopHelperIssue[] = [];
+    const capabilities = await this.detectCapabilities(issues);
+    if (!capabilities.screenCapture) {
+      throw new NativeDesktopHelperRuntimeError({
+        code: "helper_unavailable",
+        message: "Screen capture is unavailable because ffmpeg gdigrab is not configured or not executable.",
+        issues,
+      });
+    }
+
+    const format = input.output?.format ?? "png";
+    const outputPath = await this.resolveSnapshotOutputPath(input.output?.filePath, format);
+    if (typeof input.delayMs === "number" && input.delayMs > 0) {
+      const delayMs = Math.max(0, Math.trunc(input.delayMs));
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+
+    let normalizedTarget: CameraNativeDesktopScreenCaptureTarget = input.target;
+    let selectedDisplay: CameraNativeDesktopDisplayTarget | undefined;
+    let selectedWindow: CameraNativeDesktopWindowTarget | undefined;
+
+    if (input.target.kind === "display" || input.target.kind === "window") {
+      if (!capabilities.screenTargetList) {
+        throw new NativeDesktopHelperRuntimeError({
+          code: "helper_unavailable",
+          message: "Display or window capture requires PowerShell screen target enumeration support.",
+          issues,
+        });
+      }
+      const targets = await this.enumerateCaptureTargets(issues, {
+        includeDisplays: true,
+        includeWindows: true,
+        includeMinimizedWindows: true,
+        windowTitleFilter: input.target.kind === "window" ? input.target.windowTitle : undefined,
+      });
+      if (input.target.kind === "display") {
+        selectedDisplay = this.resolveDisplayTarget(targets.displays, input.target);
+        if (!selectedDisplay) {
+          throw new NativeDesktopHelperRuntimeError({
+            code: "target_not_found",
+            message: "Requested display target was not found.",
+            issues,
+          });
+        }
+        normalizedTarget = {
+          kind: "display",
+          displayId: selectedDisplay.id,
+          displayRef: selectedDisplay.displayRef,
+        };
+      } else {
+        selectedWindow = this.resolveWindowTarget(targets.windows, input.target);
+        if (!selectedWindow) {
+          throw new NativeDesktopHelperRuntimeError({
+            code: "target_not_found",
+            message: "Requested window target was not found.",
+            issues,
+          });
+        }
+        normalizedTarget = {
+          kind: "window",
+          windowId: selectedWindow.id,
+          windowRef: selectedWindow.windowRef,
+          windowTitle: selectedWindow.title,
+        };
+      }
+    } else if (input.target.kind === "region") {
+      normalizedTarget = this.normalizeRegionTarget(input.target);
+    }
+
+    await this.runFfmpegScreenCapture({
+      target: normalizedTarget,
+      display: selectedDisplay,
+      window: selectedWindow,
+      outputPath,
+      timeoutMs: input.timeoutMs,
+      format,
+      includeCursor: input.includeCursor !== false,
+    });
+
+    const [stat, dimensions] = await Promise.all([
+      this.statImpl(outputPath),
+      readImageSize(outputPath, this.readFileImpl),
+    ]);
+    const observedAt = this.now().toISOString();
+    return {
+      observedAt,
+      helperStatus: "ready",
+      permissionState: "not_applicable",
+      target: normalizedTarget,
+      artifact: {
+        path: outputPath,
+        format,
+        width: dimensions.width,
+        height: dimensions.height,
+        sizeBytes: stat.size,
+        capturedAt: observedAt,
+      },
+      ...(selectedDisplay ? { display: selectedDisplay } : {}),
+      ...(selectedWindow ? { window: selectedWindow } : {}),
+      ...(issues.length > 0 ? { issues } : {}),
     };
   }
 
@@ -743,6 +1027,11 @@ export class NativeDesktopWindowsHelperRuntime {
       clipFormats: [],
       selectionByStableKey: true,
       deviceChangeEvents: false,
+      screenTargetList: powershellReady,
+      screenCapture: ffmpegReady,
+      windowCapture: ffmpegReady,
+      displayCapture: powershellReady && ffmpegReady,
+      regionCapture: ffmpegReady,
     };
   }
 
@@ -950,6 +1239,199 @@ export class NativeDesktopWindowsHelperRuntime {
       ));
     }
     return devices;
+  }
+
+  private async enumerateCaptureTargets(
+    issues: CameraNativeDesktopHelperIssue[],
+    input: CameraNativeDesktopListCaptureTargetsRequest,
+  ): Promise<{
+    displays: CameraNativeDesktopDisplayTarget[];
+    windows: CameraNativeDesktopWindowTarget[];
+  }> {
+    const powershellExecutable = resolveExecutable(this.env, {
+      commandEnv: BELLDANDY_CAMERA_NATIVE_HELPER_POWERSHELL_COMMAND_ENV,
+      argsEnv: BELLDANDY_CAMERA_NATIVE_HELPER_POWERSHELL_ARGS_JSON_ENV,
+      defaultCommand: DEFAULT_POWERSHELL_COMMAND,
+    });
+    const command = buildPowerShellCaptureTargetsCommand({
+      includeDisplays: input.includeDisplays !== false,
+      includeWindows: input.includeWindows !== false,
+      includeMinimizedWindows: input.includeMinimizedWindows === true,
+      windowTitleFilter: input.windowTitleFilter,
+    });
+    let payload: ScreenEnumerationPayload;
+    try {
+      const result = await this.runCommand({
+        command: powershellExecutable.command,
+        args: [
+          ...powershellExecutable.args,
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          command,
+        ],
+        timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+      });
+      if (result.exitCode !== 0) {
+        throw new NativeDesktopHelperRuntimeError({
+          code: "helper_unavailable",
+          message: `PowerShell screen target enumeration failed with exit code ${result.exitCode ?? "null"}.`,
+          metadata: {
+            stderr: result.stderr.trim() || undefined,
+          },
+        });
+      }
+      payload = (JSON.parse(result.stdout || "{}") ?? {}) as ScreenEnumerationPayload;
+    } catch (error) {
+      const helperError = error instanceof NativeDesktopHelperRuntimeError
+        ? error
+        : new NativeDesktopHelperRuntimeError({
+          code: "helper_unavailable",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      issues.push(buildIssue(
+        helperError.code === "timeout" ? "timeout" : "helper_unavailable",
+        helperError.message,
+        {
+          metadata: helperError.metadata,
+        },
+      ));
+      throw helperError;
+    }
+
+    const displays = normalizeJsonArray<RawScreenDisplayRecord>(payload.displays)
+      .map((record) => this.normalizeDisplayTarget(record))
+      .filter((record): record is CameraNativeDesktopDisplayTarget => Boolean(record));
+    const windows = normalizeJsonArray<RawScreenWindowRecord>(payload.windows)
+      .map((record) => this.normalizeWindowTarget(record))
+      .filter((record): record is CameraNativeDesktopWindowTarget => Boolean(record));
+
+    return { displays, windows };
+  }
+
+  private normalizeDisplayTarget(
+    record: RawScreenDisplayRecord,
+  ): CameraNativeDesktopDisplayTarget | undefined {
+    const id = normalizeString(record.id);
+    const name = normalizeString(record.name) || id;
+    const bounds = this.normalizeScreenRect(record.bounds);
+    if (!id || !name || !bounds) {
+      return undefined;
+    }
+    const workArea = this.normalizeScreenRect(record.workArea);
+    return {
+      id,
+      displayRef: buildNativeDesktopDisplayRef(id),
+      name,
+      isPrimary: record.isPrimary === true,
+      bounds,
+      ...(workArea ? { workArea } : {}),
+    };
+  }
+
+  private normalizeWindowTarget(
+    record: RawScreenWindowRecord,
+  ): CameraNativeDesktopWindowTarget | undefined {
+    const id = normalizeString(record.id);
+    const title = normalizeString(record.title);
+    const bounds = this.normalizeScreenRect(record.bounds);
+    if (!id || !title || !bounds) {
+      return undefined;
+    }
+    const processId = typeof record.processId === "number" && Number.isFinite(record.processId)
+      ? Math.trunc(record.processId)
+      : undefined;
+    const displayId = normalizeString(record.displayId) || undefined;
+    return {
+      id,
+      windowRef: buildNativeDesktopWindowRef(id),
+      title,
+      ...(normalizeString(record.appName) ? { appName: normalizeString(record.appName) } : {}),
+      ...(typeof processId === "number" ? { processId } : {}),
+      isVisible: record.isVisible !== false,
+      isMinimized: record.isMinimized === true,
+      bounds,
+      ...(displayId ? { displayId } : {}),
+    };
+  }
+
+  private normalizeScreenRect(
+    value: Partial<CameraNativeDesktopScreenRect> | undefined,
+  ): CameraNativeDesktopScreenRect | undefined {
+    if (!value) {
+      return undefined;
+    }
+    const x = typeof value.x === "number" && Number.isFinite(value.x) ? Math.trunc(value.x) : undefined;
+    const y = typeof value.y === "number" && Number.isFinite(value.y) ? Math.trunc(value.y) : undefined;
+    const width = typeof value.width === "number" && Number.isFinite(value.width) ? Math.trunc(value.width) : undefined;
+    const height = typeof value.height === "number" && Number.isFinite(value.height) ? Math.trunc(value.height) : undefined;
+    if (
+      typeof x !== "number"
+      || typeof y !== "number"
+      || typeof width !== "number"
+      || typeof height !== "number"
+      || width <= 0
+      || height <= 0
+    ) {
+      return undefined;
+    }
+    return { x, y, width, height };
+  }
+
+  private resolveDisplayTarget(
+    displays: CameraNativeDesktopDisplayTarget[],
+    target: Extract<CameraNativeDesktopScreenCaptureTarget, { kind: "display" }>,
+  ): CameraNativeDesktopDisplayTarget | undefined {
+    const parsedRef = parseNativeDesktopDisplayRef(target.displayRef);
+    const requestedId = parsedRef.displayId ?? (normalizeString(target.displayId) || undefined);
+    if (!requestedId) {
+      return displays[0];
+    }
+    return displays.find((display) => display.id === requestedId);
+  }
+
+  private resolveWindowTarget(
+    windows: CameraNativeDesktopWindowTarget[],
+    target: Extract<CameraNativeDesktopScreenCaptureTarget, { kind: "window" }>,
+  ): CameraNativeDesktopWindowTarget | undefined {
+    const parsedRef = parseNativeDesktopWindowRef(target.windowRef);
+    const requestedId = parsedRef.windowId ?? (normalizeString(target.windowId) || undefined);
+    if (requestedId) {
+      return windows.find((window) => window.id === requestedId);
+    }
+    const requestedTitle = normalizeString(target.windowTitle);
+    if (!requestedTitle) {
+      return undefined;
+    }
+    const requestedTitleLower = requestedTitle.toLowerCase();
+    const exactMatch = windows.find((window) => window.title.toLowerCase() === requestedTitleLower);
+    if (exactMatch) {
+      return exactMatch;
+    }
+    const partialMatches = windows.filter((window) =>
+      window.title.toLowerCase().includes(requestedTitleLower));
+    if (partialMatches.length === 1) {
+      return partialMatches[0];
+    }
+    return undefined;
+  }
+
+  private normalizeRegionTarget(
+    target: Extract<CameraNativeDesktopScreenCaptureTarget, { kind: "region" }>,
+  ): Extract<CameraNativeDesktopScreenCaptureTarget, { kind: "region" }> {
+    const normalized = this.normalizeScreenRect(target);
+    if (!normalized) {
+      throw new NativeDesktopHelperRuntimeError({
+        code: "invalid_request",
+        message: "Screen region capture requires finite x, y, width, and height values greater than zero.",
+      });
+    }
+    return {
+      kind: "region",
+      ...normalized,
+    };
   }
 
   private reidentifyDeviceFromStableKey(
@@ -1229,6 +1711,86 @@ export class NativeDesktopWindowsHelperRuntime {
       stderr: primaryResult.stderr,
       exitCode: primaryResult.exitCode,
       args: primaryArgs,
+    });
+  }
+
+  private async runFfmpegScreenCapture(input: {
+    target: CameraNativeDesktopScreenCaptureTarget;
+    display?: CameraNativeDesktopDisplayTarget;
+    window?: CameraNativeDesktopWindowTarget;
+    outputPath: string;
+    timeoutMs?: number;
+    format: CameraNativeDesktopSnapshotFormat;
+    includeCursor: boolean;
+  }): Promise<void> {
+    const ffmpegExecutable = resolveExecutable(this.env, {
+      commandEnv: BELLDANDY_CAMERA_NATIVE_HELPER_FFMPEG_COMMAND_ENV,
+      argsEnv: BELLDANDY_CAMERA_NATIVE_HELPER_FFMPEG_ARGS_JSON_ENV,
+      defaultCommand: DEFAULT_FFMPEG_COMMAND,
+    });
+    const args = [
+      ...ffmpegExecutable.args,
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-f",
+      "gdigrab",
+      "-draw_mouse",
+      input.includeCursor ? "1" : "0",
+    ];
+
+    const region = input.target.kind === "region"
+      ? input.target
+      : input.target.kind === "display"
+        ? input.display?.bounds
+        : undefined;
+    if (region) {
+      args.push(
+        "-offset_x",
+        `${region.x}`,
+        "-offset_y",
+        `${region.y}`,
+        "-video_size",
+        `${region.width}x${region.height}`,
+        "-i",
+        "desktop",
+      );
+    } else if (input.target.kind === "window") {
+      const windowId = normalizeString(input.window?.id ?? input.target.windowId);
+      if (!windowId) {
+        throw new NativeDesktopHelperRuntimeError({
+          code: "target_not_found",
+          message: "Window capture requires a resolved window target.",
+        });
+      }
+      args.push("-i", `hwnd=${windowId}`);
+    } else {
+      args.push("-i", "desktop");
+    }
+
+    args.push("-frames:v", "1");
+    if (input.format === "jpeg") {
+      args.push("-q:v", "2");
+    }
+    args.push(input.outputPath);
+
+    const result = await this.runCommand({
+      command: ffmpegExecutable.command,
+      args,
+      timeoutMs: input.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
+    });
+    if (result.exitCode === 0) {
+      return;
+    }
+    throw new NativeDesktopHelperRuntimeError({
+      code: input.target.kind === "window" ? "target_not_found" : "capture_failed",
+      message: `ffmpeg screen capture failed with exit code ${result.exitCode ?? "null"}.`,
+      metadata: {
+        stderr: result.stderr.trim() || undefined,
+        args,
+        target: input.target.kind,
+      },
     });
   }
 }

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 
 import type { AgentRegistry, BelldandyAgent } from "@belldandy/agent";
 import type {
@@ -197,7 +198,7 @@ export function createGatewayChannelsRuntime(input: GatewayChannelsRuntimeInput)
         const agent = (input.agentRegistry && input.qqAgentId)
           ? input.agentRegistry.create(input.qqAgentId)
           : input.createAgent();
-        qqChannel = new QqChannel({
+        const qqChannelConfig = {
           appId: input.qqAppId,
           appSecret: input.qqAppSecret,
           sandbox: input.qqSandbox,
@@ -210,8 +211,22 @@ export function createGatewayChannelsRuntime(input: GatewayChannelsRuntimeInput)
           agentResolver: resolveChannelAgent,
           onChannelSecurityApprovalRequired: recordChannelSecurityApprovalRequest,
           conversationStore: input.conversationStore,
-        });
+          sttTranscribe: async (opts: TranscribeOptions) => {
+            const result = await input.sttTranscribe(opts);
+            if (result) input.logger.info("qq", `Transcribed audio (${result.durationSec?.toFixed(1) ?? "?"}s) from ${result.provider}`);
+            return result;
+          },
+          eventSampleCapture: {
+            enabled: String(input.readEnv("BELLDANDY_QQ_EVENT_SAMPLE_CAPTURE_ENABLED") ?? "false").toLowerCase() === "true",
+            dir: input.readEnv("BELLDANDY_QQ_EVENT_SAMPLE_CAPTURE_DIR")?.trim()
+              || path.join(input.stateDir, "tmp", "qq-event-samples"),
+          },
+        } as ConstructorParameters<typeof QqChannel>[0];
+        qqChannel = new QqChannel(qqChannelConfig);
         input.externalOutboundSenderRegistry.register("qq", qqChannel);
+        if (String(input.readEnv("BELLDANDY_QQ_EVENT_SAMPLE_CAPTURE_ENABLED") ?? "false").toLowerCase() === "true") {
+          input.logger.info("qq", `QQ event sample capture enabled: ${input.readEnv("BELLDANDY_QQ_EVENT_SAMPLE_CAPTURE_DIR")?.trim() || path.join(input.stateDir, "tmp", "qq-event-samples")}`);
+        }
         qqChannel.start().catch((error: unknown) => {
           input.logger.error("qq", "Channel Error", error);
         });

@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 
 import {
   CAMERA_NATIVE_DESKTOP_PROTOCOL_ID,
+  type CameraNativeDesktopCaptureScreenRequest,
+  type CameraNativeDesktopCaptureScreenResponse,
   type CameraNativeDesktopHelperCaptureClipRequest,
   type CameraNativeDesktopHelperCaptureClipResponse,
   type CameraNativeDesktopHelperCaptureSnapshotRequest,
@@ -11,6 +13,8 @@ import {
   type CameraNativeDesktopHelperHelloRequest,
   type CameraNativeDesktopHelperHelloResponse,
   type CameraNativeDesktopHelperIssue,
+  type CameraNativeDesktopListCaptureTargetsRequest,
+  type CameraNativeDesktopListCaptureTargetsResponse,
   type CameraNativeDesktopHelperListDevicesRequest,
   type CameraNativeDesktopHelperListDevicesResponse,
   type CameraNativeDesktopHelperShutdownRequest,
@@ -21,7 +25,9 @@ export const CAMERA_NATIVE_DESKTOP_HELPER_METHODS = [
   "hello",
   "diagnose",
   "list_devices",
+  "list_capture_targets",
   "capture_snapshot",
+  "capture_screen",
   "capture_clip",
   "shutdown",
 ] as const;
@@ -43,6 +49,7 @@ export type CameraNativeDesktopHelperProtocolErrorCode =
   | "device_not_found"
   | "device_busy"
   | "capture_failed"
+  | "target_not_found"
   | "timeout"
   | "unsupported_method"
   | "unknown";
@@ -59,7 +66,9 @@ export type CameraNativeDesktopHelperRequestParams = {
   hello: CameraNativeDesktopHelperHelloRequest;
   diagnose: CameraNativeDesktopHelperDiagnoseRequest;
   list_devices: CameraNativeDesktopHelperListDevicesRequest;
+  list_capture_targets: CameraNativeDesktopListCaptureTargetsRequest;
   capture_snapshot: CameraNativeDesktopHelperCaptureSnapshotRequest;
+  capture_screen: CameraNativeDesktopCaptureScreenRequest;
   capture_clip: CameraNativeDesktopHelperCaptureClipRequest;
   shutdown: CameraNativeDesktopHelperShutdownRequest;
 };
@@ -68,7 +77,9 @@ export type CameraNativeDesktopHelperResponseResult = {
   hello: CameraNativeDesktopHelperHelloResponse;
   diagnose: CameraNativeDesktopHelperDiagnoseResponse;
   list_devices: CameraNativeDesktopHelperListDevicesResponse;
+  list_capture_targets: CameraNativeDesktopListCaptureTargetsResponse;
   capture_snapshot: CameraNativeDesktopHelperCaptureSnapshotResponse;
+  capture_screen: CameraNativeDesktopCaptureScreenResponse;
   capture_clip: CameraNativeDesktopHelperCaptureClipResponse;
   shutdown: CameraNativeDesktopHelperShutdownResponse;
 };

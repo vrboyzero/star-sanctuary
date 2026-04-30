@@ -4,10 +4,12 @@ import readline from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+  type CameraNativeDesktopCaptureScreenRequest,
   type CameraNativeDesktopHelperCaptureSnapshotRequest,
   type CameraNativeDesktopHelperDiagnoseRequest,
   type CameraNativeDesktopHelperHelloRequest,
   type CameraNativeDesktopHelperListDevicesRequest,
+  type CameraNativeDesktopListCaptureTargetsRequest,
   type CameraNativeDesktopHelperShutdownRequest,
 } from "./camera-native-desktop-contract.js";
 import {
@@ -97,8 +99,14 @@ async function handleRequestLine(
       case "list_devices":
         result = await runtime.listDevices(request.params as CameraNativeDesktopHelperListDevicesRequest);
         break;
+      case "list_capture_targets":
+        result = await runtime.listCaptureTargets(request.params as CameraNativeDesktopListCaptureTargetsRequest);
+        break;
       case "capture_snapshot":
         result = await runtime.captureSnapshot(request.params as CameraNativeDesktopHelperCaptureSnapshotRequest);
+        break;
+      case "capture_screen":
+        result = await runtime.captureScreen(request.params as CameraNativeDesktopCaptureScreenRequest);
         break;
       case "shutdown":
         result = await runtime.shutdown(request.params as CameraNativeDesktopHelperShutdownRequest);

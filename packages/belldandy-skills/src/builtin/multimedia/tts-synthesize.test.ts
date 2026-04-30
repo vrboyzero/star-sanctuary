@@ -47,6 +47,7 @@ describe("tts-synthesize", () => {
     delete process.env.OPENAI_BASE_URL;
     delete process.env.BELLDANDY_TTS_OPENAI_API_KEY;
     delete process.env.BELLDANDY_TTS_OPENAI_BASE_URL;
+    delete process.env.BELLDANDY_TTS_MODEL;
     delete process.env.BELLDANDY_OPENAI_API_KEY;
     delete process.env.BELLDANDY_OPENAI_BASE_URL;
     delete process.env.BELLDANDY_TTS_PROVIDER;
@@ -100,6 +101,54 @@ describe("tts-synthesize", () => {
       apiKey: "sk-tts",
       baseURL: "https://tts.example.invalid/v1",
     });
+  });
+
+  it("uses BELLDANDY_TTS_MODEL for OpenAI and DashScope providers", async () => {
+    process.env.BELLDANDY_TTS_MODEL = "shared-tts-model";
+    process.env.BELLDANDY_OPENAI_API_KEY = "sk-bdd";
+    openAISpeechCreateMock.mockResolvedValue({
+      arrayBuffer: vi.fn(async () => Uint8Array.from([1, 2, 3, 4]).buffer),
+    });
+
+    const openAiResult = await synthesizeSpeech({
+      text: "OpenAI TTS model",
+      stateDir: tempDir,
+      provider: "openai",
+    });
+
+    expect(openAiResult).not.toBeNull();
+    expect(openAISpeechCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "shared-tts-model" }),
+      expect.anything(),
+    );
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        output: {
+          audio: {
+            url: "https://example.invalid/audio.mp3",
+          },
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(Uint8Array.from({ length: 256 }, (_, index) => index % 255), {
+        status: 200,
+        headers: { "Content-Type": "audio/mpeg" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const dashscopeResult = await synthesizeSpeech({
+      text: "DashScope TTS model",
+      stateDir: tempDir,
+      provider: "dashscope",
+    });
+
+    expect(dashscopeResult).not.toBeNull();
+    const firstRequestBody = fetchMock.mock.calls[0]?.[1]?.body;
+    expect(typeof firstRequestBody).toBe("string");
+    expect(JSON.parse(firstRequestBody as string).model).toBe("shared-tts-model");
   });
 
   it("uses DashScope default Cherry voice and mp3 extension", async () => {

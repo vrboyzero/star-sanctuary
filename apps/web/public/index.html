@@ -658,7 +658,7 @@
           <div class="form-group settings-featured-group">
             <label class="form-label settings-featured-label" data-i18n="settings.dashScopeApiKeyLabel">DashScope API Key</label>
             <input id="cfgDashScopeApiKey" class="input settings-featured-input" type="password" data-i18n-placeholder="settings.dashScopeApiKeyPlaceholder" placeholder="仅 dashscope provider 需要" />
-            <div class="form-help" data-i18n="settings.dashScopeApiKeyHelp">仅在 TTS Provider 选择 `dashscope` 时需要配置。</div>
+            <div class="form-help" data-i18n="settings.dashScopeApiKeyHelp">供 DashScope 的 TTS / STT 以及共享阿里云能力复用；保存时会同步写入相关 Key。</div>
           </div>
 
           <div class="settings-subsection-header" style="margin-top: 16px;">
@@ -896,98 +896,118 @@
 
           <div class="settings-subsection-header">
             <div>
-              <div class="settings-subsection-title">Prompt Runtime</div>
-              <div class="form-help">Prompt 实验开关、快照保留策略与上下文压缩预算。</div>
+              <div class="settings-subsection-title" data-i18n="settings.promptRuntimeSectionTitle">Prompt Runtime</div>
+              <div class="form-help" data-i18n="settings.promptRuntimeSectionHelp">Prompt 实验开关、快照保留策略与上下文压缩预算。</div>
             </div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgPromptExperimentDisableSections">Prompt Disable Sections</label>
+            <label class="form-label" for="cfgPromptExperimentDisableSections" data-i18n="settings.promptExperimentDisableSectionsLabel">Prompt Disable Sections</label>
             <input id="cfgPromptExperimentDisableSections" class="input" placeholder="methodology,context" />
+            <div class="form-help" data-i18n="settings.promptExperimentDisableSectionsHelp">逗号分隔要禁用的 prompt section id，例如 `methodology,context`。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgPromptExperimentSectionPriorityOverrides">Prompt Section Priority Overrides</label>
+            <label class="form-label" for="cfgPromptExperimentSectionPriorityOverrides" data-i18n="settings.promptExperimentSectionPriorityOverridesLabel">Prompt Section Priority Overrides</label>
             <input id="cfgPromptExperimentSectionPriorityOverrides" class="input" placeholder="methodology:5,extra:150" />
+            <div class="form-help" data-i18n="settings.promptExperimentSectionPriorityOverridesHelp">按 `section:priority` 覆盖优先级，多个值用逗号分隔。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgPromptExperimentDisableToolContracts">Prompt Disable Tool Contracts</label>
+            <label class="form-label" for="cfgPromptExperimentDisableToolContracts" data-i18n="settings.promptExperimentDisableToolContractsLabel">Prompt Disable Tool Contracts</label>
             <input id="cfgPromptExperimentDisableToolContracts" class="input" placeholder="apply_patch,run_command" />
+            <div class="form-help" data-i18n="settings.promptExperimentDisableToolContractsHelp">逗号分隔要从 prompt contract 中隐藏的工具名。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgPromptSnapshotMaxRuns">Prompt Snapshot Max Runs</label>
+            <label class="form-label" for="cfgPromptSnapshotMaxRuns" data-i18n="settings.promptSnapshotMaxRunsLabel">Prompt Snapshot Max Runs</label>
             <input id="cfgPromptSnapshotMaxRuns" class="input" placeholder="48" />
+            <div class="form-help" data-i18n="settings.promptSnapshotMaxRunsHelp">单个会话在内存中最多保留多少份 prompt snapshot。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgPromptSnapshotMaxPersistedRuns">Prompt Snapshot Max Persisted Runs</label>
+            <label class="form-label" for="cfgPromptSnapshotMaxPersistedRuns" data-i18n="settings.promptSnapshotMaxPersistedRunsLabel">Prompt Snapshot Max Persisted Runs</label>
             <input id="cfgPromptSnapshotMaxPersistedRuns" class="input" placeholder="20" />
+            <div class="form-help" data-i18n="settings.promptSnapshotMaxPersistedRunsHelp">普通会话落盘后最多保留多少份 snapshot。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgPromptSnapshotEmailThreadMaxRuns">Prompt Snapshot Email Thread Max Runs</label>
+            <label class="form-label" for="cfgPromptSnapshotEmailThreadMaxRuns" data-i18n="settings.promptSnapshotEmailThreadMaxRunsLabel">Prompt Snapshot Email Thread Max Runs</label>
             <input id="cfgPromptSnapshotEmailThreadMaxRuns" class="input" placeholder="10" />
+            <div class="form-help" data-i18n="settings.promptSnapshotEmailThreadMaxRunsHelp">邮件线程会话最多保留多少份 snapshot。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgPromptSnapshotHeartbeatMaxRuns">Prompt Snapshot Heartbeat Max Runs</label>
+            <label class="form-label" for="cfgPromptSnapshotHeartbeatMaxRuns" data-i18n="settings.promptSnapshotHeartbeatMaxRunsLabel">Prompt Snapshot Heartbeat Max Runs</label>
             <input id="cfgPromptSnapshotHeartbeatMaxRuns" class="input" placeholder="5" />
+            <div class="form-help" data-i18n="settings.promptSnapshotHeartbeatMaxRunsHelp">heartbeat 会话全局最多保留多少份 snapshot。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgPromptSnapshotRetentionDays">Prompt Snapshot Retention Days</label>
+            <label class="form-label" for="cfgPromptSnapshotRetentionDays" data-i18n="settings.promptSnapshotRetentionDaysLabel">Prompt Snapshot Retention Days</label>
             <input id="cfgPromptSnapshotRetentionDays" class="input" placeholder="7" />
+            <div class="form-help" data-i18n="settings.promptSnapshotRetentionDaysHelp">自动清理多少天前的 snapshot；`0` 表示不按天清理。</div>
           </div>
 
           <div class="settings-subsection-header" style="margin-top: 16px;">
             <div>
-              <div class="settings-subsection-title">Compaction</div>
-              <div class="form-help">上下文自动压缩、预警/阻断阈值和摘要专用模型。</div>
+              <div class="settings-subsection-title" data-i18n="settings.compactionSectionTitle">Compaction</div>
+              <div class="form-help" data-i18n="settings.compactionSectionHelp">上下文自动压缩、预警/阻断阈值和摘要专用模型。</div>
             </div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgCompactionEnabled">
               <input id="cfgCompactionEnabled" type="checkbox" style="margin-right: 8px;" />
-              <span>Enable Compaction</span>
+              <span data-i18n="settings.compactionEnabledLabel">Enable Compaction</span>
             </label>
+            <div class="form-help" data-i18n="settings.compactionEnabledHelp">启用后，长上下文会按阈值自动压缩成摘要，降低 prompt 过长风险。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgCompactionThreshold">Compaction Threshold</label>
+            <label class="form-label" for="cfgCompactionThreshold" data-i18n="settings.compactionThresholdLabel">Compaction Threshold</label>
             <input id="cfgCompactionThreshold" class="input" placeholder="20000" />
+            <div class="form-help" data-i18n="settings.compactionThresholdHelp">达到多少上下文规模后开始考虑自动压缩。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgCompactionKeepRecent">Compaction Keep Recent</label>
+            <label class="form-label" for="cfgCompactionKeepRecent" data-i18n="settings.compactionKeepRecentLabel">Compaction Keep Recent</label>
             <input id="cfgCompactionKeepRecent" class="input" placeholder="10" />
+            <div class="form-help" data-i18n="settings.compactionKeepRecentHelp">压缩时保留多少条最近消息不进入摘要。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgCompactionTriggerFraction">Compaction Trigger Fraction</label>
+            <label class="form-label" for="cfgCompactionTriggerFraction" data-i18n="settings.compactionTriggerFractionLabel">Compaction Trigger Fraction</label>
             <input id="cfgCompactionTriggerFraction" class="input" placeholder="0.75" />
+            <div class="form-help" data-i18n="settings.compactionTriggerFractionHelp">达到阈值的多少比例后就提前触发压缩。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgCompactionArchivalThreshold">Compaction Archival Threshold</label>
+            <label class="form-label" for="cfgCompactionArchivalThreshold" data-i18n="settings.compactionArchivalThresholdLabel">Compaction Archival Threshold</label>
             <input id="cfgCompactionArchivalThreshold" class="input" placeholder="2000" />
+            <div class="form-help" data-i18n="settings.compactionArchivalThresholdHelp">摘要裁剪到多少规模后，旧上下文会转入归档层。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgCompactionWarningThreshold">Compaction Warning Threshold</label>
+            <label class="form-label" for="cfgCompactionWarningThreshold" data-i18n="settings.compactionWarningThresholdLabel">Compaction Warning Threshold</label>
             <input id="cfgCompactionWarningThreshold" class="input" placeholder="可留空使用默认推导值" />
+            <div class="form-help" data-i18n="settings.compactionWarningThresholdHelp">达到该值时进入预警区。留空则使用默认推导值。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgCompactionBlockingThreshold">Compaction Blocking Threshold</label>
+            <label class="form-label" for="cfgCompactionBlockingThreshold" data-i18n="settings.compactionBlockingThresholdLabel">Compaction Blocking Threshold</label>
             <input id="cfgCompactionBlockingThreshold" class="input" placeholder="可留空使用默认推导值" />
+            <div class="form-help" data-i18n="settings.compactionBlockingThresholdHelp">达到该值时会阻止继续扩张上下文。留空则使用默认推导值。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgCompactionMaxConsecutiveFailures">Compaction Max Consecutive Failures</label>
+            <label class="form-label" for="cfgCompactionMaxConsecutiveFailures" data-i18n="settings.compactionMaxConsecutiveFailuresLabel">Compaction Max Consecutive Failures</label>
             <input id="cfgCompactionMaxConsecutiveFailures" class="input" placeholder="3" />
+            <div class="form-help" data-i18n="settings.compactionMaxConsecutiveFailuresHelp">连续失败多少次后，自动压缩会暂时熔断。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgCompactionMaxPtlRetries">Compaction Max PTL Retries</label>
+            <label class="form-label" for="cfgCompactionMaxPtlRetries" data-i18n="settings.compactionMaxPtlRetriesLabel">Compaction Max PTL Retries</label>
             <input id="cfgCompactionMaxPtlRetries" class="input" placeholder="2" />
+            <div class="form-help" data-i18n="settings.compactionMaxPtlRetriesHelp">因 prompt 过长失败时，最多允许裁剪重试多少次。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgCompactionModel">Compaction Model</label>
+            <label class="form-label" for="cfgCompactionModel" data-i18n="settings.compactionModelLabel">Compaction Model</label>
             <input id="cfgCompactionModel" class="input" placeholder="gpt-4o-mini" />
+            <div class="form-help" data-i18n="settings.compactionModelHelp">压缩摘要专用模型。留空时回退到主模型名称。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgCompactionBaseUrl">Compaction Base URL</label>
+            <label class="form-label" for="cfgCompactionBaseUrl" data-i18n="settings.compactionBaseUrlLabel">Compaction Base URL</label>
             <input id="cfgCompactionBaseUrl" class="input" placeholder="https://api.openai.com/v1" />
+            <div class="form-help" data-i18n="settings.compactionBaseUrlHelp">压缩摘要专用接口地址。留空时回退到主模型 Base URL。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgCompactionApiKey">Compaction API Key</label>
+            <label class="form-label" for="cfgCompactionApiKey" data-i18n="settings.compactionApiKeyLabel">Compaction API Key</label>
             <input id="cfgCompactionApiKey" class="input" type="password" placeholder="sk-..." />
+            <div class="form-help" data-i18n="settings.compactionApiKeyHelp">压缩摘要专用 API Key。留空时回退到主模型 API Key。</div>
           </div>
         </section>
 
@@ -1533,6 +1553,11 @@
             <div class="form-help" data-i18n="settings.ttsVoiceHelp">音色名称。留空时按当前 Provider 自动选择默认音色。</div>
           </div>
           <div class="form-group">
+            <label class="form-label" data-i18n="settings.ttsModelLabel">TTS Model</label>
+            <input id="cfgTtsModel" class="input" data-i18n-placeholder="settings.ttsModelPlaceholder" placeholder="留空则按 provider 使用默认模型" />
+            <div class="form-help" data-i18n="settings.ttsModelHelp">统一 TTS 模型名。`openai` 与 `dashscope` 共用，`edge` 会忽略。</div>
+          </div>
+          <div class="form-group">
             <label class="form-label" data-i18n="settings.ttsOpenAiBaseUrlLabel">TTS OpenAI Base URL</label>
             <input id="cfgTtsOpenAIBaseUrl" class="input" data-i18n-placeholder="settings.ttsOpenAiBaseUrlPlaceholder" placeholder="留空则复用主模型 Base URL" />
             <div class="form-help" data-i18n="settings.ttsOpenAiBaseUrlHelp">仅在 TTS Provider 选择 `openai` 时使用。留空时回退到全局 `BELLDANDY_OPENAI_BASE_URL`，再回退旧的 `OPENAI_BASE_URL`。</div>
@@ -1623,8 +1648,8 @@
 
           <div class="settings-subsection-header">
             <div>
-              <div class="settings-subsection-title">Image / STT</div>
-              <div class="form-help">独立图片生成工具与语音识别转写配置。</div>
+              <div class="settings-subsection-title">Image / Understanding / Video / STT</div>
+              <div class="form-help">独立图片生成、图片识别、视频识别与语音识别配置。</div>
             </div>
           </div>
           <div class="form-group">
@@ -1658,20 +1683,133 @@
             <input id="cfgImageTimeoutMs" class="input" placeholder="60000" />
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgSttProvider">STT Provider</label>
+            <label class="form-label" for="cfgImageUnderstandEnabled">
+              <input id="cfgImageUnderstandEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.imageUnderstandEnabledLabel">启用图片识别</span>
+            </label>
+            <div class="form-help" data-i18n="settings.imageUnderstandEnabledHelp">启用独立图片识别工具。Enable standalone image understanding.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgImageUnderstandApiKey" data-i18n="settings.imageUnderstandApiKeyLabel">Image Understand API Key</label>
+            <input id="cfgImageUnderstandApiKey" class="input" type="password" placeholder="sk-..." />
+            <div class="form-help" data-i18n="settings.imageUnderstandApiKeyHelp">图片识别专用 Key。Dedicated key for image understanding.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgImageUnderstandBaseUrl" data-i18n="settings.imageUnderstandBaseUrlLabel">Image Understand Base URL</label>
+            <input id="cfgImageUnderstandBaseUrl" class="input" placeholder="https://api.openai.com/v1" />
+            <div class="form-help" data-i18n="settings.imageUnderstandBaseUrlHelp">图片识别接口地址。Endpoint for image understanding.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgImageUnderstandModel" data-i18n="settings.imageUnderstandModelLabel">Image Understand Model</label>
+            <input id="cfgImageUnderstandModel" class="input" placeholder="gpt-4.1-mini" />
+            <div class="form-help" data-i18n="settings.imageUnderstandModelHelp">图片识别模型名。Model used for image understanding.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgImageUnderstandTimeoutMs" data-i18n="settings.imageUnderstandTimeoutMsLabel">Image Understand Timeout (ms)</label>
+            <input id="cfgImageUnderstandTimeoutMs" class="input" placeholder="60000" />
+            <div class="form-help" data-i18n="settings.imageUnderstandTimeoutMsHelp">图片识别超时。Request timeout for image understanding.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgImageUnderstandAutoOnAttachment">
+              <input id="cfgImageUnderstandAutoOnAttachment" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.imageUnderstandAutoOnAttachmentLabel">图片附件自动识别</span>
+            </label>
+            <div class="form-help" data-i18n="settings.imageUnderstandAutoOnAttachmentHelp">上传图片附件后自动识别。Auto-read uploaded image attachments.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgBrowserScreenshotAutoUnderstand">
+              <input id="cfgBrowserScreenshotAutoUnderstand" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.browserScreenshotAutoUnderstandLabel">浏览器截图自动识别</span>
+            </label>
+            <div class="form-help" data-i18n="settings.browserScreenshotAutoUnderstandHelp">浏览器截图完成后自动识别。Auto-understand browser screenshots after capture.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCameraSnapAutoUnderstand">
+              <input id="cfgCameraSnapAutoUnderstand" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.cameraSnapAutoUnderstandLabel">摄像头截图自动识别</span>
+            </label>
+            <div class="form-help" data-i18n="settings.cameraSnapAutoUnderstandHelp">摄像头截图完成后自动识别。Auto-understand camera snapshots after capture.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgScreenCaptureAutoUnderstand">
+              <input id="cfgScreenCaptureAutoUnderstand" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.screenCaptureAutoUnderstandLabel">屏幕截图自动识别</span>
+            </label>
+            <div class="form-help" data-i18n="settings.screenCaptureAutoUnderstandHelp">桌面、窗口或区域截图完成后自动识别。Auto-understand desktop, window, or region screenshots after capture.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgVideoUnderstandEnabled">
+              <input id="cfgVideoUnderstandEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.videoUnderstandEnabledLabel">启用视频识别</span>
+            </label>
+            <div class="form-help" data-i18n="settings.videoUnderstandEnabledHelp">启用独立视频识别工具。Enable standalone video understanding.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgVideoUnderstandApiKey" data-i18n="settings.videoUnderstandApiKeyLabel">Video Understand API Key</label>
+            <input id="cfgVideoUnderstandApiKey" class="input" type="password" placeholder="sk-..." />
+            <div class="form-help" data-i18n="settings.videoUnderstandApiKeyHelp">视频识别专用 Key。Dedicated key for video understanding.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgVideoUnderstandBaseUrl" data-i18n="settings.videoUnderstandBaseUrlLabel">Video Understand Base URL</label>
+            <input id="cfgVideoUnderstandBaseUrl" class="input" placeholder="https://api.moonshot.cn/v1" />
+            <div class="form-help" data-i18n="settings.videoUnderstandBaseUrlHelp">视频识别接口地址。Endpoint for video understanding.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgVideoUnderstandModel" data-i18n="settings.videoUnderstandModelLabel">Video Understand Model</label>
+            <input id="cfgVideoUnderstandModel" class="input" placeholder="kimi-k2.5" />
+            <div class="form-help" data-i18n="settings.videoUnderstandModelHelp">用于分析视频附件或本地视频文件。Used for video attachments and local video files.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgVideoUnderstandTimeoutMs" data-i18n="settings.videoUnderstandTimeoutMsLabel">Video Understand Timeout (ms)</label>
+            <input id="cfgVideoUnderstandTimeoutMs" class="input" placeholder="60000" />
+            <div class="form-help" data-i18n="settings.videoUnderstandTimeoutMsHelp">视频识别超时。Request timeout for video understanding.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgVideoUnderstandAutoOnAttachment">
+              <input id="cfgVideoUnderstandAutoOnAttachment" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.videoUnderstandAutoOnAttachmentLabel">视频附件自动识别</span>
+            </label>
+            <div class="form-help" data-i18n="settings.videoUnderstandAutoOnAttachmentHelp">上传视频附件后自动识别；文件上传地址优先复用 Video File API。Auto-read uploaded video attachments; upload falls back to Video File API settings.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgSttProvider" data-i18n="settings.sttProviderLabel">STT Provider</label>
             <input id="cfgSttProvider" class="input" placeholder="openai / groq / dashscope" />
+            <div class="form-help" data-i18n="settings.sttProviderHelp">选择语音转写 provider。`openai` 走 OpenAI 兼容接口，`groq` 与 `dashscope` 走各自线路；`dashscope` 复用共享 DashScope API Key。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgSttLanguage">STT Language</label>
+            <label class="form-label" for="cfgSttModel" data-i18n="settings.sttModelLabel">STT Model</label>
+            <input id="cfgSttModel" class="input" data-i18n-placeholder="settings.sttModelPlaceholder" placeholder="留空则按 provider 使用默认模型" />
+            <div class="form-help" data-i18n="settings.sttModelHelp">统一 STT 模型名。按当前 provider 生效，未填写时回退到各 provider 默认值。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgSttOpenAiBaseUrl" data-i18n="settings.sttOpenAiBaseUrlLabel">STT OpenAI Base URL</label>
+            <input id="cfgSttOpenAiBaseUrl" class="input" data-i18n-placeholder="settings.sttOpenAiBaseUrlPlaceholder" placeholder="留空则复用主模型 Base URL" />
+            <div class="form-help" data-i18n="settings.sttOpenAiBaseUrlHelp">仅在 STT Provider 为 `openai` 时使用。留空时回退到主模型 OpenAI Base URL。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgSttOpenAiApiKey" data-i18n="settings.sttOpenAiApiKeyLabel">STT OpenAI API Key</label>
+            <input id="cfgSttOpenAiApiKey" class="input" type="password" data-i18n-placeholder="settings.sttOpenAiApiKeyPlaceholder" placeholder="留空则复用主模型 API Key" />
+            <div class="form-help" data-i18n="settings.sttOpenAiApiKeyHelp">仅在 STT Provider 为 `openai` 时使用。留空时回退到主模型 OpenAI API Key。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgSttLanguage" data-i18n="settings.sttLanguageLabel">STT Language</label>
             <input id="cfgSttLanguage" class="input" placeholder="zh" />
+            <div class="form-help" data-i18n="settings.sttLanguageHelp">语言提示。常用如 `zh`、`en`；留空时使用默认语言。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgSttGroqApiKey">STT Groq API Key</label>
+            <label class="form-label" for="cfgSttGroqApiKey" data-i18n="settings.sttGroqApiKeyLabel">STT Groq API Key</label>
             <input id="cfgSttGroqApiKey" class="input" type="password" placeholder="gsk_..." />
+            <div class="form-help" data-i18n="settings.sttGroqApiKeyHelp">仅在 STT Provider 为 `groq` 时使用。留空时回退到全局 Groq API Key。</div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="cfgSttGroqBaseUrl">STT Groq Base URL</label>
+            <label class="form-label" for="cfgSttGroqBaseUrl" data-i18n="settings.sttGroqBaseUrlLabel">STT Groq Base URL</label>
             <input id="cfgSttGroqBaseUrl" class="input" placeholder="https://api.groq.com/openai/v1" />
+            <div class="form-help" data-i18n="settings.sttGroqBaseUrlHelp">仅在 STT Provider 为 `groq` 时使用。通常保持默认即可。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgQqSttFallbackProviders" data-i18n="settings.qqSttFallbackProvidersLabel">QQ STT Fallback Providers</label>
+            <input id="cfgQqSttFallbackProviders" class="input" data-i18n-placeholder="settings.qqSttFallbackProvidersPlaceholder" placeholder="groq,openai" />
+            <div class="form-help" data-i18n="settings.qqSttFallbackProvidersHelp">QQ 语音首轮返回空文本时的兜底顺序；留空自动推导。Fallback order when QQ voice STT returns empty text.</div>
           </div>
 
           <hr class="theme-divider">

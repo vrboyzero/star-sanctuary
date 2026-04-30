@@ -1,0 +1,144 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import {
+  createMediaFingerprint,
+  createMediaFingerprintFromFile,
+  readCachedAudioTranscription,
+  readCachedImageUnderstanding,
+  readCachedVideoUnderstanding,
+  writeCachedAudioTranscription,
+  writeCachedImageUnderstanding,
+  writeCachedVideoUnderstanding,
+} from "./understanding-cache.js";
+
+describe("shared media understanding cache", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-understanding-cache-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("generates the same fingerprint from a buffer and a file with the same content", async () => {
+    const filePath = path.join(tempDir, "same.png");
+    const buffer = Buffer.from("same-image");
+    await fs.writeFile(filePath, buffer);
+
+    const fromBuffer = createMediaFingerprint({
+      buffer,
+      mime: "image/png",
+    });
+    const fromFile = await createMediaFingerprintFromFile({
+      filePath,
+      mime: "image/png",
+    });
+
+    expect(fromFile).toBe(fromBuffer);
+  });
+
+  it("writes and reads cached image understanding records", async () => {
+    const fingerprint = createMediaFingerprint({
+      buffer: Buffer.from("image-cache"),
+      mime: "image/png",
+    });
+
+    await writeCachedImageUnderstanding({
+      stateDir: tempDir,
+      fingerprint,
+      mime: "image/png",
+      result: {
+        summary: "一张终端截图。",
+        tags: ["terminal"],
+        ocrText: "hello",
+        content: "一张终端截图。",
+        keyRegions: [],
+        targetDetail: undefined,
+        focusMode: "overview",
+        focusTarget: undefined,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        mimeType: "image/png",
+        sourcePath: "/tmp/same.png",
+      },
+    });
+
+    const cached = await readCachedImageUnderstanding({
+      stateDir: tempDir,
+      fingerprint,
+    });
+
+    expect(cached?.fingerprint).toBe(fingerprint);
+    expect(cached?.result.summary).toBe("一张终端截图。");
+  });
+
+  it("writes and reads cached audio transcription records", async () => {
+    const fingerprint = createMediaFingerprint({
+      buffer: Buffer.from("audio-cache"),
+      mime: "audio/webm",
+    });
+
+    await writeCachedAudioTranscription({
+      stateDir: tempDir,
+      fingerprint,
+      mime: "audio/webm",
+      result: {
+        text: "这是一段缓存的音频转写。",
+        provider: "openai",
+        model: "whisper-1",
+        durationSec: 3.2,
+      },
+    });
+
+    const cached = await readCachedAudioTranscription({
+      stateDir: tempDir,
+      fingerprint,
+    });
+
+    expect(cached?.fingerprint).toBe(fingerprint);
+    expect(cached?.result.text).toBe("这是一段缓存的音频转写。");
+    expect(cached?.result.model).toBe("whisper-1");
+  });
+
+  it("writes and reads cached video understanding records", async () => {
+    const fingerprint = createMediaFingerprint({
+      buffer: Buffer.from("video-cache"),
+      mime: "video/mp4",
+    });
+
+    await writeCachedVideoUnderstanding({
+      stateDir: tempDir,
+      fingerprint,
+      mime: "video/mp4",
+      result: {
+        summary: "一段演示视频。",
+        tags: ["demo"],
+        ocrText: "START",
+        content: "一段演示视频。",
+        durationText: "约 8 秒",
+        timeline: [],
+        targetMoment: undefined,
+        focusMode: "overview",
+        targetTimestamp: undefined,
+        provider: "openai",
+        model: "kimi-k2.5",
+        mimeType: "video/mp4",
+        sourcePath: "/tmp/demo.mp4",
+      },
+    });
+
+    const cached = await readCachedVideoUnderstanding({
+      stateDir: tempDir,
+      fingerprint,
+    });
+
+    expect(cached?.fingerprint).toBe(fingerprint);
+    expect(cached?.result.summary).toBe("一段演示视频。");
+  });
+});

@@ -33,6 +33,10 @@ import {
   type CameraRuntimeHealthRetentionPolicy,
   type CameraRuntimeHealthSnapshotIssue,
 } from "./camera-runtime-health-state.js";
+import {
+  BELLDANDY_CAMERA_NATIVE_HELPER_FFMPEG_COMMAND_ENV,
+  BELLDANDY_CAMERA_NATIVE_HELPER_POWERSHELL_COMMAND_ENV,
+} from "./camera-native-desktop-helper-runtime.js";
 
 type CameraRuntimeDoctorProviderStatus =
   | CameraProviderStatus
@@ -64,6 +68,8 @@ export type CameraRuntimeDoctorLaunchConfig = {
   startupTimeoutMs?: number;
   requestTimeoutMs?: number;
   idleShutdownMs?: number;
+  powershellCommand?: string;
+  ffmpegCommand?: string;
 };
 
 export type CameraRuntimeDoctorDeviceCounts = {
@@ -496,6 +502,8 @@ async function buildLaunchConfigSummary(
     ...(config.startupTimeoutMs !== undefined ? { startupTimeoutMs: config.startupTimeoutMs } : {}),
     ...(config.requestTimeoutMs !== undefined ? { requestTimeoutMs: config.requestTimeoutMs } : {}),
     ...(config.idleShutdownMs !== undefined ? { idleShutdownMs: config.idleShutdownMs } : {}),
+    powershellCommand: normalizeString(env[BELLDANDY_CAMERA_NATIVE_HELPER_POWERSHELL_COMMAND_ENV]) || "powershell.exe",
+    ffmpegCommand: normalizeString(env[BELLDANDY_CAMERA_NATIVE_HELPER_FFMPEG_COMMAND_ENV]) || "ffmpeg",
   };
 }
 

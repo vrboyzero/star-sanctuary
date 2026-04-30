@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildNativeDesktopDeviceRef,
+  buildNativeDesktopDisplayRef,
   buildNativeDesktopFacingDeviceRef,
+  buildNativeDesktopWindowRef,
   parseNativeDesktopDeviceRef,
+  parseNativeDesktopDisplayRef,
+  parseNativeDesktopWindowRef,
   resolveNativeDesktopSelection,
 } from "./camera-native-desktop-contract.js";
 
@@ -21,6 +25,22 @@ describe("camera native desktop contract", () => {
     expect(deviceRef).toBe("native_desktop:facing:back");
     expect(parseNativeDesktopDeviceRef(deviceRef)).toEqual({
       facing: "back",
+    });
+  });
+
+  it("builds and parses native_desktop display refs", () => {
+    const displayRef = buildNativeDesktopDisplayRef("\\\\.\\DISPLAY1");
+    expect(displayRef).toBe("native_desktop:display:%5C%5C.%5CDISPLAY1");
+    expect(parseNativeDesktopDisplayRef(displayRef)).toEqual({
+      displayId: "\\\\.\\DISPLAY1",
+    });
+  });
+
+  it("builds and parses native_desktop window refs", () => {
+    const windowRef = buildNativeDesktopWindowRef("0x00010203");
+    expect(windowRef).toBe("native_desktop:window:0x00010203");
+    expect(parseNativeDesktopWindowRef(windowRef)).toEqual({
+      windowId: "0x00010203",
     });
   });
 

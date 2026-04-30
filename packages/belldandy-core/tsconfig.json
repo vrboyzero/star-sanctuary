@@ -18,6 +18,9 @@
       "path": "../belldandy-protocol"
     },
     {
+      "path": "../belldandy-skills"
+    },
+    {
       "path": "../belldandy-mcp"
     },
     {

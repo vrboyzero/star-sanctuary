@@ -527,6 +527,8 @@ describe("camera runtime doctor report", () => {
             resolvedHelperEntry: helperPath,
             cwd: installRoot,
             runtimeDir,
+            powershellCommand: "powershell.exe",
+            ffmpegCommand: "ffmpeg",
           }),
         }),
       ]));
