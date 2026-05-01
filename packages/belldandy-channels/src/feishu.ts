@@ -8,6 +8,10 @@ import { buildChannelSessionDescriptor } from "./session-key.js";
 
 import { ConversationStore } from "@belldandy/agent";
 
+function formatAudioTranscript(text: string): string {
+    return `[音频转写]\n${text}`;
+}
+
 export interface FeishuChannelConfig extends ChannelConfig {
     appId: string;
     appSecret: string;
@@ -342,7 +346,7 @@ export class FeishuChannel implements Channel {
                 });
 
                 if (sttRes?.text) {
-                    text = sttRes.text;
+                    text = formatAudioTranscript(sttRes.text);
                     console.log(`Feishu: Audio transcribed: "${text}"`);
                 } else {
                     console.warn(`Feishu: Audio transcription failed for ${msgId}.`);

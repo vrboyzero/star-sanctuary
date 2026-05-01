@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "飞书语音接通"
+git commit -m "验证测试多模态与自动化识别完全跑通"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

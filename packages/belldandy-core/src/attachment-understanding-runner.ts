@@ -837,6 +837,7 @@ async function buildAudioAttachmentPrompt(input: {
   prompts: string[];
   promptDeltas: AgentPromptDelta[];
 }> {
+  const formatAudioTranscript = (text: string) => `[音频转写]\n${text}`;
   const prompts: string[] = [];
   const promptDeltas: AgentPromptDelta[] = [];
   let promptText = input.promptText;
@@ -901,8 +902,9 @@ async function buildAudioAttachmentPrompt(input: {
     });
 
     if (!promptText.trim()) {
+      const primaryTranscript = formatAudioTranscript(sttResult.text);
       const truncatedTranscript = input.truncateTextForPrompt(
-        sttResult.text,
+        primaryTranscript,
         input.limits.totalTextCharLimit,
         "\n...[Transcript truncated]",
       );
@@ -958,7 +960,7 @@ async function buildAudioAttachmentPrompt(input: {
       });
     }
 
-    const transcriptText = `[语音转录: "${truncatedTranscript.text}"]`;
+    const transcriptText = formatAudioTranscript(truncatedTranscript.text);
     prompts.push(`\n${transcriptText}`);
     promptDeltas.push(createPromptDelta({
       id: `audio-transcript-${input.attachment.name}`,

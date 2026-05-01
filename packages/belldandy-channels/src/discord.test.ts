@@ -103,6 +103,7 @@ describe("DiscordChannel", () => {
   beforeEach(() => {
     discordMock.loginControllers.length = 0;
     discordMock.clientInstances.length = 0;
+    vi.unstubAllGlobals();
   });
 
   afterEach(() => {
@@ -220,17 +221,13 @@ describe("DiscordChannel", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("cascades audio attachments through agent content parts and outbound reply", async () => {
+  it("replies with a fallback message when audio-only input cannot be transcribed", async () => {
     const sendTyping = vi.fn(async () => {});
     const send = vi.fn(async () => {});
     const eventListener = vi.fn();
     const upsert = vi.fn(async () => {});
-    const run = vi.fn(async function* (input: any) {
-      yield {
-        type: "final" as const,
-        text: `已收到音频附件: ${input.content[0]?.text ?? ""}`,
-      };
-    });
+    const run = vi.fn();
+    const reply = vi.fn(async () => {});
 
     const channel = new DiscordChannel({
       botToken: "discord-token",
@@ -273,34 +270,16 @@ describe("DiscordChannel", () => {
         sendTyping,
         send,
       },
-      reply: vi.fn(async () => {}),
+      reply,
     };
 
     await (channel as any).handleMessage(message);
 
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith(expect.objectContaining({
-      text: "",
-      conversationId: "dm-a",
-      content: [
-        {
-          type: "text",
-          text: "[用户发送了音频文件: voice.ogg]",
-        },
-      ],
-      meta: expect.objectContaining({
-        channel: "discord",
-        userId: "user-a",
-        username: "Alice",
-        channelId: "dm-a",
-        sessionScope: "per-peer",
-        sessionKey: "channel=discord:scope=per-peer:chatKind=dm:chat=dm-a:peer=user-a",
-        legacyConversationId: "dm-a",
-      }),
-    }));
-    expect(upsert).toHaveBeenCalledTimes(1);
-    expect(sendTyping).toHaveBeenCalledTimes(1);
-    expect(send).toHaveBeenCalledWith("已收到音频附件: [用户发送了音频文件: voice.ogg]");
+    expect(run).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+    expect(sendTyping).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith("收到音频附件，但当前未能完成转写，请检查 STT 配置或改传 wav/mp3。附件：voice.ogg");
     expect(eventListener).toHaveBeenCalledWith(expect.objectContaining({
       type: "media_received",
       channel: "discord",
@@ -313,5 +292,168 @@ describe("DiscordChannel", () => {
       channel: "discord",
       chatId: "dm-a",
     }));
+  });
+
+  it("keeps text content when audio transcription returns empty", async () => {
+    const sendTyping = vi.fn(async () => {});
+    const send = vi.fn(async () => {});
+    const run = vi.fn(async function* (input: any) {
+      yield {
+        type: "final" as const,
+        text: `收到文本：${input.text}`,
+      };
+    });
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      arrayBuffer: async () => Buffer.from("discord-audio").buffer.slice(
+        Buffer.from("discord-audio").byteOffset,
+        Buffer.from("discord-audio").byteOffset + Buffer.from("discord-audio").byteLength,
+      ),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const sttTranscribe = vi.fn(async () => null);
+
+    const channel = new DiscordChannel({
+      botToken: "discord-token",
+      agent: { run } as any,
+      sttTranscribe,
+      currentConversationBindingStore: {
+        async upsert() {},
+        async get() {
+          return undefined;
+        },
+        async getLatestByChannel() {
+          return undefined;
+        },
+      },
+    });
+
+    const message = {
+      id: "discord-audio-1b",
+      author: {
+        id: "user-a",
+        username: "Alice",
+        bot: false,
+      },
+      content: "这段音频讲了什么？",
+      channelId: "dm-a",
+      guildId: null,
+      attachments: new Map([
+        ["att-1", {
+          name: "voice.ogg",
+          url: "https://cdn.example.com/voice.ogg",
+          contentType: "audio/ogg",
+        }],
+      ]),
+      mentions: {
+        users: [],
+        has: () => false,
+      },
+      channel: {
+        isTextBased: () => true,
+        sendTyping,
+        send,
+      },
+      reply: vi.fn(async () => {}),
+    };
+
+    await (channel as any).handleMessage(message);
+
+    expect(sttTranscribe).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({
+      text: "这段音频讲了什么？",
+      content: [
+        {
+          type: "text",
+          text: "这段音频讲了什么？",
+        },
+      ],
+    }));
+    expect(send).toHaveBeenCalledWith("收到文本：这段音频讲了什么？");
+  });
+
+  it("transcribes audio attachments when sttTranscribe is configured", async () => {
+    const sendTyping = vi.fn(async () => {});
+    const send = vi.fn(async () => {});
+    const run = vi.fn(async function* (input: any) {
+      yield {
+        type: "final" as const,
+        text: `收到：${input.content[0]?.text ?? ""}`,
+      };
+    });
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      arrayBuffer: async () => Buffer.from("discord-audio").buffer.slice(
+        Buffer.from("discord-audio").byteOffset,
+        Buffer.from("discord-audio").byteOffset + Buffer.from("discord-audio").byteLength,
+      ),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sttTranscribe = vi.fn(async () => ({
+      text: "这是语音转写",
+    }));
+
+    const channel = new DiscordChannel({
+      botToken: "discord-token",
+      agent: { run } as any,
+      sttTranscribe,
+      currentConversationBindingStore: {
+        async upsert() {},
+        async get() {
+          return undefined;
+        },
+        async getLatestByChannel() {
+          return undefined;
+        },
+      },
+    });
+
+    const message = {
+      id: "discord-audio-2",
+      author: {
+        id: "user-b",
+        username: "Bob",
+        bot: false,
+      },
+      content: "",
+      channelId: "dm-b",
+      guildId: null,
+      attachments: new Map([
+        ["att-1", {
+          name: "voice.ogg",
+          url: "https://cdn.example.com/voice.ogg",
+          contentType: "audio/ogg",
+        }],
+      ]),
+      mentions: {
+        users: [],
+        has: () => false,
+      },
+      channel: {
+        isTextBased: () => true,
+        sendTyping,
+        send,
+      },
+      reply: vi.fn(async () => {}),
+    };
+
+    await (channel as any).handleMessage(message);
+
+    expect(fetchMock).toHaveBeenCalledWith("https://cdn.example.com/voice.ogg");
+    expect(sttTranscribe).toHaveBeenCalledWith({
+      buffer: expect.any(Buffer),
+      fileName: "voice.ogg",
+      mime: "audio/ogg",
+    });
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({
+      content: [
+        {
+          type: "text",
+          text: "[音频转写]\n这是语音转写",
+        },
+      ],
+    }));
+    expect(send).toHaveBeenCalledWith("收到：[音频转写]\n这是语音转写");
   });
 });

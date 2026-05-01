@@ -324,7 +324,7 @@ test("message.send caps appended audio transcript chars when user text already e
           role: "attachment",
         }),
       ]));
-      expect(String(seenInputs[0].text)).toContain('语音转录: "ABCDE');
+      expect(String(seenInputs[0].text)).toContain("[音频转写]");
       expect(String(seenInputs[0].text)).toContain("ABCDEFGHIJABCDEFGHIJ");
       expect(String(seenInputs[0].text)).not.toContain("ABCDEFGHIJABCDEFGHIJABCDEFGHIJ");
     } finally {

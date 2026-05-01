@@ -39,6 +39,7 @@ export function createChatEventsFeature({
   let pendingTokenUsageRunning = null;
   const pendingGoalUpdates = new Map();
   const pendingSubtaskUpdates = new Map();
+  const renderedToolResultPreviewKeys = new Set();
 
   function scheduleFrameFlush() {
     if (pendingFrameFlushHandle !== null) {
@@ -141,6 +142,72 @@ export function createChatEventsFeature({
       return true;
     }
     return payloadConversationId === activeConversationId;
+  }
+
+  function readRenderableToolResultHtml(payload) {
+    if (!payload || payload.success !== true) {
+      return null;
+    }
+    const output = typeof payload.output === "string" ? payload.output.trim() : "";
+    if (!output) {
+      return null;
+    }
+    const hasRenderableMedia = /<(?:img|video|audio)\b/i.test(output)
+      || /(?:generated-image-result|generated-image-path|generated-image-meta)/i.test(output);
+    if (!hasRenderableMedia) {
+      return null;
+    }
+    const webPath = readToolResultWebPath(payload, output);
+    return {
+      html: output,
+      webPath,
+      runId: typeof payload.runId === "string" ? payload.runId.trim() : "",
+    };
+  }
+
+  function readToolResultWebPath(payload, output) {
+    const metadataWebPath = typeof payload?.metadata?.webPath === "string"
+      ? payload.metadata.webPath.trim()
+      : "";
+    if (metadataWebPath) {
+      return metadataWebPath;
+    }
+    const matched = output.match(/(?:src|href)\s*=\s*"([^"]*\/generated\/[^"]+)"/i);
+    return matched?.[1]?.trim() || "";
+  }
+
+  function buildToolResultPreviewKey(info) {
+    if (!info || !info.runId || !info.webPath) {
+      return "";
+    }
+    return `${info.runId}::${info.webPath}`;
+  }
+
+  function renderToolResultPreview(payload) {
+    const info = readRenderableToolResultHtml(payload);
+    if (!info) {
+      return false;
+    }
+    const previewKey = buildToolResultPreviewKey(info);
+    if (previewKey && renderedToolResultPreviewKeys.has(previewKey)) {
+      return false;
+    }
+    const bubble = appendMessage("bot", "", {
+      timestampMs: Date.now(),
+      isLatest: false,
+    });
+    if (!(bubble instanceof HTMLElement)) {
+      return false;
+    }
+    renderAssistantMessage?.(bubble, info.html);
+    updateMessageMeta?.(bubble, {
+      timestampMs: Date.now(),
+      isLatest: false,
+    });
+    if (previewKey) {
+      renderedToolResultPreviewKeys.add(previewKey);
+    }
+    return true;
   }
 
   function handleEvent(event, payload) {
@@ -338,6 +405,9 @@ export function createChatEventsFeature({
     if (event === "tool_result") {
       if (!isActiveConversationPayload(payload)) {
         return true;
+      }
+      if (renderToolResultPreview(payload)) {
+        forceScrollToBottom();
       }
       getCanvasApp()?.handleReactEvent("tool_result", payload);
       return true;

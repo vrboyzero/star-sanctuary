@@ -523,7 +523,7 @@ describe("QqChannel", () => {
         }));
         expect(agent.run).toHaveBeenCalledWith(expect.objectContaining({
             conversationId: "qq_user-a",
-            text: "这是 QQ 语音的转写内容",
+            text: "[音频转写]\n这是 QQ 语音的转写内容",
             meta: expect.objectContaining({
                 channel: "qq",
                 eventType: "C2C_MESSAGE_CREATE",
@@ -537,7 +537,7 @@ describe("QqChannel", () => {
         expect(outboundCalls).toHaveLength(1);
         expect(JSON.parse(String((outboundCalls[0]?.[1] as RequestInit | undefined)?.body ?? "{}"))).toEqual(
             expect.objectContaining({
-                content: "reply:这是 QQ 语音的转写内容",
+                content: "reply:[音频转写]\n这是 QQ 语音的转写内容",
                 msg_id: "C2C_MESSAGE_CREATE:msg-audio-1",
                 msg_type: 0,
             }),
@@ -616,7 +616,7 @@ describe("QqChannel", () => {
         });
         expect(transcodeSpy).not.toHaveBeenCalled();
         expect(agent.run).toHaveBeenCalledWith(expect.objectContaining({
-            text: "这是来自 wav 直链的转写",
+            text: "[音频转写]\n这是来自 wav 直链的转写",
         }));
     });
 
@@ -712,7 +712,7 @@ describe("QqChannel", () => {
             provider: "groq",
         });
         expect(agent.run).toHaveBeenCalledWith(expect.objectContaining({
-            text: "这是 fallback provider 的转写",
+            text: "[音频转写]\n这是 fallback provider 的转写",
         }));
     });
 
@@ -889,7 +889,7 @@ describe("QqChannel", () => {
         });
         expect((channel as any).transcodeAmrBufferToWav).toHaveBeenCalledTimes(1);
         expect(agent.run).toHaveBeenCalledWith(expect.objectContaining({
-            text: "这是转码后重试成功的转写",
+            text: "[音频转写]\n这是转码后重试成功的转写",
         }));
     });
 
@@ -966,7 +966,7 @@ describe("QqChannel", () => {
         });
         expect((channel as any).transcodeAmrBufferToWav).toHaveBeenCalledTimes(1);
         expect(agent.run).toHaveBeenCalledWith(expect.objectContaining({
-            text: "这是空结果回退后的转写",
+            text: "[音频转写]\n这是空结果回退后的转写",
         }));
     });
 

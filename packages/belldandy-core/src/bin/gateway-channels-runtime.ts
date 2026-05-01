@@ -248,6 +248,11 @@ export function createGatewayChannelsRuntime(input: GatewayChannelsRuntimeInput)
           replyChunkingConfig: channelReplyChunkingConfig,
           currentConversationBindingStore: input.currentConversationBindingStore,
           agentResolver: resolveChannelAgent,
+          sttTranscribe: async (opts) => {
+            const result = await input.sttTranscribe(opts);
+            if (result) input.logger.info("discord", `Transcribed audio (${result.durationSec?.toFixed(1) ?? "?"}s) from ${result.provider}`);
+            return result;
+          },
           onChannelSecurityApprovalRequired: recordChannelSecurityApprovalRequest,
         });
         input.externalOutboundSenderRegistry.register("discord", discordChannel);

@@ -9,6 +9,18 @@ import { buildChannelSessionDescriptor } from "./session-key.js";
 export interface DiscordChannelConfig extends ChannelConfig {
     botToken: string;
     intents?: number;
+    sttTranscribe?: (opts: { buffer: Buffer; fileName: string; mime?: string }) => Promise<{ text: string } | null>;
+}
+
+type AudioAttachmentResolution = {
+    fileName: string;
+    mime?: string;
+    transcript?: string;
+    status: "transcribed" | "empty_result" | "failed" | "stt_unconfigured";
+};
+
+function formatAudioTranscript(text: string): string {
+    return `[音频转写]\n${text}`;
 }
 
 export class DiscordChannel implements Channel {
@@ -24,6 +36,7 @@ export class DiscordChannel implements Channel {
     private readonly router?: ChannelRouter;
     private readonly replyChunkingConfig?: DiscordChannelConfig["replyChunkingConfig"];
     private readonly currentConversationBindingStore?: CurrentConversationBindingStore;
+    private readonly sttTranscribe?: DiscordChannelConfig["sttTranscribe"];
     private readonly onChannelSecurityApprovalRequired?: DiscordChannelConfig["onChannelSecurityApprovalRequired"];
 
     constructor(config: DiscordChannelConfig) {
@@ -32,6 +45,7 @@ export class DiscordChannel implements Channel {
         this.router = config.router;
         this.replyChunkingConfig = config.replyChunkingConfig;
         this.currentConversationBindingStore = config.currentConversationBindingStore;
+        this.sttTranscribe = config.sttTranscribe;
         this.onChannelSecurityApprovalRequired = config.onChannelSecurityApprovalRequired;
     }
 
@@ -134,6 +148,56 @@ export class DiscordChannel implements Channel {
         this.emit({ type: "stopped", channel: this.name });
     }
 
+    private async buildAudioAttachmentText(attachment: { name?: string | null; url: string; contentType?: string | null }): Promise<AudioAttachmentResolution> {
+        const fileName = attachment.name?.trim() || "discord-audio";
+        const mime = attachment.contentType ?? undefined;
+        console.info(`[Discord] Processing audio attachment ${fileName} (${mime ?? "unknown"})`);
+        if (!this.sttTranscribe) {
+            console.warn(`[Discord] Audio attachment ${fileName} skipped: sttTranscribe is not configured`);
+            return {
+                fileName,
+                mime,
+                status: "stt_unconfigured",
+            };
+        }
+
+        try {
+            const response = await fetch(attachment.url);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            const buffer = Buffer.from(await response.arrayBuffer());
+            const transcript = await this.sttTranscribe({
+                buffer,
+                fileName,
+                mime,
+            });
+            const text = transcript?.text?.trim();
+            if (!text) {
+                console.warn(`[Discord] Audio attachment ${fileName} STT returned empty result`);
+                return {
+                    fileName,
+                    mime,
+                    status: "empty_result",
+                };
+            }
+            console.info(`[Discord] Audio attachment ${fileName} transcribed successfully`);
+            return {
+                fileName,
+                mime,
+                transcript: formatAudioTranscript(text),
+                status: "transcribed",
+            };
+        } catch (error) {
+            console.warn(`[Discord] Failed to transcribe audio attachment ${fileName}:`, error);
+            return {
+                fileName,
+                mime,
+                status: "failed",
+            };
+        }
+    }
+
     private async handleMessage(message: Message): Promise<void> {
         // 忽略 Bot 自身消息
         if (message.author.bot) return;
@@ -157,6 +221,7 @@ export class DiscordChannel implements Channel {
 
         // 构建多模态内容
         const contentParts: any[] = [];
+        const failedAudioAttachments: AudioAttachmentResolution[] = [];
 
         if (message.content) {
             contentParts.push({ type: "text", text: message.content });
@@ -188,10 +253,15 @@ export class DiscordChannel implements Channel {
                     mediaType: "video"
                 });
             } else if (attachment.contentType?.startsWith("audio/")) {
-                contentParts.push({
-                    type: "text",
-                    text: `[用户发送了音频文件: ${attachment.name}]`
-                });
+                const audioResult = await this.buildAudioAttachmentText(attachment);
+                if (audioResult.transcript) {
+                    contentParts.push({
+                        type: "text",
+                        text: audioResult.transcript
+                    });
+                } else {
+                    failedAudioAttachments.push(audioResult);
+                }
                 this.emit({
                     type: "media_received",
                     channel: this.name,
@@ -203,6 +273,14 @@ export class DiscordChannel implements Channel {
         }
 
         if (contentParts.length === 0) {
+            if (failedAudioAttachments.length > 0) {
+                const audioNames = failedAudioAttachments.map((item) => item.fileName).join("、");
+                const fallbackMessage = `收到音频附件，但当前未能完成转写，请检查 STT 配置或改传 wav/mp3。附件：${audioNames}`;
+                console.warn(`[Discord] No transcribed content available for message ${message.id}; replying with fallback`);
+                await message.reply(fallbackMessage);
+                this.emit({ type: "message_sent", channel: this.name, chatId });
+                return;
+            }
             console.warn("[Discord] Empty message, skipping");
             return;
         }

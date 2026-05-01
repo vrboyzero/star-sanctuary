@@ -111,8 +111,8 @@ describe("FeishuChannel", () => {
     expect(sttTranscribe).toHaveBeenCalledTimes(2);
     expect(baseStt).toHaveBeenCalledTimes(1);
     expect(seenInputs).toHaveLength(2);
-    expect(seenInputs[0].text).toBe("cached channel transcript");
-    expect(seenInputs[1].text).toBe("cached channel transcript");
+    expect(seenInputs[0].text).toBe("[音频转写]\ncached channel transcript");
+    expect(seenInputs[1].text).toBe("[音频转写]\ncached channel transcript");
     expect(seenInputs[0].meta).toMatchObject({
       channel: "feishu",
       messageId: "msg-a",
@@ -127,7 +127,7 @@ describe("FeishuChannel", () => {
         message_id: "msg-a",
       },
       data: {
-        content: JSON.stringify({ text: "音频已处理: cached channel transcript" }),
+        content: JSON.stringify({ text: "音频已处理: [音频转写]\ncached channel transcript" }),
         msg_type: "text",
       },
     });
@@ -136,7 +136,7 @@ describe("FeishuChannel", () => {
         message_id: "msg-b",
       },
       data: {
-        content: JSON.stringify({ text: "音频已处理: cached channel transcript" }),
+        content: JSON.stringify({ text: "音频已处理: [音频转写]\ncached channel transcript" }),
         msg_type: "text",
       },
     });
@@ -144,8 +144,8 @@ describe("FeishuChannel", () => {
     const history = conversationStore.getHistory("chat-a");
     expect(history).toHaveLength(4);
     expect(history.map((item) => item.role)).toEqual(["user", "assistant", "user", "assistant"]);
-    expect(history[0]?.content).toBe("cached channel transcript");
-    expect(history[1]?.content).toBe("音频已处理: cached channel transcript");
+    expect(history[0]?.content).toBe("[音频转写]\ncached channel transcript");
+    expect(history[1]?.content).toBe("音频已处理: [音频转写]\ncached channel transcript");
   });
 
   it("reads audio payload from sdk response.data buffer shape", async () => {
@@ -197,7 +197,7 @@ describe("FeishuChannel", () => {
       mime: "audio/mp4",
     }));
     expect(seenInputs).toHaveLength(1);
-    expect(seenInputs[0].text).toBe("buffer-shape transcript");
+    expect(seenInputs[0].text).toBe("[音频转写]\nbuffer-shape transcript");
   });
 
   it("reads audio payload from sdk getReadableStream response shape", async () => {
@@ -253,7 +253,7 @@ describe("FeishuChannel", () => {
       mime: "audio/mp4",
     }));
     expect(seenInputs).toHaveLength(1);
-    expect(seenInputs[0].text).toBe("stream-shape transcript");
+    expect(seenInputs[0].text).toBe("[音频转写]\nstream-shape transcript");
   });
 
   it("does not fall back to lastChatId when binding is missing", async () => {

@@ -78,6 +78,10 @@ const QQ_VOICE_TRANSCODE_TIMEOUT_MS = 30_000;
 const DEFAULT_FFMPEG_COMMAND = "ffmpeg";
 const QQ_SILK_DECODER_SUPPORTED = false;
 
+function formatAudioTranscript(text: string): string {
+    return `[音频转写]\n${text}`;
+}
+
 export class QqChannel implements Channel {
     readonly name = "qq";
 
@@ -643,10 +647,10 @@ export class QqChannel implements Channel {
         }
 
         if (content && transcript) {
-            return `${content}\n\n[QQ 音频转写]\n${transcript}`;
+            return `${content}\n\n${formatAudioTranscript(transcript)}`;
         }
         if (transcript) {
-            return transcript;
+            return formatAudioTranscript(transcript);
         }
         if (content) {
             return content;

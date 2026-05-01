@@ -70,6 +70,7 @@ function createFeature(overrides = {}) {
 
 function createChatEventsHarness(feature, overrides = {}) {
   const handleReactFinal = overrides.handleReactFinal || vi.fn();
+  const handleReactEvent = overrides.handleReactEvent || vi.fn();
   const forceScrollToBottom = overrides.forceScrollToBottom || feature.forceScrollToBottom;
   const onConversationDelta = overrides.onConversationDelta || vi.fn();
   const onConversationFinal = overrides.onConversationFinal || vi.fn();
@@ -96,7 +97,7 @@ function createChatEventsHarness(feature, overrides = {}) {
     renderAssistantMessage: feature.renderAssistantMessage,
     updateMessageMeta: feature.updateMessageMeta,
     forceScrollToBottom,
-    getCanvasApp: () => ({ handleReactFinal }),
+    getCanvasApp: () => ({ handleReactFinal, handleReactEvent }),
     getActiveConversationId,
     onAgentStatusEvent: vi.fn(),
     onConversationDelta,
@@ -108,6 +109,7 @@ function createChatEventsHarness(feature, overrides = {}) {
     chatEvents,
     forceScrollToBottom,
     handleReactFinal,
+    handleReactEvent,
     onConversationDelta,
     onConversationFinal,
   };
@@ -460,6 +462,117 @@ describe("chat ui rich text rendering", () => {
     expect(forceScrollToBottom).not.toHaveBeenCalled();
     expect(streamingBubble?.querySelector(".msg-body")).toBeNull();
     expect(streamingBubble?.dataset.messageText || "").toBe("");
+  });
+
+  it("renders media-rich tool results as a bot preview bubble while keeping canvas events", () => {
+    installMarkedStub((text) => text);
+    const { feature, messagesEl } = createFeature();
+    const { chatEvents, handleReactFinal } = createChatEventsHarness(feature);
+
+    chatEvents.handleEvent("tool_result", {
+      conversationId: "",
+      success: true,
+      name: "image_generate",
+      output: [
+        "<div class=\"generated-image-result\">",
+        "<img src=\"/generated/images/demo.png\" alt=\"Generated Image\">",
+        "<div class=\"generated-image-path\">保存位置：<a href=\"#generated-image-reveal:/generated/images/demo.png\">generated/images/demo.png</a></div>",
+        "</div>",
+      ].join(""),
+    });
+
+    const wrappers = messagesEl.querySelectorAll(".msg-wrapper.bot");
+    expect(wrappers).toHaveLength(2);
+    expect(wrappers[1]?.querySelector(".media-thumbnail")).not.toBeNull();
+    expect(handleReactFinal).not.toHaveBeenCalled();
+  });
+
+  it("does not render plain text tool results as chat bubbles", () => {
+    installMarkedStub((text) => text);
+    const { feature, messagesEl } = createFeature();
+    const { chatEvents } = createChatEventsHarness(feature);
+
+    chatEvents.handleEvent("tool_result", {
+      conversationId: "",
+      success: true,
+      name: "list_files",
+      output: "listed 3 files",
+    });
+
+    const wrappers = messagesEl.querySelectorAll(".msg-wrapper.bot");
+    expect(wrappers).toHaveLength(1);
+  });
+
+  it("dedupes media-rich tool result previews by the same runId and webPath", () => {
+    installMarkedStub((text) => text);
+    const { feature, messagesEl } = createFeature();
+    const { chatEvents } = createChatEventsHarness(feature);
+    const output = [
+      "<div class=\"generated-image-result\">",
+      "<img src=\"/generated/images/demo.png\" alt=\"Generated Image\">",
+      "<div class=\"generated-image-path\">保存位置：<a href=\"#generated-image-reveal:/generated/images/demo.png\">generated/images/demo.png</a></div>",
+      "</div>",
+    ].join("");
+
+    chatEvents.handleEvent("tool_result", {
+      conversationId: "",
+      runId: "run-1",
+      success: true,
+      name: "image_generate",
+      output,
+      metadata: {
+        webPath: "/generated/images/demo.png",
+      },
+    });
+    chatEvents.handleEvent("tool_result", {
+      conversationId: "",
+      runId: "run-1",
+      success: true,
+      name: "image_generate",
+      output,
+      metadata: {
+        webPath: "/generated/images/demo.png",
+      },
+    });
+
+    const wrappers = messagesEl.querySelectorAll(".msg-wrapper.bot");
+    expect(wrappers).toHaveLength(2);
+  });
+
+  it("keeps media-rich tool result previews for different runIds even when webPath matches", () => {
+    installMarkedStub((text) => text);
+    const { feature, messagesEl } = createFeature();
+    const { chatEvents } = createChatEventsHarness(feature);
+    const output = [
+      "<div class=\"generated-image-result\">",
+      "<img src=\"/generated/images/demo.png\" alt=\"Generated Image\">",
+      "<div class=\"generated-image-path\">保存位置：<a href=\"#generated-image-reveal:/generated/images/demo.png\">generated/images/demo.png</a></div>",
+      "</div>",
+    ].join("");
+
+    chatEvents.handleEvent("tool_result", {
+      conversationId: "",
+      runId: "run-1",
+      success: true,
+      name: "image_generate",
+      output,
+      metadata: {
+        webPath: "/generated/images/demo.png",
+      },
+    });
+    chatEvents.handleEvent("tool_result", {
+      conversationId: "",
+      runId: "run-2",
+      success: true,
+      name: "image_generate",
+      output,
+      metadata: {
+        webPath: "/generated/images/demo.png",
+      },
+    });
+
+    const wrappers = messagesEl.querySelectorAll(".msg-wrapper.bot");
+    expect(wrappers).toHaveLength(3);
   });
 
   it("starts a fresh assistant bubble after streaming state reset", () => {
