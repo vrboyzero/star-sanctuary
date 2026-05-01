@@ -196,7 +196,11 @@ export function createSettingsController({
     cfgVideoUnderstandBaseUrl,
     cfgVideoUnderstandModel,
     cfgVideoUnderstandTimeoutMs,
+    cfgVideoUnderstandTransport,
+    cfgVideoUnderstandFps,
     cfgVideoUnderstandAutoOnAttachment,
+    cfgVideoUnderstandAutoAttachmentMaxTimelineItems,
+    cfgVideoUnderstandAutoAttachmentSummaryCharLimit,
     cfgSttProvider,
     cfgSttModel,
     cfgSttOpenAiBaseUrl,
@@ -358,6 +362,8 @@ export function createSettingsController({
     "BELLDANDY_MEMORY_SUMMARY_API_KEY",
     "BELLDANDY_EMBEDDING_OPENAI_API_KEY",
     "BELLDANDY_TASK_SUMMARY_API_KEY",
+    "BELLDANDY_IMAGE_UNDERSTAND_OPENAI_API_KEY",
+    "BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY",
   ];
   let lastLoadedConfig = null;
   let lastLoadedChannelSecurityContent = '{\n  "version": 1,\n  "channels": {}\n}\n';
@@ -820,7 +826,11 @@ export function createSettingsController({
     if (cfgVideoUnderstandBaseUrl) cfgVideoUnderstandBaseUrl.value = c["BELLDANDY_VIDEO_UNDERSTAND_OPENAI_BASE_URL"] || "";
     if (cfgVideoUnderstandModel) cfgVideoUnderstandModel.value = c["BELLDANDY_VIDEO_UNDERSTAND_MODEL"] || "";
     if (cfgVideoUnderstandTimeoutMs) cfgVideoUnderstandTimeoutMs.value = c["BELLDANDY_VIDEO_UNDERSTAND_TIMEOUT_MS"] || "";
+    if (cfgVideoUnderstandTransport) cfgVideoUnderstandTransport.value = c["BELLDANDY_VIDEO_UNDERSTAND_TRANSPORT"] || "auto";
+    if (cfgVideoUnderstandFps) cfgVideoUnderstandFps.value = c["BELLDANDY_VIDEO_UNDERSTAND_FPS"] || "";
     if (cfgVideoUnderstandAutoOnAttachment) cfgVideoUnderstandAutoOnAttachment.checked = c["BELLDANDY_VIDEO_UNDERSTAND_AUTO_ON_ATTACHMENT"] !== "false";
+    if (cfgVideoUnderstandAutoAttachmentMaxTimelineItems) cfgVideoUnderstandAutoAttachmentMaxTimelineItems.value = c["BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_MAX_TIMELINE_ITEMS"] || "";
+    if (cfgVideoUnderstandAutoAttachmentSummaryCharLimit) cfgVideoUnderstandAutoAttachmentSummaryCharLimit.value = c["BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_SUMMARY_CHAR_LIMIT"] || "";
     if (cfgSttProvider) cfgSttProvider.value = c["BELLDANDY_STT_PROVIDER"] || "";
     if (cfgSttModel) cfgSttModel.value = c["BELLDANDY_STT_MODEL"] || "";
     if (cfgSttOpenAiBaseUrl) cfgSttOpenAiBaseUrl.value = c["BELLDANDY_STT_OPENAI_BASE_URL"] || "";
@@ -1585,7 +1595,11 @@ export function createSettingsController({
     if (cfgVideoUnderstandBaseUrl) updates["BELLDANDY_VIDEO_UNDERSTAND_OPENAI_BASE_URL"] = cfgVideoUnderstandBaseUrl.value.trim();
     if (cfgVideoUnderstandModel) updates["BELLDANDY_VIDEO_UNDERSTAND_MODEL"] = cfgVideoUnderstandModel.value.trim();
     if (cfgVideoUnderstandTimeoutMs) updates["BELLDANDY_VIDEO_UNDERSTAND_TIMEOUT_MS"] = cfgVideoUnderstandTimeoutMs.value.trim();
+    if (cfgVideoUnderstandTransport) updates["BELLDANDY_VIDEO_UNDERSTAND_TRANSPORT"] = cfgVideoUnderstandTransport.value.trim() || "auto";
+    if (cfgVideoUnderstandFps) updates["BELLDANDY_VIDEO_UNDERSTAND_FPS"] = cfgVideoUnderstandFps.value.trim();
     if (cfgVideoUnderstandAutoOnAttachment) updates["BELLDANDY_VIDEO_UNDERSTAND_AUTO_ON_ATTACHMENT"] = cfgVideoUnderstandAutoOnAttachment.checked ? "true" : "false";
+    if (cfgVideoUnderstandAutoAttachmentMaxTimelineItems) updates["BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_MAX_TIMELINE_ITEMS"] = cfgVideoUnderstandAutoAttachmentMaxTimelineItems.value.trim();
+    if (cfgVideoUnderstandAutoAttachmentSummaryCharLimit) updates["BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_SUMMARY_CHAR_LIMIT"] = cfgVideoUnderstandAutoAttachmentSummaryCharLimit.value.trim();
     if (cfgSttProvider) updates["BELLDANDY_STT_PROVIDER"] = cfgSttProvider.value.trim();
     if (cfgSttModel) updates["BELLDANDY_STT_MODEL"] = cfgSttModel.value.trim();
     if (cfgSttOpenAiBaseUrl) updates["BELLDANDY_STT_OPENAI_BASE_URL"] = cfgSttOpenAiBaseUrl.value.trim();
@@ -1612,8 +1626,8 @@ export function createSettingsController({
     assignSecretOverrideUpdate(updates, "BELLDANDY_MEMORY_EVOLUTION_API_KEY", cfgMemoryEvolutionApiKey);
     assignSecretOverrideUpdate(updates, "BELLDANDY_TASK_SUMMARY_API_KEY", cfgTaskSummaryApiKey);
     assignSecretUpdate(updates, "BELLDANDY_IMAGE_OPENAI_API_KEY", cfgImageApiKey);
-    assignSecretUpdate(updates, "BELLDANDY_IMAGE_UNDERSTAND_OPENAI_API_KEY", cfgImageUnderstandApiKey);
-    assignSecretUpdate(updates, "BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY", cfgVideoUnderstandApiKey);
+    assignSecretOverrideUpdate(updates, "BELLDANDY_IMAGE_UNDERSTAND_OPENAI_API_KEY", cfgImageUnderstandApiKey);
+    assignSecretOverrideUpdate(updates, "BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY", cfgVideoUnderstandApiKey);
     updates["BELLDANDY_FACET_ANCHOR"] = cfgFacetAnchor.value.trim();
     updates["BELLDANDY_INJECT_AGENTS"] = cfgInjectAgents.checked ? "true" : "false";
     updates["BELLDANDY_INJECT_SOUL"] = cfgInjectSoul.checked ? "true" : "false";

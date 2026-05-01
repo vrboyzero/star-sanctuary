@@ -65,6 +65,7 @@ import { initPromptController } from "./app/features/prompt.js";
 import { createPanelVisibilityFeature } from "./app/features/panel-visibility.js";
 import { createThemeController } from "./app/features/theme.js";
 import { createVoiceFeature } from "./app/features/voice.js";
+import { applyWebConfigLinks } from "./app/features/web-config-links.js";
 import { createWorkspaceFeature } from "./app/features/workspace.js";
 import { LOCALE_DICTIONARIES, LOCALE_META } from "./app/i18n/index.js";
 
@@ -250,6 +251,7 @@ const {
   saveSettingsBtn,
   restartBtn,
   recommendApiLink,
+  aliyunOneKeyLink,
   officialHomeLink,
   workshopLink,
   cfgApiKey,
@@ -1107,6 +1109,11 @@ function handleHelloOk(frame) {
 
   workspaceFeature?.refreshAfterConnectionReady();
   loadWorkspaceRootsFromServer();
+  void loadServerConfig().then((config) => {
+    if (config) {
+      syncAttachmentLimitsFromConfig(config);
+    }
+  });
   void loadAgentList().then((agents) => {
     void agentRuntimeFeature?.activatePreferredResidentAgent(agents);
   });
@@ -2503,20 +2510,15 @@ async function sendMessage(options = {}) {
 // 暴露给 WebView 等环境的接口
 window.__BELLDANDY_WEBCHAT_READY__ = true;
 
-// Initialize Recommend API Link
-if (recommendApiLink && window.BELLDANDY_WEB_CONFIG?.recommendApiUrl) {
-  recommendApiLink.href = window.BELLDANDY_WEB_CONFIG.recommendApiUrl;
-}
-
-// Initialize Official Home Link（官方主页链接）
-if (officialHomeLink && window.BELLDANDY_WEB_CONFIG?.officialHomeUrl) {
-  officialHomeLink.href = window.BELLDANDY_WEB_CONFIG.officialHomeUrl;
-}
-
-// Initialize Workshop Link（工坊入口链接）
-if (workshopLink && window.BELLDANDY_WEB_CONFIG?.workshopUrl) {
-  workshopLink.href = window.BELLDANDY_WEB_CONFIG.workshopUrl;
-}
+applyWebConfigLinks(
+  {
+    recommendApiLink,
+    aliyunOneKeyLink,
+    officialHomeLink,
+    workshopLink,
+  },
+  window.BELLDANDY_WEB_CONFIG,
+);
 const REDACTED_PLACEHOLDER = "[REDACTED]";
 
 settingsRuntimeFeature = createSettingsRuntimeFeature({

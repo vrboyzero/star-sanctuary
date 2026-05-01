@@ -1,5 +1,6 @@
 import type { Tool } from "../../types.js";
 import { withToolContract } from "../../tool-contract.js";
+import { multimediaCacheClearTool as baseMultimediaCacheClearTool } from "./cache-clear.js";
 import { imageGenerateTool as baseImageGenerateTool } from "./image.js";
 import {
   imageUnderstandTool as baseImageUnderstandTool,
@@ -10,8 +11,11 @@ import type { ImageUnderstandConfig, ImageUnderstandOptions, ImageUnderstandResu
 import {
   createMediaFingerprint,
   createMediaFingerprintFromFile,
+  clearMediaUnderstandingCache,
   readCachedAudioTranscription,
   readCachedImageUnderstanding,
+  resolveMediaUnderstandingCacheDir,
+  resolveMediaUnderstandingCacheRoot,
   writeCachedImageUnderstanding,
   writeCachedAudioTranscription,
   readCachedVideoUnderstanding,
@@ -21,6 +25,7 @@ import type {
   CachedAudioTranscriptionRecord,
   CachedImageUnderstandingRecord,
   CachedVideoUnderstandingRecord,
+  MediaUnderstandingCacheKind,
 } from "./understanding-cache.js";
 import {
   videoUnderstandTool as baseVideoUnderstandTool,
@@ -83,6 +88,11 @@ export const imageGenerateTool = withMultimediaContract(baseImageGenerateTool, {
   activityDescription: "Generate an image from a text prompt",
   safeScopes: ["remote-safe"],
 });
+export const multimediaCacheClearTool = withMultimediaContract(baseMultimediaCacheClearTool, {
+  activityDescription: "Clear persisted multimedia understanding cache files in the current state directory",
+  safeScopes: ["local-safe"],
+  riskLevel: "medium",
+});
 export const imageUnderstandTool = withMultimediaContract(baseImageUnderstandTool, {
   activityDescription: "Analyze an image file with the configured standalone image understanding model",
   safeScopes: ["remote-safe", "local-safe"],
@@ -106,8 +116,11 @@ export type { VideoUnderstandConfig, VideoUnderstandOptions, VideoUnderstandResu
 export {
   createMediaFingerprint,
   createMediaFingerprintFromFile,
+  clearMediaUnderstandingCache,
   readCachedAudioTranscription,
   readCachedImageUnderstanding,
+  resolveMediaUnderstandingCacheDir,
+  resolveMediaUnderstandingCacheRoot,
   writeCachedImageUnderstanding,
   writeCachedAudioTranscription,
   readCachedVideoUnderstanding,
@@ -117,6 +130,7 @@ export type {
   CachedAudioTranscriptionRecord,
   CachedImageUnderstandingRecord,
   CachedVideoUnderstandingRecord,
+  MediaUnderstandingCacheKind,
 };
 export { synthesizeSpeech };
 export type { SynthesizeResult, SynthesizeOptions };

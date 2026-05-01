@@ -124,8 +124,19 @@ const noopLogger = {
   error() {},
 };
 
+function createSpyLogger() {
+  return {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  };
+}
+
 describe("attachment understanding runner", () => {
   beforeEach(() => {
+    delete process.env.BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_MAX_TIMELINE_ITEMS;
+    delete process.env.BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_SUMMARY_CHAR_LIMIT;
     readImageUnderstandConfigMock.mockReset();
     understandImageFileMock.mockReset();
     readVideoUnderstandConfigMock.mockReset();
@@ -234,6 +245,7 @@ describe("attachment understanding runner", () => {
 
   it("automatically appends image understanding and reuses cached results", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-att-runner-image-"));
+    const logger = createSpyLogger();
     readImageUnderstandConfigMock.mockReturnValue({
       enabled: true,
       autoOnAttachment: true,
@@ -264,7 +276,7 @@ describe("attachment understanding runner", () => {
           { name: "photo.png", type: "image/png", base64: Buffer.from("same-image").toString("base64") },
         ],
         stateDir,
-        log: noopLogger,
+        log: logger,
         getAttachmentPromptLimits: () => TEST_LIMITS,
         truncateTextForPrompt: (text, limit, suffix) => ({
           text: text.length > limit ? `${text.slice(0, limit)}${suffix}` : text,
@@ -277,6 +289,26 @@ describe("attachment understanding runner", () => {
       const second = await runOnce();
 
       expect(understandImageFileMock).toHaveBeenCalledTimes(1);
+      expect(logger.info).toHaveBeenCalledWith(
+        "message",
+        "Image attachment auto understanding completed",
+        expect.objectContaining({
+          name: "photo.png",
+          mime: "image/png",
+          cacheHit: false,
+          model: "gpt-4.1-mini",
+        }),
+      );
+      expect(logger.info).toHaveBeenCalledWith(
+        "message",
+        "Image attachment auto understanding completed",
+        expect.objectContaining({
+          name: "photo.png",
+          mime: "image/png",
+          cacheHit: true,
+          model: "gpt-4.1-mini",
+        }),
+      );
       expect(first.promptText).toContain("[图片识别摘要: 一张展示终端界面的截图。]");
       expect(first.promptText).toContain("[图片标签: screenshot，terminal]");
       expect(first.promptText).toContain("[图片重点区域: 终端窗口 主体是终端内容区域。；输出行 中部有 hello world 文本。]");
@@ -298,6 +330,7 @@ describe("attachment understanding runner", () => {
 
   it("automatically appends video understanding and reuses cached results", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-att-runner-video-"));
+    const logger = createSpyLogger();
     readVideoUnderstandConfigMock.mockReturnValue({
       enabled: true,
       autoOnAttachment: true,
@@ -329,7 +362,7 @@ describe("attachment understanding runner", () => {
           { name: "clip.mp4", type: "video/mp4", base64: Buffer.from("same-video").toString("base64") },
         ],
         stateDir,
-        log: noopLogger,
+        log: logger,
         getAttachmentPromptLimits: () => TEST_LIMITS,
         truncateTextForPrompt: (text, limit, suffix) => ({
           text: text.length > limit ? `${text.slice(0, limit)}${suffix}` : text,
@@ -342,6 +375,30 @@ describe("attachment understanding runner", () => {
       const second = await runOnce();
 
       expect(understandVideoFileMock).toHaveBeenCalledTimes(1);
+      expect(logger.info).toHaveBeenCalledWith(
+        "message",
+        "Video attachment auto understanding completed",
+        expect.objectContaining({
+          name: "clip.mp4",
+          mime: "video/mp4",
+          cacheHit: false,
+          model: "kimi-k2.5",
+          analysisMode: "native_video",
+          timelineItems: 2,
+        }),
+      );
+      expect(logger.info).toHaveBeenCalledWith(
+        "message",
+        "Video attachment auto understanding completed",
+        expect.objectContaining({
+          name: "clip.mp4",
+          mime: "video/mp4",
+          cacheHit: true,
+          model: "kimi-k2.5",
+          analysisMode: "native_video",
+          timelineItems: 2,
+        }),
+      );
       expect(first.promptText).toContain("[视频识别摘要: 一段展示产品旋转效果的短视频。]");
       expect(first.promptText).toContain("[视频标签: product，rotation]");
       expect(first.promptText).toContain("[视频关键片段: 00:02 镜头展示产品正面。；00:07 产品开始旋转。]");
@@ -356,6 +413,237 @@ describe("attachment understanding runner", () => {
           }),
         }),
       ]));
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("refreshes cached frame fallback video understanding when native video is now configured", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-att-runner-video-refresh-"));
+    const logger = createSpyLogger();
+    readVideoUnderstandConfigMock.mockReturnValue({
+      enabled: true,
+      autoOnAttachment: true,
+      provider: "openai",
+      apiKey: "test-key",
+    });
+    understandVideoFileMock.mockResolvedValue({
+      summary: "一段通过原生视频识别得到的短视频摘要。",
+      tags: ["native", "video"],
+      ocrText: "NATIVE",
+      content: "一段通过原生视频识别得到的短视频摘要。",
+      durationText: "约 10 秒",
+      timeline: [
+        { timestamp: "00:03", summary: "开始展示主画面。", ocrText: "" },
+      ],
+      targetMoment: undefined,
+      focusMode: "overview",
+      targetTimestamp: undefined,
+      analysisMode: "native_video",
+      provider: "openai",
+      model: "qwen3.6-flash",
+      mimeType: "video/mp4",
+      sourcePath: path.join(stateDir, "storage", "attachments", "clip.mp4"),
+    });
+
+    try {
+      const attachment = { name: "clip.mp4", type: "video/mp4", base64: Buffer.from("refresh-video").toString("base64") };
+      const fingerprint = createMediaFingerprintMock({
+        buffer: Buffer.from("refresh-video"),
+        mime: "video/mp4",
+      });
+      videoCacheStore.set(`${stateDir}:${fingerprint}`, {
+        version: 1,
+        fingerprint,
+        mime: "video/mp4",
+        createdAt: new Date().toISOString(),
+        result: {
+          summary: "旧的抽帧缓存结果。",
+          tags: ["fallback"],
+          ocrText: "OLD",
+          content: "旧的抽帧缓存结果。",
+          durationText: "约 10 秒",
+          timeline: [
+            { timestamp: "00:01", summary: "旧抽帧。", ocrText: "" },
+          ],
+          targetMoment: undefined,
+          focusMode: "overview",
+          targetTimestamp: undefined,
+          analysisMode: "frame_sampling_fallback",
+          provider: "frame_fallback",
+          model: "qwen3.6-flash",
+          mimeType: "video/mp4",
+          sourcePath: path.join(stateDir, "storage", "attachments", "clip.mp4"),
+        },
+      });
+
+      const result = await preparePromptWithAttachments({
+        conversationId: "conv-video-refresh",
+        promptText: "describe",
+        attachments: [attachment],
+        stateDir,
+        log: logger,
+        getAttachmentPromptLimits: () => TEST_LIMITS,
+        truncateTextForPrompt: (text, limit, suffix) => ({
+          text: text.length > limit ? `${text.slice(0, limit)}${suffix}` : text,
+          truncated: text.length > limit,
+        }),
+        acceptedContentCapabilities: ["text_inline"],
+      });
+
+      expect(understandVideoFileMock).toHaveBeenCalledTimes(1);
+      expect(result.promptText).toContain("[视频识别摘要: 一段通过原生视频识别得到的短视频摘要。]");
+      expect(logger.info).toHaveBeenCalledWith(
+        "message",
+        "Refreshing legacy frame fallback video cache because native video is now available",
+        expect.objectContaining({
+          name: "clip.mp4",
+          analysisMode: "frame_sampling_fallback",
+        }),
+      );
+      expect(logger.info).toHaveBeenCalledWith(
+        "message",
+        "Video attachment auto understanding completed",
+        expect.objectContaining({
+          name: "clip.mp4",
+          cacheHit: false,
+          analysisMode: "native_video",
+          model: "qwen3.6-flash",
+        }),
+      );
+      expect(videoCacheStore.get(`${stateDir}:${fingerprint}`)).toEqual(expect.objectContaining({
+        result: expect.objectContaining({
+          analysisMode: "native_video",
+          provider: "openai",
+        }),
+      }));
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("supports unlimited automatic video attachment summary and timeline injection when env is 0", async () => {
+    process.env.BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_MAX_TIMELINE_ITEMS = "0";
+    process.env.BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_SUMMARY_CHAR_LIMIT = "0";
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-att-runner-video-unlimited-"));
+    readVideoUnderstandConfigMock.mockReturnValue({
+      enabled: true,
+      autoOnAttachment: true,
+    });
+    const longSummary = "这是一段很长的视频摘要。".repeat(30);
+    understandVideoFileMock.mockResolvedValue({
+      summary: longSummary,
+      tags: ["native", "video"],
+      ocrText: "FULL OCR",
+      content: longSummary,
+      durationText: "约 30 秒",
+      timeline: [
+        { timestamp: "00:01", summary: "片段 1", ocrText: "" },
+        { timestamp: "00:02", summary: "片段 2", ocrText: "" },
+        { timestamp: "00:03", summary: "片段 3", ocrText: "" },
+        { timestamp: "00:04", summary: "片段 4", ocrText: "" },
+        { timestamp: "00:05", summary: "片段 5", ocrText: "" },
+        { timestamp: "00:06", summary: "片段 6", ocrText: "" },
+      ],
+      targetMoment: undefined,
+      focusMode: "overview",
+      targetTimestamp: undefined,
+      analysisMode: "native_video",
+      provider: "openai",
+      model: "qwen3.6-flash",
+      mimeType: "video/mp4",
+      sourcePath: path.join(stateDir, "storage", "attachments", "clip.mp4"),
+    });
+
+    try {
+      const result = await preparePromptWithAttachments({
+        conversationId: "conv-video-unlimited",
+        promptText: "describe",
+        attachments: [
+          { name: "clip.mp4", type: "video/mp4", base64: Buffer.from("unlimited-video").toString("base64") },
+        ],
+        stateDir,
+        log: noopLogger,
+        getAttachmentPromptLimits: () => TEST_LIMITS,
+        truncateTextForPrompt: (text, limit, suffix) => ({
+          text: text.length > limit ? `${text.slice(0, limit)}${suffix}` : text,
+          truncated: text.length > limit,
+        }),
+        acceptedContentCapabilities: ["text_inline"],
+      });
+
+      expect(understandVideoFileMock).toHaveBeenCalledWith(expect.objectContaining({
+        focusMode: "timeline",
+        maxTimelineItems: 0,
+      }));
+      expect(result.promptText).toContain(longSummary);
+      expect(result.promptText).toContain("00:06 片段 6");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("includes native fallback reason in automatic video attachment logs", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-att-runner-video-fallback-log-"));
+    const logger = createSpyLogger();
+    readVideoUnderstandConfigMock.mockReturnValue({
+      enabled: true,
+      autoOnAttachment: true,
+    });
+    understandVideoFileMock.mockResolvedValue({
+      summary: "抽帧兜底结果。",
+      tags: ["fallback"],
+      ocrText: "OCR",
+      content: "已切换到视频抽帧兜底识别。",
+      durationText: "约 20 秒",
+      timeline: [
+        { timestamp: "00:02", summary: "片段 1", ocrText: "" },
+      ],
+      targetMoment: undefined,
+      focusMode: "timeline",
+      targetTimestamp: undefined,
+      analysisMode: "frame_sampling_fallback",
+      provider: "frame_fallback",
+      model: "qwen3.6-flash",
+      mimeType: "video/mp4",
+      sourcePath: path.join(stateDir, "storage", "attachments", "clip.mp4"),
+      nativeErrorMessage: "Upload failed: 415 unsupported media",
+    });
+
+    try {
+      await preparePromptWithAttachments({
+        conversationId: "conv-video-fallback-log",
+        promptText: "describe",
+        attachments: [
+          { name: "clip.mp4", type: "video/mp4", base64: Buffer.from("video-fallback-log").toString("base64") },
+        ],
+        stateDir,
+        log: logger,
+        getAttachmentPromptLimits: () => TEST_LIMITS,
+        truncateTextForPrompt: (text, limit, suffix) => ({
+          text: text.length > limit ? `${text.slice(0, limit)}${suffix}` : text,
+          truncated: text.length > limit,
+        }),
+        acceptedContentCapabilities: ["text_inline"],
+      });
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        "message",
+        "Video attachment native understanding fell back to frame sampling",
+        expect.objectContaining({
+          name: "clip.mp4",
+          mime: "video/mp4",
+          error: "Upload failed: 415 unsupported media",
+        }),
+      );
+      expect(logger.info).toHaveBeenCalledWith(
+        "message",
+        "Video attachment auto understanding completed",
+        expect.objectContaining({
+          analysisMode: "frame_sampling_fallback",
+          nativeErrorMessage: "Upload failed: 415 unsupported media",
+        }),
+      );
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
     }

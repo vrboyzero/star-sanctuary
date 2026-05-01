@@ -197,6 +197,8 @@ test("config.update accepts unified Aliyun API key targets and redacts them in c
           BELLDANDY_MEMORY_SUMMARY_API_KEY: "aliyun-shared-key",
           BELLDANDY_EMBEDDING_OPENAI_API_KEY: "aliyun-shared-key",
           BELLDANDY_TASK_SUMMARY_API_KEY: "aliyun-shared-key",
+          BELLDANDY_IMAGE_UNDERSTAND_OPENAI_API_KEY: "aliyun-shared-key",
+          BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY: "aliyun-shared-key",
         },
       },
     }));
@@ -214,6 +216,8 @@ test("config.update accepts unified Aliyun API key targets and redacts them in c
     expect(readRes.payload?.config?.BELLDANDY_MEMORY_SUMMARY_API_KEY).toBe("[REDACTED]");
     expect(readRes.payload?.config?.BELLDANDY_EMBEDDING_OPENAI_API_KEY).toBe("[REDACTED]");
     expect(readRes.payload?.config?.BELLDANDY_TASK_SUMMARY_API_KEY).toBe("[REDACTED]");
+    expect(readRes.payload?.config?.BELLDANDY_IMAGE_UNDERSTAND_OPENAI_API_KEY).toBe("[REDACTED]");
+    expect(readRes.payload?.config?.BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY).toBe("[REDACTED]");
 
     const envLocalContent = await fs.promises.readFile(path.join(envDir, ".env.local"), "utf-8");
     expect(envLocalContent).toContain('DASHSCOPE_API_KEY="aliyun-shared-key"');
@@ -222,6 +226,8 @@ test("config.update accepts unified Aliyun API key targets and redacts them in c
     expect(envLocalContent).toContain('BELLDANDY_MEMORY_SUMMARY_API_KEY="aliyun-shared-key"');
     expect(envLocalContent).toContain('BELLDANDY_EMBEDDING_OPENAI_API_KEY="aliyun-shared-key"');
     expect(envLocalContent).toContain('BELLDANDY_TASK_SUMMARY_API_KEY="aliyun-shared-key"');
+    expect(envLocalContent).toContain('BELLDANDY_IMAGE_UNDERSTAND_OPENAI_API_KEY="aliyun-shared-key"');
+    expect(envLocalContent).toContain('BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY="aliyun-shared-key"');
   } finally {
     ws.close();
     await closeP;
@@ -787,7 +793,10 @@ test("config.update accepts final cleanup prompt and multimedia env settings", a
           BELLDANDY_VIDEO_UNDERSTAND_OPENAI_BASE_URL: "https://video.example.com/v1",
           BELLDANDY_VIDEO_UNDERSTAND_MODEL: "kimi-k2.5",
           BELLDANDY_VIDEO_UNDERSTAND_TIMEOUT_MS: "90000",
+          BELLDANDY_VIDEO_UNDERSTAND_FPS: "3",
           BELLDANDY_VIDEO_UNDERSTAND_AUTO_ON_ATTACHMENT: "true",
+          BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_MAX_TIMELINE_ITEMS: "7",
+          BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_SUMMARY_CHAR_LIMIT: "1200",
           BELLDANDY_STT_PROVIDER: "groq",
           BELLDANDY_STT_MODEL: "whisper-large-v3",
           BELLDANDY_STT_LANGUAGE: "zh",
@@ -819,6 +828,9 @@ test("config.update accepts final cleanup prompt and multimedia env settings", a
     expect(readRes.payload?.config?.BELLDANDY_CAMERA_SNAP_AUTO_UNDERSTAND).toBe("true");
     expect(readRes.payload?.config?.BELLDANDY_SCREEN_CAPTURE_AUTO_UNDERSTAND).toBe("false");
     expect(readRes.payload?.config?.BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY).toBe("[REDACTED]");
+    expect(readRes.payload?.config?.BELLDANDY_VIDEO_UNDERSTAND_FPS).toBe("3");
+    expect(readRes.payload?.config?.BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_MAX_TIMELINE_ITEMS).toBe("7");
+    expect(readRes.payload?.config?.BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_SUMMARY_CHAR_LIMIT).toBe("1200");
     expect(readRes.payload?.config?.BELLDANDY_STT_MODEL).toBe("whisper-large-v3");
     expect(readRes.payload?.config?.BELLDANDY_STT_GROQ_API_KEY).toBe("[REDACTED]");
     expect(readRes.payload?.config?.BELLDANDY_ROOM_MEMBERS_CACHE_TTL).toBe("300000");
@@ -833,6 +845,9 @@ test("config.update accepts final cleanup prompt and multimedia env settings", a
     expect(envLocalContent).toContain('BELLDANDY_CAMERA_SNAP_AUTO_UNDERSTAND="true"');
     expect(envLocalContent).toContain('BELLDANDY_SCREEN_CAPTURE_AUTO_UNDERSTAND="false"');
     expect(envLocalContent).toContain('BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY="video-secret"');
+    expect(envLocalContent).toContain('BELLDANDY_VIDEO_UNDERSTAND_FPS="3"');
+    expect(envLocalContent).toContain('BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_MAX_TIMELINE_ITEMS="7"');
+    expect(envLocalContent).toContain('BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_SUMMARY_CHAR_LIMIT="1200"');
     expect(envLocalContent).toContain('BELLDANDY_STT_MODEL="whisper-large-v3"');
     expect(envLocalContent).toContain('BELLDANDY_STT_GROQ_API_KEY="gsk-secret"');
     expect(envLocalContent).toContain('BELLDANDY_ROOM_INJECT_THRESHOLD="10"');

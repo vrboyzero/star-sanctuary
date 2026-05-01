@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  clearMediaUnderstandingCache,
   createMediaFingerprint,
   createMediaFingerprintFromFile,
   readCachedAudioTranscription,
@@ -140,5 +141,71 @@ describe("shared media understanding cache", () => {
 
     expect(cached?.fingerprint).toBe(fingerprint);
     expect(cached?.result.summary).toBe("一段演示视频。");
+  });
+
+  it("clears only the selected multimedia cache kinds", async () => {
+    const imageFingerprint = createMediaFingerprint({
+      buffer: Buffer.from("image-cache-clear"),
+      mime: "image/png",
+    });
+    const videoFingerprint = createMediaFingerprint({
+      buffer: Buffer.from("video-cache-clear"),
+      mime: "video/mp4",
+    });
+
+    await writeCachedImageUnderstanding({
+      stateDir: tempDir,
+      fingerprint: imageFingerprint,
+      mime: "image/png",
+      result: {
+        summary: "图像缓存",
+        tags: [],
+        ocrText: "",
+        content: "图像缓存",
+        keyRegions: [],
+        targetDetail: undefined,
+        focusMode: "overview",
+        focusTarget: undefined,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        mimeType: "image/png",
+        sourcePath: "/tmp/image.png",
+      },
+    });
+    await writeCachedVideoUnderstanding({
+      stateDir: tempDir,
+      fingerprint: videoFingerprint,
+      mime: "video/mp4",
+      result: {
+        summary: "视频缓存",
+        tags: [],
+        ocrText: "",
+        content: "视频缓存",
+        durationText: undefined,
+        timeline: [],
+        targetMoment: undefined,
+        focusMode: "overview",
+        targetTimestamp: undefined,
+        provider: "openai",
+        model: "kimi-k2.5",
+        mimeType: "video/mp4",
+        sourcePath: "/tmp/video.mp4",
+      },
+    });
+
+    const cleared = await clearMediaUnderstandingCache({
+      stateDir: tempDir,
+      kinds: ["video-understanding"],
+    });
+
+    expect(cleared.clearedKinds).toEqual(["video-understanding"]);
+    expect(await readCachedImageUnderstanding({
+      stateDir: tempDir,
+      fingerprint: imageFingerprint,
+    })).toBeTruthy();
+    expect(await readCachedVideoUnderstanding({
+      stateDir: tempDir,
+      fingerprint: videoFingerprint,
+    })).toBeUndefined();
   });
 });

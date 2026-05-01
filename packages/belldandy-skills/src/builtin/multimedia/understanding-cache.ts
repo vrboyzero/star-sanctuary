@@ -10,6 +10,11 @@ const AUDIO_TRANSCRIPTION_CACHE_VERSION = 1;
 const IMAGE_UNDERSTANDING_CACHE_VERSION = 1;
 const VIDEO_UNDERSTANDING_CACHE_VERSION = 1;
 
+export type MediaUnderstandingCacheKind =
+  | "audio-transcription"
+  | "image-understanding"
+  | "video-understanding";
+
 export type CachedAudioTranscriptionRecord = {
   version: number;
   fingerprint: string;
@@ -34,19 +39,23 @@ export type CachedVideoUnderstandingRecord = {
   result: VideoUnderstandResult;
 };
 
-function getMediaUnderstandingCacheDir(
+export function resolveMediaUnderstandingCacheRoot(stateDir: string): string {
+  return path.join(stateDir, "storage", "attachment-understanding-cache");
+}
+
+export function resolveMediaUnderstandingCacheDir(
   stateDir: string,
-  kind: "audio-transcription" | "image-understanding" | "video-understanding",
+  kind: MediaUnderstandingCacheKind,
 ): string {
-  return path.join(stateDir, "storage", "attachment-understanding-cache", kind);
+  return path.join(resolveMediaUnderstandingCacheRoot(stateDir), kind);
 }
 
 function getMediaUnderstandingCachePath(
   stateDir: string,
-  kind: "audio-transcription" | "image-understanding" | "video-understanding",
+  kind: MediaUnderstandingCacheKind,
   fingerprint: string,
 ): string {
-  return path.join(getMediaUnderstandingCacheDir(stateDir, kind), `${fingerprint}.json`);
+  return path.join(resolveMediaUnderstandingCacheDir(stateDir, kind), `${fingerprint}.json`);
 }
 
 export function createMediaFingerprint(input: {
@@ -98,7 +107,7 @@ export async function writeCachedAudioTranscription(input: {
   mime?: string;
   result: TranscribeResult;
 }): Promise<void> {
-  const dir = getMediaUnderstandingCacheDir(input.stateDir, "audio-transcription");
+  const dir = resolveMediaUnderstandingCacheDir(input.stateDir, "audio-transcription");
   await fs.mkdir(dir, { recursive: true });
   const record: CachedAudioTranscriptionRecord = {
     version: AUDIO_TRANSCRIPTION_CACHE_VERSION,
@@ -141,7 +150,7 @@ export async function writeCachedImageUnderstanding(input: {
   mime?: string;
   result: ImageUnderstandResult;
 }): Promise<void> {
-  const dir = getMediaUnderstandingCacheDir(input.stateDir, "image-understanding");
+  const dir = resolveMediaUnderstandingCacheDir(input.stateDir, "image-understanding");
   await fs.mkdir(dir, { recursive: true });
   const record: CachedImageUnderstandingRecord = {
     version: IMAGE_UNDERSTANDING_CACHE_VERSION,
@@ -184,7 +193,7 @@ export async function writeCachedVideoUnderstanding(input: {
   mime?: string;
   result: VideoUnderstandResult;
 }): Promise<void> {
-  const dir = getMediaUnderstandingCacheDir(input.stateDir, "video-understanding");
+  const dir = resolveMediaUnderstandingCacheDir(input.stateDir, "video-understanding");
   await fs.mkdir(dir, { recursive: true });
   const record: CachedVideoUnderstandingRecord = {
     version: VIDEO_UNDERSTANDING_CACHE_VERSION,
@@ -198,4 +207,32 @@ export async function writeCachedVideoUnderstanding(input: {
     JSON.stringify(record, null, 2),
     "utf-8",
   );
+}
+
+export async function clearMediaUnderstandingCache(input: {
+  stateDir: string;
+  kinds?: readonly MediaUnderstandingCacheKind[];
+}): Promise<{
+  rootDir: string;
+  clearedKinds: MediaUnderstandingCacheKind[];
+}> {
+  const allKinds: MediaUnderstandingCacheKind[] = [
+    "audio-transcription",
+    "image-understanding",
+    "video-understanding",
+  ];
+  const clearedKinds = (input.kinds?.length ? [...input.kinds] : allKinds)
+    .filter((kind, index, list) => list.indexOf(kind) === index);
+
+  for (const kind of clearedKinds) {
+    await fs.rm(resolveMediaUnderstandingCacheDir(input.stateDir, kind), {
+      recursive: true,
+      force: true,
+    });
+  }
+
+  return {
+    rootDir: resolveMediaUnderstandingCacheRoot(input.stateDir),
+    clearedKinds,
+  };
 }

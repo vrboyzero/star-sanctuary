@@ -155,6 +155,7 @@ export type { BridgeSessionRecord } from "./builtin/agent-bridge/index.js";
 export { codeInterpreterTool } from "./builtin/code-interpreter/index.js";
 export { ptcRuntimeTool } from "./builtin/ptc-runtime/index.js";
 export {
+  multimediaCacheClearTool,
   imageGenerateTool,
   imageUnderstandTool,
   videoUnderstandTool,
@@ -171,8 +172,11 @@ export {
   understandVideoFile,
   createMediaFingerprint,
   createMediaFingerprintFromFile,
+  clearMediaUnderstandingCache,
   readCachedAudioTranscription,
   readCachedImageUnderstanding,
+  resolveMediaUnderstandingCacheDir,
+  resolveMediaUnderstandingCacheRoot,
   writeCachedImageUnderstanding,
   writeCachedAudioTranscription,
   readCachedVideoUnderstanding,
@@ -186,6 +190,7 @@ export type {
   ImageUnderstandConfig,
   ImageUnderstandOptions,
   ImageUnderstandResult,
+  MediaUnderstandingCacheKind,
   VideoUnderstandConfig,
   VideoUnderstandOptions,
   VideoUnderstandResult,

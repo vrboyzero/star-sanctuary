@@ -339,7 +339,11 @@ function createSettingsRefs(overrides = {}) {
     cfgVideoUnderstandBaseUrl: overrides.cfgVideoUnderstandBaseUrl || createInput(""),
     cfgVideoUnderstandModel: overrides.cfgVideoUnderstandModel || createInput(""),
     cfgVideoUnderstandTimeoutMs: overrides.cfgVideoUnderstandTimeoutMs || createInput(""),
+    cfgVideoUnderstandTransport: overrides.cfgVideoUnderstandTransport || createInput("auto"),
+    cfgVideoUnderstandFps: overrides.cfgVideoUnderstandFps || createInput(""),
     cfgVideoUnderstandAutoOnAttachment: overrides.cfgVideoUnderstandAutoOnAttachment || createCheckbox(true),
+    cfgVideoUnderstandAutoAttachmentMaxTimelineItems: overrides.cfgVideoUnderstandAutoAttachmentMaxTimelineItems || createInput(""),
+    cfgVideoUnderstandAutoAttachmentSummaryCharLimit: overrides.cfgVideoUnderstandAutoAttachmentSummaryCharLimit || createInput(""),
     cfgSttProvider: overrides.cfgSttProvider || createInput(""),
     cfgSttModel: overrides.cfgSttModel || createInput(""),
     cfgSttOpenAiBaseUrl: overrides.cfgSttOpenAiBaseUrl || createInput(""),
@@ -1302,6 +1306,8 @@ describe("settings controller", () => {
       BELLDANDY_MEMORY_SUMMARY_API_KEY: "aliyun-unified-key",
       BELLDANDY_EMBEDDING_OPENAI_API_KEY: "aliyun-unified-key",
       BELLDANDY_TASK_SUMMARY_API_KEY: "aliyun-unified-key",
+      BELLDANDY_IMAGE_UNDERSTAND_OPENAI_API_KEY: "aliyun-unified-key",
+      BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY: "aliyun-unified-key",
       BELLDANDY_ASSISTANT_MODE_ENABLED: "true",
       BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION: "true",
       BELLDANDY_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE: "community,discord",
@@ -1530,7 +1536,11 @@ describe("settings controller", () => {
       BELLDANDY_VIDEO_UNDERSTAND_OPENAI_BASE_URL: "https://video.example.com/v1",
       BELLDANDY_VIDEO_UNDERSTAND_MODEL: "kimi-k2.5",
       BELLDANDY_VIDEO_UNDERSTAND_TIMEOUT_MS: "90000",
+      BELLDANDY_VIDEO_UNDERSTAND_TRANSPORT: "inline_data_url",
+      BELLDANDY_VIDEO_UNDERSTAND_FPS: "3",
       BELLDANDY_VIDEO_UNDERSTAND_AUTO_ON_ATTACHMENT: "true",
+      BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_MAX_TIMELINE_ITEMS: "7",
+      BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_SUMMARY_CHAR_LIMIT: "1200",
       BELLDANDY_STT_PROVIDER: "groq",
       BELLDANDY_STT_MODEL: "whisper-large-v3-turbo",
       BELLDANDY_STT_LANGUAGE: "zh",
@@ -1570,7 +1580,11 @@ describe("settings controller", () => {
     expect(refs.cfgVideoUnderstandBaseUrl.value).toBe("https://video.example.com/v1");
     expect(refs.cfgVideoUnderstandModel.value).toBe("kimi-k2.5");
     expect(refs.cfgVideoUnderstandTimeoutMs.value).toBe("90000");
+    expect(refs.cfgVideoUnderstandTransport.value).toBe("inline_data_url");
+    expect(refs.cfgVideoUnderstandFps.value).toBe("3");
     expect(refs.cfgVideoUnderstandAutoOnAttachment.checked).toBe(true);
+    expect(refs.cfgVideoUnderstandAutoAttachmentMaxTimelineItems.value).toBe("7");
+    expect(refs.cfgVideoUnderstandAutoAttachmentSummaryCharLimit.value).toBe("1200");
     expect(refs.cfgSttProvider.value).toBe("groq");
     expect(refs.cfgSttModel.value).toBe("whisper-large-v3-turbo");
     expect(refs.cfgSttOpenAiApiKey.value).toBe("[REDACTED]");
@@ -1630,7 +1644,11 @@ describe("settings controller", () => {
       cfgVideoUnderstandBaseUrl: createInput(" https://video.example.com/v1 "),
       cfgVideoUnderstandModel: createInput(" kimi-k2.5 "),
       cfgVideoUnderstandTimeoutMs: createInput("90000"),
+      cfgVideoUnderstandTransport: createInput(" inline_data_url "),
+      cfgVideoUnderstandFps: createInput(" 3 "),
       cfgVideoUnderstandAutoOnAttachment: createCheckbox(true),
+      cfgVideoUnderstandAutoAttachmentMaxTimelineItems: createInput(" 7 "),
+      cfgVideoUnderstandAutoAttachmentSummaryCharLimit: createInput(" 1200 "),
       cfgSttProvider: createInput(" groq "),
       cfgSttModel: createInput(" whisper-large-v3-turbo "),
       cfgSttOpenAiApiKey: createInput("stt-openai-secret"),
@@ -1710,7 +1728,11 @@ describe("settings controller", () => {
       BELLDANDY_VIDEO_UNDERSTAND_OPENAI_BASE_URL: "https://video.example.com/v1",
       BELLDANDY_VIDEO_UNDERSTAND_MODEL: "kimi-k2.5",
       BELLDANDY_VIDEO_UNDERSTAND_TIMEOUT_MS: "90000",
+      BELLDANDY_VIDEO_UNDERSTAND_TRANSPORT: "inline_data_url",
+      BELLDANDY_VIDEO_UNDERSTAND_FPS: "3",
       BELLDANDY_VIDEO_UNDERSTAND_AUTO_ON_ATTACHMENT: "true",
+      BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_MAX_TIMELINE_ITEMS: "7",
+      BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_SUMMARY_CHAR_LIMIT: "1200",
       BELLDANDY_STT_PROVIDER: "groq",
       BELLDANDY_STT_MODEL: "whisper-large-v3-turbo",
       BELLDANDY_STT_OPENAI_API_KEY: "stt-openai-secret",

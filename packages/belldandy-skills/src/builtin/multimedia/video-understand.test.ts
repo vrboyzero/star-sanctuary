@@ -46,6 +46,16 @@ function createContext(workspaceRoot: string): ToolContext {
   };
 }
 
+function createLogger() {
+  return {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    trace: vi.fn(),
+  };
+}
+
 describe("video_understand", () => {
   let tempDir: string;
 
@@ -63,6 +73,8 @@ describe("video_understand", () => {
     delete process.env.BELLDANDY_VIDEO_UNDERSTAND_TIMEOUT_MS;
     delete process.env.BELLDANDY_VIDEO_UNDERSTAND_PROMPT;
     delete process.env.BELLDANDY_VIDEO_UNDERSTAND_MAX_INPUT_MB;
+    delete process.env.BELLDANDY_VIDEO_UNDERSTAND_TRANSPORT;
+    delete process.env.BELLDANDY_VIDEO_UNDERSTAND_FPS;
     delete process.env.BELLDANDY_VIDEO_FILE_API_URL;
     delete process.env.BELLDANDY_VIDEO_FILE_API_KEY;
   });
@@ -124,9 +136,11 @@ describe("video_understand", () => {
       ],
     });
 
+    const context = createContext(tempDir);
+    context.logger = createLogger();
     const result = await videoUnderstandTool.execute({
       file_path: "clip.mp4",
-    }, createContext(tempDir));
+    }, context);
 
     expect(result.success).toBe(true);
     expect(JSON.parse(String(result.output))).toMatchObject({
@@ -145,6 +159,9 @@ describe("video_understand", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(chatCreateMock).toHaveBeenCalledTimes(1);
+    expect(context.logger?.info).toHaveBeenCalledWith(
+      "video_understand completed via native_video (model=kimi-k2.5, timelineItems=2)",
+    );
     expect(chatCreateMock.mock.calls[0]?.[0]).toMatchObject({
       model: "kimi-k2.5",
       messages: expect.arrayContaining([
@@ -159,6 +176,90 @@ describe("video_understand", () => {
         }),
       ]),
     });
+  });
+
+  it("uses inline data url transport automatically for DashScope compatible-mode", async () => {
+    process.env.BELLDANDY_VIDEO_UNDERSTAND_ENABLED = "true";
+    process.env.BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY = "sk-video";
+    process.env.BELLDANDY_VIDEO_UNDERSTAND_OPENAI_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+    process.env.BELLDANDY_VIDEO_UNDERSTAND_MODEL = "qwen3.6-flash";
+    process.env.BELLDANDY_VIDEO_UNDERSTAND_FPS = "3";
+    const videoPath = path.join(tempDir, "clip.mp4");
+    await fs.writeFile(videoPath, Buffer.from("fake-video-inline"));
+    const fetchMock = vi.mocked(fetch);
+    chatCreateMock.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              summary: "视频展示了界面演示。",
+              tags: ["demo"],
+              content: "视频展示了界面演示。",
+              timeline: [],
+              targetMoment: null,
+            }),
+          },
+        },
+      ],
+    });
+
+    const result = await videoUnderstandTool.execute({
+      file_path: "clip.mp4",
+    }, createContext(tempDir));
+
+    expect(result.success).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(chatCreateMock).toHaveBeenCalledTimes(1);
+    const videoPart = chatCreateMock.mock.calls[0]?.[0]?.messages?.[1]?.content?.[1];
+    expect(videoPart?.type).toBe("video_url");
+    expect(videoPart?.video_url?.url).toMatch(/^data:video\/mp4;base64,/);
+    expect(videoPart?.video_url?.fps).toBe(3);
+    expect(JSON.parse(String(result.output))).toMatchObject({
+      model: "qwen3.6-flash",
+      provider: "openai",
+      analysisMode: "native_video",
+    });
+  });
+
+  it("treats max_timeline_items=0 as no explicit limit", async () => {
+    process.env.BELLDANDY_VIDEO_UNDERSTAND_ENABLED = "true";
+    process.env.BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY = "sk-video";
+    process.env.BELLDANDY_VIDEO_UNDERSTAND_OPENAI_BASE_URL = "https://video.example.com/v1";
+    process.env.BELLDANDY_VIDEO_UNDERSTAND_MODEL = "kimi-k2.5";
+    const videoPath = path.join(tempDir, "clip.mp4");
+    await fs.writeFile(videoPath, Buffer.from("fake-video"));
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "file-video-123" }),
+    } as Response);
+    chatCreateMock.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              summary: "视频展示了完整流程。",
+              tags: ["demo"],
+              content: "视频展示了完整流程。",
+              timeline: [],
+              targetMoment: null,
+            }),
+          },
+        },
+      ],
+    });
+
+    const result = await videoUnderstandTool.execute({
+      file_path: "clip.mp4",
+      max_timeline_items: 0,
+    }, createContext(tempDir));
+
+    expect(result.success).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const promptText = chatCreateMock.mock.calls[0]?.[0]?.messages?.[1]?.content?.[0]?.text;
+    expect(promptText).toContain("不要因为固定上限而省略重要片段");
+    expect(promptText).toContain("不要只给 5 条示例");
+    expect(promptText).not.toContain("最多返回");
   });
 
   it("rejects paths outside the workspace or state dir", async () => {
@@ -266,19 +367,34 @@ describe("video_understand", () => {
       targetMoment: undefined,
       provider: "frame_fallback",
       model: "gpt-4.1-mini",
+      nativeErrorMessage: "Upload failed: 415 unsupported media",
     });
 
+    const context = createContext(tempDir);
+    context.logger = createLogger();
     const result = await videoUnderstandTool.execute({
       file_path: "clip.mp4",
-    }, createContext(tempDir));
+      max_timeline_items: 0,
+    }, context);
 
     expect(result.success).toBe(true);
     expect(understandVideoFileByFrameSamplingMock).toHaveBeenCalledTimes(1);
+    expect(understandVideoFileByFrameSamplingMock).toHaveBeenCalledWith(expect.objectContaining({
+      maxTimelineItems: undefined,
+      nativeErrorMessage: "Upload failed: 415 unsupported media",
+    }));
+    expect(context.logger?.warn).toHaveBeenCalledWith(
+      "video_understand native path failed; falling back to frame sampling: Upload failed: 415 unsupported media",
+    );
+    expect(context.logger?.info).toHaveBeenCalledWith(
+      "video_understand completed via frame_sampling_fallback (model=gpt-4.1-mini, timelineItems=1)",
+    );
     expect(JSON.parse(String(result.output))).toMatchObject({
       summary: "基于抽帧识别，视频大致展示了产品演示过程。",
       provider: "frame_fallback",
       model: "gpt-4.1-mini",
       analysisMode: "frame_sampling_fallback",
+      nativeErrorMessage: "Upload failed: 415 unsupported media",
       timeline: [
         { timestamp: "00:02", summary: "镜头展示产品外观。" },
       ],

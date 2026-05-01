@@ -21,6 +21,13 @@ export function createAttachmentFingerprint(input: {
   return createMediaFingerprint(input);
 }
 
+export {
+  clearMediaUnderstandingCache,
+  resolveMediaUnderstandingCacheDir,
+  resolveMediaUnderstandingCacheRoot,
+} from "@belldandy/skills";
+export type { MediaUnderstandingCacheKind } from "@belldandy/skills";
+
 export async function readCachedAudioTranscription(input: {
   stateDir: string;
   fingerprint: string;

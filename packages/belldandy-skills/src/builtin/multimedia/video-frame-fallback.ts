@@ -11,7 +11,7 @@ import {
 
 const DEFAULT_FFMPEG_COMMAND = "ffmpeg";
 const DEFAULT_FFPROBE_COMMAND = "ffprobe";
-const DEFAULT_SAMPLE_COUNT = 5;
+const MAX_UNLIMITED_SAMPLE_COUNT = 12;
 const COMMAND_TIMEOUT_MS = 30_000;
 
 type CommandResult = {
@@ -58,6 +58,7 @@ export type VideoFrameFallbackResult = {
   targetMoment?: VideoFrameFallbackTargetMoment;
   provider: string;
   model: string;
+  nativeErrorMessage?: string;
 };
 
 type VideoFrameSample = {
@@ -73,7 +74,7 @@ type UnderstandVideoByFramesInput = {
   focusMode: "overview" | "timeline" | "timestamp_query";
   targetTimestamp?: string;
   includeTimeline: boolean;
-  maxTimelineItems: number;
+  maxTimelineItems?: number;
   abortSignal?: AbortSignal;
   nativeErrorMessage?: string;
 };
@@ -265,7 +266,7 @@ function buildSampleTimestamps(input: {
   durationSec?: number;
   focusMode: "overview" | "timeline" | "timestamp_query";
   targetTimestamp?: string;
-  maxTimelineItems: number;
+  maxTimelineItems?: number;
 }): number[] {
   const requestedTarget = parseTimestampToSeconds(input.targetTimestamp);
   if (input.focusMode === "timestamp_query") {
@@ -277,7 +278,9 @@ function buildSampleTimestamps(input: {
     ])).sort((a, b) => a - b);
   }
 
-  const frameCount = Math.max(2, Math.min(8, input.maxTimelineItems || DEFAULT_SAMPLE_COUNT));
+  const frameCount = typeof input.maxTimelineItems === "number" && Number.isFinite(input.maxTimelineItems) && input.maxTimelineItems > 0
+    ? Math.max(2, Math.min(MAX_UNLIMITED_SAMPLE_COUNT, Math.trunc(input.maxTimelineItems)))
+    : MAX_UNLIMITED_SAMPLE_COUNT;
   if (!Number.isFinite(input.durationSec) || input.durationSec === undefined || input.durationSec <= 1) {
     return Array.from({ length: frameCount }, (_, index) => index * 2);
   }
@@ -426,8 +429,11 @@ export async function understandVideoFileByFrameSampling(
 
     const tags = dedupeStrings(samples.flatMap((sample) => sample.result.tags), 16);
     const ocrLines = dedupeStrings(samples.map((sample) => sample.result.ocrText), 8);
+    const timelineSamples = typeof input.maxTimelineItems === "number" && Number.isFinite(input.maxTimelineItems) && input.maxTimelineItems > 0
+      ? samples.slice(0, Math.max(1, Math.min(Math.trunc(input.maxTimelineItems), samples.length)))
+      : samples;
     const timeline = input.includeTimeline
-      ? samples.slice(0, Math.max(1, Math.min(input.maxTimelineItems, samples.length))).map<VideoFrameFallbackTimelineEntry>((sample) => ({
+      ? timelineSamples.map<VideoFrameFallbackTimelineEntry>((sample) => ({
         timestamp: sample.timestampText,
         summary: sample.result.summary,
         ocrText: sample.result.ocrText,
@@ -452,6 +458,7 @@ export async function understandVideoFileByFrameSampling(
       targetMoment,
       provider: "frame_fallback",
       model: imageConfig.model,
+      nativeErrorMessage: input.nativeErrorMessage,
     };
   } finally {
     await rm(tempDir, { recursive: true, force: true }).catch(() => {});

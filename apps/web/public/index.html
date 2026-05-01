@@ -601,6 +601,7 @@
         <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
           <span data-i18n="settings.title">设置</span>
           <a id="recommendApiLink" href="#" target="_blank" class="theme-link theme-link-muted" data-i18n="settings.recommendApi">推荐模型API</a>
+          <a id="aliyunOneKeyLink" href="#" target="_blank" class="theme-link theme-link-muted" data-i18n="settings.aliyunOneKey">阿里一KEY通道</a>
         </div>
         <button id="closeSettings" class="settings-btn">✕</button>
       </div>
@@ -1765,11 +1766,35 @@
             <div class="form-help" data-i18n="settings.videoUnderstandTimeoutMsHelp">视频识别超时。Request timeout for video understanding.</div>
           </div>
           <div class="form-group">
+            <label class="form-label" for="cfgVideoUnderstandTransport" data-i18n="settings.videoUnderstandTransportLabel">Video Understand Transport</label>
+            <select id="cfgVideoUnderstandTransport" class="input">
+              <option value="auto" data-i18n="settings.videoUnderstandTransportAuto">Auto</option>
+              <option value="openai_files" data-i18n="settings.videoUnderstandTransportOpenAiFiles">OpenAI Files Upload</option>
+              <option value="inline_data_url" data-i18n="settings.videoUnderstandTransportInlineDataUrl">Inline Data URL</option>
+            </select>
+            <div class="form-help" data-i18n="settings.videoUnderstandTransportHelp">自动按接口选择视频传法；DashScope compatible-mode 默认走内联 data URL。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgVideoUnderstandFps" data-i18n="settings.videoUnderstandFpsLabel">Video Understand FPS</label>
+            <input id="cfgVideoUnderstandFps" class="input" placeholder="2.0 / 3 / 4" />
+            <div class="form-help" data-i18n="settings.videoUnderstandFpsHelp">原生视频理解抽帧密度；留空使用服务端默认值，DashScope 文档默认 2.0。数值越大抽帧越密，成本通常也越高。</div>
+          </div>
+          <div class="form-group">
             <label class="form-label" for="cfgVideoUnderstandAutoOnAttachment">
               <input id="cfgVideoUnderstandAutoOnAttachment" type="checkbox" style="margin-right: 8px;" />
               <span data-i18n="settings.videoUnderstandAutoOnAttachmentLabel">视频附件自动识别</span>
             </label>
             <div class="form-help" data-i18n="settings.videoUnderstandAutoOnAttachmentHelp">上传视频附件后自动识别；文件上传地址优先复用 Video File API。Auto-read uploaded video attachments; upload falls back to Video File API settings.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgVideoUnderstandAutoAttachmentMaxTimelineItems" data-i18n="settings.videoUnderstandAutoAttachmentMaxTimelineItemsLabel">Auto Video Timeline Items</label>
+            <input id="cfgVideoUnderstandAutoAttachmentMaxTimelineItems" class="input" placeholder="5" />
+            <div class="form-help" data-i18n="settings.videoUnderstandAutoAttachmentMaxTimelineItemsHelp">自动附件识别注入的时间线条数；填 0 表示不限制。Timeline items injected for automatic video attachment understanding; use 0 for no explicit limit.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgVideoUnderstandAutoAttachmentSummaryCharLimit" data-i18n="settings.videoUnderstandAutoAttachmentSummaryCharLimitLabel">Auto Video Summary Char Limit</label>
+            <input id="cfgVideoUnderstandAutoAttachmentSummaryCharLimit" class="input" placeholder="640" />
+            <div class="form-help" data-i18n="settings.videoUnderstandAutoAttachmentSummaryCharLimitHelp">自动附件识别摘要长度；填 0 表示不截断。Summary char limit for automatic video attachment understanding; use 0 for no truncation.</div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgSttProvider" data-i18n="settings.sttProviderLabel">STT Provider</label>

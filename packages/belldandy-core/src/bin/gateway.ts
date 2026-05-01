@@ -144,10 +144,12 @@ import {
   cameraSnapTool,
   screenListTargetsTool,
   screenCaptureTool,
+  multimediaCacheClearTool,
   imageGenerateTool,
   imageUnderstandTool,
   videoUnderstandTool,
   textToSpeechTool,
+  clearMediaUnderstandingCache,
   synthesizeSpeech,
   transcribeSpeech,
   runCommandTool,
@@ -457,6 +459,8 @@ if (ensuredDefaultEnvFiles.createdEnv) {
 if (ensuredDefaultEnvFiles.createdEnvLocal) {
   logger.info("gateway", `Generated default .env.local at ${ensuredDefaultEnvFiles.envLocalPath}`);
 }
+const clearedMultimediaCache = await clearMediaUnderstandingCache({ stateDir });
+logger.info("gateway", "Cleared multimedia understanding cache on startup", clearedMultimediaCache);
 
 const toolsPolicyFile = readEnv("BELLDANDY_TOOLS_POLICY_FILE");
 const toolsPolicyFromFile = toolsPolicyFile ? loadToolsPolicy(toolsPolicyFile, logger) : undefined;
@@ -904,6 +908,7 @@ const gatewayToolPoolAssembler = new ToolPoolAssembler([
       cameraSnapTool,
       screenListTargetsTool,
       screenCaptureTool,
+      multimediaCacheClearTool,
       imageGenerateTool,
       imageUnderstandTool,
       videoUnderstandTool,

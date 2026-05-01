@@ -101,4 +101,55 @@ describe("video-frame-fallback", () => {
     expect(result.content).toContain("已切换到视频抽帧兜底识别。");
     expect(result.content).toContain("原生视频识别失败原因：Upload failed: 415 unsupported media");
   });
+
+  it("treats maxTimelineItems=0 as unlimited within the fallback sampling envelope", async () => {
+    const videoPath = path.join(tempDir, "clip.mp4");
+    await fs.writeFile(videoPath, Buffer.from("fake-video"));
+
+    const runCommand = vi.fn(async (input: { command: string; args: string[] }) => {
+      if (input.command.includes("ffprobe")) {
+        return {
+          exitCode: 0,
+          stdout: "24.0\n",
+          stderr: "",
+        };
+      }
+      const outputPath = input.args[input.args.length - 1];
+      await fs.writeFile(outputPath, Buffer.from(`frame:${path.basename(outputPath)}`));
+      return {
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+      };
+    });
+    const understandFrame = vi.fn(async (input: { timestampText: string }) => ({
+      summary: `${input.timestampText} 的画面`,
+      tags: ["demo"],
+      ocrText: undefined,
+      content: `${input.timestampText} 的画面`,
+      keyRegions: [],
+      focusMode: "timeline" as const,
+      focusTarget: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      mimeType: "image/jpeg",
+      sourcePath: path.join(tempDir, `${input.timestampText}.jpg`),
+    }));
+
+    const result = await understandVideoFileByFrameSampling({
+      filePath: videoPath,
+      mimeType: "video/mp4",
+      focusMode: "timeline",
+      includeTimeline: true,
+      maxTimelineItems: 0,
+      nativeErrorMessage: "native failed",
+    }, {
+      runCommand,
+      understandFrame,
+    });
+
+    expect(understandFrame).toHaveBeenCalledTimes(12);
+    expect(result.timeline).toHaveLength(12);
+    expect(result.nativeErrorMessage).toBe("native failed");
+  });
 });

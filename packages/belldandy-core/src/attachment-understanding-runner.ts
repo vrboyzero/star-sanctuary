@@ -47,6 +47,11 @@ type NormalizedAttachment = {
   fingerprint: string;
 };
 
+type AutomaticVideoAttachmentRenderConfig = {
+  summaryCharLimit?: number;
+  timelineItemsLimit: number;
+};
+
 export type PreparedAttachmentPrompt = {
   promptText: string;
   contentParts: Array<Record<string, unknown>>;
@@ -380,6 +385,13 @@ async function maybeUnderstandImageAttachment(input: {
       fingerprint: input.fingerprint,
     });
     if (cached?.result) {
+      input.log.info("message", "Image attachment auto understanding completed", {
+        name: input.attachment.name,
+        mime: input.attachment.type,
+        cacheHit: true,
+        provider: cached.result.provider,
+        model: cached.result.model,
+      });
       return {
         result: cached.result,
         cacheHit: true,
@@ -395,6 +407,13 @@ async function maybeUnderstandImageAttachment(input: {
       fingerprint: input.fingerprint,
       mime: input.attachment.type,
       result,
+    });
+    input.log.info("message", "Image attachment auto understanding completed", {
+      name: input.attachment.name,
+      mime: input.attachment.type,
+      cacheHit: false,
+      provider: result.provider,
+      model: result.model,
     });
     return {
       result,
@@ -425,6 +444,7 @@ function renderImageUnderstandingText(result: ImageUnderstandResult): string {
 }
 
 function truncateInlineText(value: string, limit: number): string {
+  if (limit <= 0) return value;
   if (value.length <= limit) return value;
   return `${value.slice(0, Math.max(0, limit - 1))}…`;
 }
@@ -496,6 +516,7 @@ async function maybeUnderstandVideoAttachment(input: {
   log: QueryRuntimeLogger;
 }): Promise<{ result: VideoUnderstandResult; cacheHit: boolean } | undefined> {
   const config = readVideoUnderstandConfig();
+  const renderConfig = readAutomaticVideoAttachmentRenderConfig();
   if (!config.enabled || !config.autoOnAttachment) {
     return undefined;
   }
@@ -506,6 +527,71 @@ async function maybeUnderstandVideoAttachment(input: {
       fingerprint: input.fingerprint,
     });
     if (cached?.result) {
+      if (shouldRefreshLegacyFallbackVideoCache(cached.result, config)) {
+        input.log.info("message", "Refreshing legacy frame fallback video cache because native video is now available", {
+          name: input.attachment.name,
+          mime: input.attachment.type,
+          provider: cached.result.provider,
+          model: cached.result.model,
+          analysisMode: cached.result.analysisMode ?? "native_video",
+        });
+        try {
+          const refreshed = await understandVideoFile({
+            filePath: input.savePath,
+            mimeType: input.attachment.type,
+            focusMode: renderConfig.timelineItemsLimit === 0 ? "timeline" : undefined,
+            maxTimelineItems: renderConfig.timelineItemsLimit,
+          });
+          if (refreshed.analysisMode === "frame_sampling_fallback" && refreshed.nativeErrorMessage) {
+            input.log.warn("message", "Video attachment native understanding fell back to frame sampling", {
+              name: input.attachment.name,
+              mime: input.attachment.type,
+              error: refreshed.nativeErrorMessage,
+            });
+          }
+          await writeCachedVideoUnderstanding({
+            stateDir: input.stateDir,
+            fingerprint: input.fingerprint,
+            mime: input.attachment.type,
+            result: refreshed,
+          });
+          input.log.info("message", "Video attachment auto understanding completed", {
+            name: input.attachment.name,
+            mime: input.attachment.type,
+            cacheHit: false,
+            provider: refreshed.provider,
+            model: refreshed.model,
+            analysisMode: refreshed.analysisMode ?? "native_video",
+            timelineItems: refreshed.timeline.length,
+            ...(refreshed.analysisMode === "frame_sampling_fallback" && refreshed.nativeErrorMessage
+              ? { nativeErrorMessage: refreshed.nativeErrorMessage }
+              : {}),
+          });
+          return {
+            result: refreshed,
+            cacheHit: false,
+          };
+        } catch (refreshError) {
+          input.log.warn("message", "Refreshing legacy frame fallback video cache failed; reusing cached fallback result", {
+            name: input.attachment.name,
+            mime: input.attachment.type,
+            error: refreshError instanceof Error ? refreshError.message : String(refreshError),
+          });
+        }
+      }
+
+      input.log.info("message", "Video attachment auto understanding completed", {
+        name: input.attachment.name,
+        mime: input.attachment.type,
+        cacheHit: true,
+        provider: cached.result.provider,
+        model: cached.result.model,
+        analysisMode: cached.result.analysisMode ?? "native_video",
+        timelineItems: Array.isArray(cached.result.timeline) ? cached.result.timeline.length : 0,
+        ...(cached.result.analysisMode === "frame_sampling_fallback" && cached.result.nativeErrorMessage
+          ? { nativeErrorMessage: cached.result.nativeErrorMessage }
+          : {}),
+      });
       return {
         result: cached.result,
         cacheHit: true,
@@ -515,12 +601,33 @@ async function maybeUnderstandVideoAttachment(input: {
     const result = await understandVideoFile({
       filePath: input.savePath,
       mimeType: input.attachment.type,
+      focusMode: renderConfig.timelineItemsLimit === 0 ? "timeline" : undefined,
+      maxTimelineItems: renderConfig.timelineItemsLimit,
     });
+    if (result.analysisMode === "frame_sampling_fallback" && result.nativeErrorMessage) {
+      input.log.warn("message", "Video attachment native understanding fell back to frame sampling", {
+        name: input.attachment.name,
+        mime: input.attachment.type,
+        error: result.nativeErrorMessage,
+      });
+    }
     await writeCachedVideoUnderstanding({
       stateDir: input.stateDir,
       fingerprint: input.fingerprint,
       mime: input.attachment.type,
       result,
+    });
+    input.log.info("message", "Video attachment auto understanding completed", {
+      name: input.attachment.name,
+      mime: input.attachment.type,
+      cacheHit: false,
+      provider: result.provider,
+      model: result.model,
+      analysisMode: result.analysisMode ?? "native_video",
+      timelineItems: result.timeline.length,
+      ...(result.analysisMode === "frame_sampling_fallback" && result.nativeErrorMessage
+        ? { nativeErrorMessage: result.nativeErrorMessage }
+        : {}),
     });
     return {
       result,
@@ -536,18 +643,64 @@ async function maybeUnderstandVideoAttachment(input: {
   }
 }
 
-function renderVideoUnderstandingText(result: VideoUnderstandResult): string {
-  const lines = [`[视频识别摘要: ${truncateInlineText(result.summary, 320)}]`];
+function renderVideoUnderstandingText(
+  result: VideoUnderstandResult,
+  config: AutomaticVideoAttachmentRenderConfig = readAutomaticVideoAttachmentRenderConfig(),
+): string {
+  const lines = [`[视频识别摘要: ${truncateInlineText(result.summary, config.summaryCharLimit ?? 0)}]`];
   if (result.tags.length > 0) {
     lines.push(`[视频标签: ${result.tags.slice(0, 8).join("，")}]`);
   }
   if (result.timeline.length > 0) {
-    lines.push(`[视频关键片段: ${result.timeline.slice(0, 3).map((item) => `${item.timestamp} ${truncateInlineText(item.summary, 48)}`).join("；")}]`);
+    const timelineItems = config.timelineItemsLimit > 0
+      ? result.timeline.slice(0, config.timelineItemsLimit)
+      : result.timeline;
+    lines.push(`[视频关键片段: ${timelineItems.map((item) => `${item.timestamp} ${truncateInlineText(item.summary, 48)}`).join("；")}]`);
   }
   if (result.ocrText) {
     lines.push(`[视频可见文字: ${truncateInlineText(result.ocrText, 800)}]`);
   }
   return lines.join("\n");
+}
+
+function readAutomaticVideoAttachmentRenderConfig(): AutomaticVideoAttachmentRenderConfig {
+  return {
+    summaryCharLimit: readAutoAttachmentSummaryCharLimit(),
+    timelineItemsLimit: readAutoAttachmentTimelineItemsLimit(),
+  };
+}
+
+function readAutoAttachmentSummaryCharLimit(): number | undefined {
+  const raw = process.env.BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_SUMMARY_CHAR_LIMIT;
+  if (typeof raw !== "string" || !raw.trim()) return 640;
+  const parsed = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return 640;
+  return parsed === 0 ? undefined : parsed;
+}
+
+function readAutoAttachmentTimelineItemsLimit(): number {
+  const raw = process.env.BELLDANDY_VIDEO_UNDERSTAND_AUTO_ATTACHMENT_MAX_TIMELINE_ITEMS;
+  if (typeof raw !== "string" || !raw.trim()) return 5;
+  const parsed = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return 5;
+  return parsed;
+}
+
+function shouldRefreshLegacyFallbackVideoCache(
+  cached: VideoUnderstandResult,
+  config: ReturnType<typeof readVideoUnderstandConfig>,
+): boolean {
+  return cached.analysisMode === "frame_sampling_fallback"
+    && isNativeVideoUnderstandingConfigured(config);
+}
+
+function isNativeVideoUnderstandingConfigured(
+  config: ReturnType<typeof readVideoUnderstandConfig>,
+): boolean {
+  return config.enabled
+    && config.provider === "openai"
+    && typeof config.apiKey === "string"
+    && config.apiKey.trim().length > 0;
 }
 
 function handleVideoAttachment(input: {

@@ -24,8 +24,10 @@ const DEFAULT_VIDEO_UNDERSTAND_MODEL = "kimi-k2.5";
 const DEFAULT_VIDEO_UNDERSTAND_PROMPT = "请准确概括这个视频的主要内容、动作过程、场景变化，并尽量识别画面中的可见文字。";
 const DEFAULT_MAX_INPUT_MB = 100;
 const DEFAULT_TIMELINE_ITEMS = 5;
+const DEFAULT_VIDEO_TRANSPORT = "auto";
 
 export type VideoUnderstandFocusMode = "overview" | "timeline" | "timestamp_query";
+export type VideoUnderstandTransport = "auto" | "openai_files" | "inline_data_url";
 
 export type VideoUnderstandConfig = {
   enabled: boolean;
@@ -37,6 +39,8 @@ export type VideoUnderstandConfig = {
   timeoutMs: number;
   prompt: string;
   maxInputBytes: number;
+  transport: VideoUnderstandTransport;
+  fps?: number;
   uploadApiKey: string;
   uploadBaseURL: string;
 };
@@ -81,6 +85,7 @@ export type VideoUnderstandResult = {
   model: string;
   mimeType: string;
   sourcePath: string;
+  nativeErrorMessage?: string;
 };
 
 type VideoUnderstandPayload = {
@@ -103,6 +108,19 @@ function readBoolEnv(name: string, fallback: boolean): boolean {
   return raw.trim().toLowerCase() !== "false";
 }
 
+function normalizeVideoTransport(value: unknown): VideoUnderstandTransport {
+  if (value === "openai_files" || value === "inline_data_url") return value;
+  return "auto";
+}
+
+function parseVideoFps(value: unknown): number | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) return undefined;
+  const parsed = Number.parseFloat(normalized);
+  if (!Number.isFinite(parsed) || parsed < 0.1 || parsed > 10) return undefined;
+  return parsed;
+}
+
 export function readVideoUnderstandConfig(): VideoUnderstandConfig {
   const maxInputMb = parsePositiveInt(process.env.BELLDANDY_VIDEO_UNDERSTAND_MAX_INPUT_MB, DEFAULT_MAX_INPUT_MB);
   const apiKey = normalizeOptionalString(process.env.BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY) ?? "";
@@ -117,6 +135,10 @@ export function readVideoUnderstandConfig(): VideoUnderstandConfig {
     timeoutMs: parseTimeoutMs(process.env.BELLDANDY_VIDEO_UNDERSTAND_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
     prompt: normalizeOptionalString(process.env.BELLDANDY_VIDEO_UNDERSTAND_PROMPT) ?? DEFAULT_VIDEO_UNDERSTAND_PROMPT,
     maxInputBytes: maxInputMb * 1024 * 1024,
+    transport: normalizeVideoTransport(
+      normalizeOptionalString(process.env.BELLDANDY_VIDEO_UNDERSTAND_TRANSPORT) ?? DEFAULT_VIDEO_TRANSPORT,
+    ),
+    fps: parseVideoFps(process.env.BELLDANDY_VIDEO_UNDERSTAND_FPS),
     uploadApiKey: normalizeOptionalString(process.env.BELLDANDY_VIDEO_FILE_API_KEY) ?? apiKey,
     uploadBaseURL: normalizeOptionalString(process.env.BELLDANDY_VIDEO_FILE_API_URL) ?? baseURL,
   };
@@ -172,7 +194,7 @@ function buildVideoUnderstandPrompt(input: {
   focusMode: VideoUnderstandFocusMode;
   targetTimestamp?: string;
   includeTimeline: boolean;
-  maxTimelineItems: number;
+  maxTimelineItems?: number;
 }): string {
   const focusLines: string[] = [];
   if (input.focusMode === "timestamp_query" && input.targetTimestamp) {
@@ -193,12 +215,24 @@ function buildVideoUnderstandPrompt(input: {
     "",
     "请只输出 JSON，对象字段固定为 summary、tags、ocrText、content、durationText、timeline、targetMoment。",
     "summary 要概括视频主线；tags 是字符串数组；ocrText 放视频整体可见文字，没有则留空；content 给出更完整说明；durationText 填可感知时长线索，没有则留空。",
-    `timeline 必须是数组，每项字段固定为 timestamp、summary、ocrText；最多返回 ${input.maxTimelineItems} 项。`,
+    typeof input.maxTimelineItems === "number" && input.maxTimelineItems > 0
+      ? `timeline 必须是数组，每项字段固定为 timestamp、summary、ocrText；最多返回 ${input.maxTimelineItems} 项。`
+      : "timeline 必须是数组，每项字段固定为 timestamp、summary、ocrText；请按内容需要返回关键时间片段，尽量覆盖从开头到结尾的完整流程；如视频内容分段明显，可以返回较多项，不要只给 5 条示例，也不要因为固定上限而省略重要片段。",
     input.includeTimeline ? "timeline 需要覆盖关键时间片段，时间戳尽量写成 mm:ss 或 hh:mm:ss。" : "timeline 返回空数组。",
     input.focusMode === "timestamp_query"
       ? "targetMoment 填指定时间点的回答，对象字段固定为 requestedTimestamp、matchedTimestamp、summary、ocrText、note。"
       : "targetMoment 返回 null。",
   ].join("\n");
+}
+
+function normalizeMaxTimelineItems(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_TIMELINE_ITEMS;
+  }
+  if (value <= 0) {
+    return undefined;
+  }
+  return Math.max(1, Math.min(12, Math.trunc(value)));
 }
 
 function normalizeVideoTimeline(value: unknown): VideoTimelineEntry[] {
@@ -236,6 +270,61 @@ function normalizeFocusMode(value: unknown): VideoUnderstandFocusMode {
   return "overview";
 }
 
+function shouldUseDashScopeInlineTransport(baseURL: string): boolean {
+  try {
+    const parsed = new URL(baseURL);
+    return parsed.hostname.toLowerCase() === "dashscope.aliyuncs.com"
+      && parsed.pathname.toLowerCase().includes("/compatible-mode");
+  } catch {
+    return false;
+  }
+}
+
+function resolveVideoTransport(config: VideoUnderstandConfig): Exclude<VideoUnderstandTransport, "auto"> {
+  if (config.transport === "openai_files" || config.transport === "inline_data_url") {
+    return config.transport;
+  }
+  if (shouldUseDashScopeInlineTransport(config.baseURL)) {
+    return "inline_data_url";
+  }
+  return "openai_files";
+}
+
+async function buildNativeVideoContentPart(input: {
+  config: VideoUnderstandConfig;
+  filePath: string;
+  mimeType: string;
+  abortSignal?: AbortSignal;
+}): Promise<{ type: "video_url"; video_url: { url: string; fps?: number } }> {
+  const transport = resolveVideoTransport(input.config);
+  if (transport === "inline_data_url") {
+    const encoded = (await fs.readFile(input.filePath)).toString("base64");
+    return {
+      type: "video_url",
+      video_url: {
+        url: `data:${input.mimeType};base64,${encoded}`,
+        ...(typeof input.config.fps === "number" ? { fps: input.config.fps } : {}),
+      },
+    };
+  }
+
+  const fileId = await uploadFileToOpenAICompatible({
+    filePath: input.filePath,
+    apiKey: input.config.uploadApiKey,
+    baseURL: input.config.uploadBaseURL,
+    purpose: "video",
+    maxBytes: input.config.maxInputBytes,
+    abortSignal: input.abortSignal,
+  });
+  return {
+    type: "video_url",
+    video_url: {
+      url: `ms://${fileId}`,
+      ...(typeof input.config.fps === "number" ? { fps: input.config.fps } : {}),
+    },
+  };
+}
+
 export async function understandVideoFile(input: VideoUnderstandOptions): Promise<VideoUnderstandResult> {
   const config = readVideoUnderstandConfig();
   if (!config.enabled) {
@@ -263,7 +352,7 @@ export async function understandVideoFile(input: VideoUnderstandOptions): Promis
   }
   const focusMode = normalizeFocusMode(input.focusMode);
   const includeTimeline = input.includeTimeline !== false;
-  const maxTimelineItems = Math.max(1, Math.min(12, input.maxTimelineItems ?? DEFAULT_TIMELINE_ITEMS));
+  const maxTimelineItems = normalizeMaxTimelineItems(input.maxTimelineItems);
 
   const linkedAbort = createLinkedAbortController({
     signal: input.abortSignal,
@@ -278,12 +367,10 @@ export async function understandVideoFile(input: VideoUnderstandOptions): Promis
 
   try {
     try {
-      const fileId = await uploadFileToOpenAICompatible({
+      const videoContentPart = await buildNativeVideoContentPart({
+        config,
         filePath,
-        apiKey: config.uploadApiKey,
-        baseURL: config.uploadBaseURL,
-        purpose: "video",
-        maxBytes: config.maxInputBytes,
+        mimeType,
         abortSignal: linkedAbort.controller.signal,
       });
 
@@ -308,12 +395,7 @@ export async function understandVideoFile(input: VideoUnderstandOptions): Promis
                   maxTimelineItems,
                 }),
               },
-              {
-                type: "video_url",
-                video_url: {
-                  url: `ms://${fileId}`,
-                },
-              },
+              videoContentPart,
             ],
           },
         ],
@@ -322,7 +404,7 @@ export async function understandVideoFile(input: VideoUnderstandOptions): Promis
       });
 
       const rawText = response.choices?.[0]?.message?.content ?? "";
-      return normalizeVideoUnderstandResult({
+      const result = normalizeVideoUnderstandResult({
         rawText,
         config,
         filePath,
@@ -330,6 +412,7 @@ export async function understandVideoFile(input: VideoUnderstandOptions): Promis
         focusMode,
         targetTimestamp: normalizeOptionalString(input.targetTimestamp),
       });
+      return result;
     } catch (nativeError) {
       const fallback = await understandVideoFileByFrameSampling({
         filePath,
@@ -356,6 +439,7 @@ export async function understandVideoFile(input: VideoUnderstandOptions): Promis
         model: fallback.model,
         mimeType,
         sourcePath: filePath,
+        nativeErrorMessage: fallback.nativeErrorMessage,
       };
     }
   } finally {
@@ -424,7 +508,7 @@ export const videoUnderstandTool: Tool = {
         },
         max_timeline_items: {
           type: "number",
-          description: "Maximum number of timeline items to request from the model.",
+          description: "Maximum number of timeline items to request from the model. Use 0 for no explicit limit.",
         },
       },
       required: ["file_path"],
@@ -468,6 +552,16 @@ export const videoUnderstandTool: Tool = {
         maxTimelineItems: typeof args.max_timeline_items === "number" ? args.max_timeline_items : undefined,
         abortSignal: context.abortSignal,
       });
+      if (result.analysisMode === "frame_sampling_fallback" && result.nativeErrorMessage) {
+        context.logger?.warn(
+          `video_understand native path failed; falling back to frame sampling: ${result.nativeErrorMessage}`,
+        );
+      }
+      context.logger?.info(
+        result.analysisMode === "frame_sampling_fallback"
+          ? `video_understand completed via frame_sampling_fallback (model=${result.model}, timelineItems=${result.timeline.length})`
+          : `video_understand completed via native_video (model=${result.model}, timelineItems=${result.timeline.length})`,
+      );
       return {
         id,
         name,
