@@ -78,6 +78,55 @@ export class FeishuChannel implements Channel {
         return message?.chat_type === "p2p" ? "dm" : "group";
     }
 
+    private async readMessageResourceBuffer(response: unknown): Promise<Buffer> {
+        if (!response) {
+            throw new Error("Feishu message resource response is empty");
+        }
+        if (Buffer.isBuffer(response)) {
+            return response;
+        }
+
+        const candidate = response as Record<string, unknown>;
+        const data = candidate.data;
+        if (Buffer.isBuffer(data)) {
+            return data;
+        }
+        if (data instanceof ArrayBuffer) {
+            return Buffer.from(data);
+        }
+        if (ArrayBuffer.isView(data)) {
+            return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+        }
+        if (data && typeof (data as any).on === "function") {
+            const chunks: Buffer[] = [];
+            for await (const chunk of data as AsyncIterable<Uint8Array | Buffer | string>) {
+                chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            }
+            return Buffer.concat(chunks);
+        }
+
+        const rawBody = candidate.rawBody;
+        if (Buffer.isBuffer(rawBody)) {
+            return rawBody;
+        }
+        if (rawBody instanceof ArrayBuffer) {
+            return Buffer.from(rawBody);
+        }
+        if (ArrayBuffer.isView(rawBody)) {
+            return Buffer.from(rawBody.buffer, rawBody.byteOffset, rawBody.byteLength);
+        }
+        if (typeof candidate.getReadableStream === "function") {
+            const stream = await (candidate.getReadableStream as () => Promise<AsyncIterable<Uint8Array | Buffer | string>>)();
+            const chunks: Buffer[] = [];
+            for await (const chunk of stream) {
+                chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            }
+            return Buffer.concat(chunks);
+        }
+
+        throw new Error(`Unsupported Feishu message resource response shape: ${Object.keys(candidate).join(",") || typeof response}`);
+    }
+
     private extractMentions(message: any): string[] {
         const mentions = new Set<string>();
         const addMention = (value: unknown) => {
@@ -274,26 +323,7 @@ export class FeishuChannel implements Channel {
                 // It seems `client.im.message.resource.get` returns the binary file stream directly in some versions?
                 // Let's try downloading via standard `Buffer.concat` on stream.
 
-                let buffer: Buffer;
-                if (Buffer.isBuffer(response)) {
-                    buffer = response;
-                } else if ((response as any).data && typeof (response as any).data.on === 'function') {
-                    // It is a stream
-                    const chunks: Buffer[] = [];
-                    for await (const chunk of (response as any).data) {
-                        chunks.push(Buffer.from(chunk));
-                    }
-                    buffer = Buffer.concat(chunks);
-                } else if ((response as any).writeFile) {
-                    // Valid response object with file helper?
-                    const chunks: Buffer[] = [];
-                    const stream = await (response as any).response.blob?.()?.stream?.(); // Modern?
-                    // Fallback:
-                    buffer = Buffer.from(JSON.stringify(response)); // Error placeholder
-                } else {
-                    // Assume it's a buffer-like object or try to convert
-                    buffer = Buffer.from(response as any);
-                }
+                const buffer = await this.readMessageResourceBuffer(response);
 
                 if (buffer.length < 100) {
                     // Likely JSON error response
@@ -454,7 +484,7 @@ export class FeishuChannel implements Channel {
                 });
 
                 await this.reply(msgId, replyText);
-                console.log(`Feishu: Repled to message ${msgId}`);
+                console.log(`Feishu: Replied to message ${msgId}`);
             } else {
                 console.warn(`Feishu: Agent returned empty response for message ${msgId}`);
             }

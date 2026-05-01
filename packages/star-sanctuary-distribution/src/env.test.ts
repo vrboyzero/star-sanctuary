@@ -64,8 +64,8 @@ test("ensureDefaultEnvFiles creates both .env and .env.local for a fresh state d
   expect(result.createdEnvLocal).toBe(true);
   await expect(fs.readFile(result.envPath, "utf-8")).resolves.toContain("BELLDANDY_AGENT_PROVIDER=openai");
   const envLocalContent = await fs.readFile(result.envLocalPath, "utf-8");
-  expect(envLocalContent).toContain("BELLDANDY_AGENT_PROVIDER=openai");
-  expect(envLocalContent).toContain('BELLDANDY_COMMUNITY_API_ENABLED="false"');
+  expect(envLocalContent).toContain('BELLDANDY_AGENT_PROVIDER="openai"');
+  expect(envLocalContent).toContain('BELLDANDY_COMMUNITY_API_ENABLED="true"');
   expect(envLocalContent).not.toMatch(/BELLDANDY_AUTH_TOKEN=setup-[^\r\n]+/);
 });
 
@@ -79,8 +79,8 @@ test("ensureDefaultEnvFiles only backfills the missing file", async () => {
   expect(result.createdEnvLocal).toBe(true);
   await expect(fs.readFile(result.envPath, "utf-8")).resolves.toBe("BELLDANDY_PORT=9999\n");
   const envLocalContent = await fs.readFile(result.envLocalPath, "utf-8");
-  expect(envLocalContent).toContain("BELLDANDY_AGENT_PROVIDER=openai");
-  expect(envLocalContent).toContain('BELLDANDY_COMMUNITY_API_ENABLED="false"');
+  expect(envLocalContent).toContain('BELLDANDY_AGENT_PROVIDER="openai"');
+  expect(envLocalContent).toContain('BELLDANDY_COMMUNITY_API_ENABLED="true"');
   expect(envLocalContent).not.toMatch(/BELLDANDY_AUTH_TOKEN=setup-[^\r\n]+/);
 });
 
@@ -176,12 +176,12 @@ test("default env template loader resolves template asset paths", () => {
   expect(templatePaths.envTemplatePath).toContain(path.join("default-env", "runtime.env"));
   expect(templatePaths.envLocalTemplatePath).toContain(path.join("default-env", "runtime.env.local"));
   expect(templates.env).toContain("BELLDANDY_AGENT_PROVIDER=openai");
-  expect(templates.envLocal).toContain("BELLDANDY_AGENT_PROVIDER=openai");
+  expect(templates.envLocal).toContain('BELLDANDY_AGENT_PROVIDER="openai"');
 });
 
-test("default env.local template keeps community api disabled by default", () => {
+test("default env.local template keeps community api enabled in local overrides", () => {
   const templates = readDefaultEnvTemplates();
 
-  expect(templates.envLocal).toContain('BELLDANDY_COMMUNITY_API_ENABLED="false"');
-  expect(templates.envLocal).not.toContain('BELLDANDY_COMMUNITY_API_ENABLED="true"');
+  expect(templates.envLocal).toContain('BELLDANDY_COMMUNITY_API_ENABLED="true"');
+  expect(templates.envLocal).not.toContain('BELLDANDY_COMMUNITY_API_ENABLED="false"');
 });

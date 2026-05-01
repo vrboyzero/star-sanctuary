@@ -620,7 +620,7 @@ describe("QqChannel", () => {
         }));
     });
 
-    it("retries qq voice_wav_url with fallback providers when the default stt returns empty", async () => {
+    it("retries qq voice_wav_url with fallback providers after normalized wav still returns empty", async () => {
         const fetchMock = vi.fn(async (input: string | URL | Request) => {
             const url = String(input);
             if (url.startsWith("https://qqbot.ugcimg.cn/uservoice/")) {
@@ -639,6 +639,7 @@ describe("QqChannel", () => {
         vi.stubEnv("BELLDANDY_STT_GROQ_API_KEY", "gsk-mock");
 
         const sttTranscribe = vi.fn()
+            .mockResolvedValueOnce(null)
             .mockResolvedValueOnce(null)
             .mockImplementation(async (opts: { provider?: string }) => {
                 if (opts.provider === "groq") {
@@ -663,6 +664,8 @@ describe("QqChannel", () => {
             conversationStore: new ConversationStore(),
             sttTranscribe,
         });
+        const normalizeSpy = vi.spyOn(channel as any, "normalizeVoiceBufferToWav")
+            .mockResolvedValue(Buffer.from("qq-normalized-wav-audio"));
 
         (channel as any).accessToken = "qq-token";
 
@@ -693,6 +696,96 @@ describe("QqChannel", () => {
             vi.unstubAllEnvs();
         }
 
+        expect(normalizeSpy).toHaveBeenCalledTimes(1);
+        expect(sttTranscribe).toHaveBeenCalledTimes(3);
+        expect(sttTranscribe.mock.calls[0]?.[0]).toMatchObject({
+            fileName: "voice.wav",
+            mime: "audio/wav",
+        });
+        expect(sttTranscribe.mock.calls[1]?.[0]).toMatchObject({
+            fileName: "voice.wav",
+            mime: "audio/wav",
+        });
+        expect(sttTranscribe.mock.calls[2]?.[0]).toMatchObject({
+            fileName: "voice.wav",
+            mime: "audio/wav",
+            provider: "groq",
+        });
+        expect(agent.run).toHaveBeenCalledWith(expect.objectContaining({
+            text: "这是 fallback provider 的转写",
+        }));
+    });
+
+    it("does not fall back to raw qq attachment after wav and normalized wav both return empty", async () => {
+        const fetchMock = vi.fn(async (input: string | URL | Request) => {
+            const url = String(input);
+            if (url.startsWith("https://qqbot.ugcimg.cn/uservoice/")) {
+                return {
+                    ok: true,
+                    arrayBuffer: async () => Uint8Array.from(Buffer.from("qq-wav-audio")).buffer,
+                };
+            }
+            if (url.startsWith("https://multimedia.nt.qq.com.cn/download")) {
+                throw new Error("should not fall back to original attachment when wav fallback is disabled");
+            }
+            return {
+                ok: true,
+                text: async () => "",
+            };
+        });
+        vi.stubGlobal("fetch", fetchMock as any);
+
+        const sttTranscribe = vi.fn()
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce(null);
+        const agent = {
+            run: vi.fn(async function* (input: { text: string }) {
+                yield {
+                    type: "final" as const,
+                    text: `reply:${input.text}`,
+                };
+            }),
+        };
+
+        const channel = new QqChannel({
+            appId: "app-id",
+            appSecret: "app-secret",
+            sandbox: true,
+            agent: agent as any,
+            conversationStore: new ConversationStore(),
+            sttTranscribe,
+        });
+        const transcodeSpy = vi.spyOn(channel as any, "transcodeAmrBufferToWav").mockResolvedValue(Buffer.from("qq-normalized-wav-audio"));
+        const normalizeSpy = vi.spyOn(channel as any, "normalizeVoiceBufferToWav")
+            .mockResolvedValue(Buffer.from("qq-normalized-wav-audio"));
+
+        (channel as any).accessToken = "qq-token";
+
+        await (channel as any).handleWsMessage({
+            op: 0,
+            s: 2,
+            t: "C2C_MESSAGE_CREATE",
+            id: "C2C_MESSAGE_CREATE:msg-audio-wav-normalize",
+            d: {
+                content: "",
+                attachments: [
+                    {
+                        content_type: "voice",
+                        filename: "voice.amr",
+                        size: 1729,
+                        url: "https://multimedia.nt.qq.com.cn/download?appid=1402&fileid=test-amr",
+                        voice_wav_url: "https://qqbot.ugcimg.cn/uservoice/test.wav",
+                    },
+                ],
+                author: {
+                    id: "user-a",
+                    username: "Alice",
+                },
+            },
+        });
+
+        expect(transcodeSpy).not.toHaveBeenCalled();
+        expect(normalizeSpy).toHaveBeenCalledTimes(1);
         expect(sttTranscribe).toHaveBeenCalledTimes(2);
         expect(sttTranscribe.mock.calls[0]?.[0]).toMatchObject({
             fileName: "voice.wav",
@@ -701,11 +794,26 @@ describe("QqChannel", () => {
         expect(sttTranscribe.mock.calls[1]?.[0]).toMatchObject({
             fileName: "voice.wav",
             mime: "audio/wav",
-            provider: "groq",
         });
         expect(agent.run).toHaveBeenCalledWith(expect.objectContaining({
-            text: "这是 fallback provider 的转写",
+            text: "[用户发送了 QQ 语音消息: voice.amr]",
         }));
+    });
+
+    it("strips the leading silk marker byte before silk wav transcode", () => {
+        const channel = new QqChannel({
+            appId: "app-id",
+            appSecret: "app-secret",
+            sandbox: true,
+            agent: { async *run() {} } as any,
+            conversationStore: new ConversationStore(),
+        });
+
+        const prefixedSilk = Buffer.from([0x02, ...Buffer.from("#!SILK_V3mock-data")]);
+        const normalized = (channel as any).normalizeSilkBufferForTranscode(prefixedSilk);
+
+        expect(normalized.subarray(0, 9).toString("ascii")).toBe("#!SILK_V3");
+        expect(normalized.length).toBe(prefixedSilk.length - 1);
     });
 
     it("retries qq amr voice transcription after transcoding to wav on decode error", async () => {
@@ -862,7 +970,7 @@ describe("QqChannel", () => {
         }));
     });
 
-    it("skips amr transcode fallback when the original qq attachment is actually SILK_V3", async () => {
+    it("skips raw qq silk fallback when silk decoder support is disabled", async () => {
         const fetchMock = vi.fn(async (input: string | URL | Request) => {
             const url = String(input);
             if (url.startsWith("https://multimedia.nt.qq.com.cn/download")) {
@@ -923,9 +1031,30 @@ describe("QqChannel", () => {
         });
 
         expect(transcodeSpy).not.toHaveBeenCalled();
+        expect(sttTranscribe).not.toHaveBeenCalled();
         expect(agent.run).toHaveBeenCalledWith(expect.objectContaining({
             text: "[用户发送了 QQ 语音消息: voice.amr]",
         }));
+    });
+
+    it("does not auto-infer openai qq stt fallback from ambient openai env", () => {
+        vi.stubEnv("BELLDANDY_STT_PROVIDER", "dashscope");
+        vi.stubEnv("OPENAI_API_KEY", "ambient-openai-key");
+        vi.stubEnv("BELLDANDY_STT_OPENAI_API_KEY", "");
+
+        const channel = new QqChannel({
+            appId: "app-id",
+            appSecret: "app-secret",
+            sandbox: true,
+            agent: { async *run() {} } as any,
+            conversationStore: new ConversationStore(),
+        });
+
+        try {
+            expect((channel as any).getQqVoiceFallbackProviders()).not.toContain("openai");
+        } finally {
+            vi.unstubAllEnvs();
+        }
     });
 
     it("captures raw qq message events to the configured sample directory when enabled", async () => {

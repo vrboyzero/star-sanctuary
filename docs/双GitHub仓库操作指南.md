@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "实现了阿里全模态对接与一KEY快速通道，QQ语音对接中"
+git commit -m "飞书语音接通"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

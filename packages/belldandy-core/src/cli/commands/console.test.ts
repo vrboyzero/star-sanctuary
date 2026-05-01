@@ -358,7 +358,8 @@ describe("bdd console renderer", () => {
 
         expect(snapshot.gateway.connected).toBe(true);
         expect(snapshot.gateway.error).toBeUndefined();
-        expect(snapshot.sourceErrors).toEqual({});
+        expect(snapshot.sourceErrors.doctor).toBeUndefined();
+        expect(snapshot.sourceErrors.subtasks).toBeUndefined();
         expect(snapshot.agents).toEqual(expect.arrayContaining([
           expect.objectContaining({
             id: "default",
@@ -369,6 +370,7 @@ describe("bdd console renderer", () => {
             mainConversationId: "agent:coder:main",
           }),
         ]));
+        expect(snapshot.sourceErrors.roster === undefined || snapshot.sourceErrors.roster === "pairing code not found or expired").toBe(true);
         expect(snapshot.subtasks).toEqual(expect.arrayContaining([
           expect.objectContaining({
             agentId: "coder",

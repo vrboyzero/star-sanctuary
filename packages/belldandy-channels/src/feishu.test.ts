@@ -148,6 +148,114 @@ describe("FeishuChannel", () => {
     expect(history[1]?.content).toBe("音频已处理: cached channel transcript");
   });
 
+  it("reads audio payload from sdk response.data buffer shape", async () => {
+    larkMock.getMessageResource.mockResolvedValueOnce({
+      data: Buffer.from("mock-audio-from-data"),
+    } as any);
+
+    const seenInputs: any[] = [];
+    const sttTranscribe = vi.fn(async () => ({ text: "buffer-shape transcript" }));
+    const agent = {
+      async *run(input: any) {
+        seenInputs.push(input);
+        yield {
+          type: "final" as const,
+          text: `音频已处理: ${input.text}`,
+        };
+      },
+    };
+
+    const channel = new FeishuChannel({
+      appId: "app-id",
+      appSecret: "app-secret",
+      conversationStore: new ConversationStore(),
+      agent: agent as any,
+      sttTranscribe,
+    });
+
+    await (channel as any).handleMessage({
+      message: {
+        chat_id: "chat-b",
+        message_id: "msg-buffer-shape",
+        message_type: "audio",
+        chat_type: "p2p",
+        content: JSON.stringify({
+          file_key: "audio-file-key-2",
+        }),
+      },
+      sender: {
+        sender_id: {
+          open_id: "user-open-b",
+          user_id: "user-b",
+        },
+      },
+    });
+
+    expect(sttTranscribe).toHaveBeenCalledWith(expect.objectContaining({
+      buffer: Buffer.from("mock-audio-from-data"),
+      fileName: "feishu_msg-buffer-shape.m4a",
+      mime: "audio/mp4",
+    }));
+    expect(seenInputs).toHaveLength(1);
+    expect(seenInputs[0].text).toBe("buffer-shape transcript");
+  });
+
+  it("reads audio payload from sdk getReadableStream response shape", async () => {
+    larkMock.getMessageResource.mockResolvedValueOnce({
+      headers: {},
+      writeFile: vi.fn(),
+      getReadableStream: async function* () {
+        yield Buffer.from("mock-audio-from-stream");
+      },
+    } as any);
+
+    const seenInputs: any[] = [];
+    const sttTranscribe = vi.fn(async () => ({ text: "stream-shape transcript" }));
+    const agent = {
+      async *run(input: any) {
+        seenInputs.push(input);
+        yield {
+          type: "final" as const,
+          text: `音频已处理: ${input.text}`,
+        };
+      },
+    };
+
+    const channel = new FeishuChannel({
+      appId: "app-id",
+      appSecret: "app-secret",
+      conversationStore: new ConversationStore(),
+      agent: agent as any,
+      sttTranscribe,
+    });
+
+    await (channel as any).handleMessage({
+      message: {
+        chat_id: "chat-c",
+        message_id: "msg-stream-shape",
+        message_type: "audio",
+        chat_type: "p2p",
+        content: JSON.stringify({
+          file_key: "audio-file-key-3",
+        }),
+      },
+      sender: {
+        sender_id: {
+          open_id: "user-open-c",
+          user_id: "user-c",
+        },
+      },
+    });
+
+    expect(sttTranscribe).toHaveBeenCalledWith(expect.objectContaining({
+      buffer: Buffer.from("mock-audio-from-stream"),
+      fileName: "feishu_msg-stream-shape.m4a",
+      mime: "audio/mp4",
+    }));
+    expect(seenInputs).toHaveLength(1);
+    expect(seenInputs[0].text).toBe("stream-shape transcript");
+  });
+
   it("does not fall back to lastChatId when binding is missing", async () => {
     const channel = new FeishuChannel({
       appId: "app-id",

@@ -187,6 +187,7 @@ async function transcribeOpenAI(
     }
 
     throwIfAborted(abortSignal);
+    console.info(`[STT] OpenAI request target: baseURL=${baseURL || "default"}, model=${model}, fileName=${fileName}`);
     const openai = new OpenAI({ apiKey, baseURL });
 
     // OpenAI SDK 接受 File 对象用于 multipart/form-data 上传

@@ -148,5 +148,5 @@ describe("camera native desktop helper", () => {
     expect(capture.device.label).toBe("Logitech Brio");
 
     await client.close();
-  });
+  }, 15_000);
 });

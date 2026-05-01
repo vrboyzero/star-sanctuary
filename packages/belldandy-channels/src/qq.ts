@@ -76,6 +76,7 @@ const QQ_VOICE_DOWNLOAD_TIMEOUT_MS = 15_000;
 const QQ_VOICE_STT_TIMEOUT_MS = 30_000;
 const QQ_VOICE_TRANSCODE_TIMEOUT_MS = 30_000;
 const DEFAULT_FFMPEG_COMMAND = "ffmpeg";
+const QQ_SILK_DECODER_SUPPORTED = false;
 
 export class QqChannel implements Channel {
     readonly name = "qq";
@@ -284,10 +285,15 @@ export class QqChannel implements Channel {
         });
     }
 
-    private async transcodeAmrBufferToWav(buffer: Buffer, fileName: string): Promise<Buffer> {
+    private async transcodeAudioBufferToWav(
+        buffer: Buffer,
+        inputFileName: string,
+        outputFileName: string,
+    ): Promise<Buffer> {
         const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-qq-amr-"));
-        const inputPath = path.join(tempDir, fileName || "voice.amr");
-        const outputPath = path.join(tempDir, `${path.parse(fileName || "voice").name}.wav`);
+        const safeInputFileName = inputFileName || "voice.amr";
+        const inputPath = path.join(tempDir, safeInputFileName);
+        const outputPath = path.join(tempDir, outputFileName);
         try {
             await fs.writeFile(inputPath, buffer);
             const result = await this.runCommand({
@@ -314,6 +320,11 @@ export class QqChannel implements Channel {
         } finally {
             await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
         }
+    }
+
+    private async transcodeAmrBufferToWav(buffer: Buffer, fileName: string): Promise<Buffer> {
+        const baseName = path.parse(fileName || "voice").name || "voice";
+        return await this.transcodeAudioBufferToWav(buffer, fileName || "voice.amr", `${baseName}.wav`);
     }
 
     private extractVoiceAttachment(message: any): {
@@ -385,6 +396,13 @@ export class QqChannel implements Channel {
         return undefined;
     }
 
+    private normalizeSilkBufferForTranscode(buffer: Buffer): Buffer {
+        if (buffer.length >= 10 && buffer.subarray(1, 10).toString("ascii") === "#!SILK_V3") {
+            return buffer.subarray(1);
+        }
+        return buffer;
+    }
+
     private getQqVoiceFallbackProviders(): string[] {
         const configured = (process.env.BELLDANDY_QQ_STT_FALLBACK_PROVIDERS ?? "")
             .split(",")
@@ -394,7 +412,7 @@ export class QqChannel implements Channel {
             return Array.from(new Set(configured)).filter((provider) => this.hasConfiguredSttProvider(provider));
         }
         const primary = (process.env.BELLDANDY_STT_PROVIDER ?? "openai").trim().toLowerCase();
-        return ["groq", "openai", "dashscope"].filter((provider) => provider !== primary && this.hasConfiguredSttProvider(provider));
+        return ["groq", "openai", "dashscope"].filter((provider) => provider !== primary && this.hasAutoFallbackSttProvider(provider));
     }
 
     private hasConfiguredSttProvider(provider: string): boolean {
@@ -413,6 +431,15 @@ export class QqChannel implements Channel {
                 return Boolean(process.env.DASHSCOPE_API_KEY?.trim());
             default:
                 return true;
+        }
+    }
+
+    private hasAutoFallbackSttProvider(provider: string): boolean {
+        switch (provider) {
+            case "openai":
+                return Boolean(process.env.BELLDANDY_STT_OPENAI_API_KEY?.trim());
+            default:
+                return this.hasConfiguredSttProvider(provider);
         }
     }
 
@@ -450,6 +477,37 @@ export class QqChannel implements Channel {
         return undefined;
     }
 
+    private async transcribeVoiceBuffer(input: {
+        buffer: Buffer;
+        fileName: string;
+        mime?: string;
+        msgId: string;
+        sourceLabel: string;
+    }): Promise<string | undefined> {
+        if (!this.sttTranscribe) {
+            return undefined;
+        }
+        const result = await this.withTimeout(
+            this.sttTranscribe({
+                buffer: input.buffer,
+                fileName: input.fileName,
+                mime: input.mime,
+            }),
+            QQ_VOICE_STT_TIMEOUT_MS,
+            `QQ voice STT ${input.sourceLabel} for ${input.msgId}`,
+        );
+        return this.normalizeOptionalString(result?.text);
+    }
+
+    private async normalizeVoiceBufferToWav(buffer: Buffer, fileName: string): Promise<Buffer> {
+        const baseName = path.parse(fileName || "voice").name || "voice";
+        return await this.transcodeAudioBufferToWav(
+            buffer,
+            fileName || "voice.wav",
+            `${baseName}.normalized.wav`,
+        );
+    }
+
     private async transcribeVoiceAttachment(message: any, msgId: string): Promise<string | undefined> {
         const voiceAttachment = this.extractVoiceAttachment(message);
         if (!voiceAttachment || !this.sttTranscribe) {
@@ -462,80 +520,112 @@ export class QqChannel implements Channel {
             console.log(`[${this.name}] Downloading QQ voice attachment WAV for ${msgId}: ${originalFileName}`);
             const wavBuffer = await this.downloadVoiceAttachmentBuffer(voiceAttachment.wavUrl, `${msgId} (wav)`);
             const wavFileName = `${path.parse(originalFileName).name}.wav`;
-            const wavResult = await this.withTimeout(
-                this.sttTranscribe({
-                    buffer: wavBuffer,
-                    fileName: wavFileName,
-                    mime: "audio/wav",
-                }),
-                QQ_VOICE_STT_TIMEOUT_MS,
-                `QQ voice STT wav for ${msgId}`,
-            );
-            const wavText = this.normalizeOptionalString(wavResult?.text);
-            if (wavText) {
-                return wavText;
-            }
-            const fallbackText = await this.tryTranscribeWithFallbackProviders({
+            const wavText = await this.transcribeVoiceBuffer({
                 buffer: wavBuffer,
                 fileName: wavFileName,
                 mime: "audio/wav",
                 msgId,
                 sourceLabel: "WAV",
             });
-            if (fallbackText) {
-                return fallbackText;
+            if (wavText) {
+                return wavText;
             }
-            console.warn(`[${this.name}] QQ voice WAV STT returned empty for ${msgId}, falling back to original attachment...`);
+            try {
+                console.warn(`[${this.name}] QQ voice WAV STT returned empty for ${msgId}, retrying after WAV normalization...`);
+                const normalizedWavBuffer = await this.normalizeVoiceBufferToWav(wavBuffer, wavFileName);
+                const normalizedText = await this.transcribeVoiceBuffer({
+                    buffer: normalizedWavBuffer,
+                    fileName: wavFileName,
+                    mime: "audio/wav",
+                    msgId,
+                    sourceLabel: "normalized_wav",
+                });
+                if (normalizedText) {
+                    return normalizedText;
+                }
+                const normalizedFallbackText = await this.tryTranscribeWithFallbackProviders({
+                    buffer: normalizedWavBuffer,
+                    fileName: wavFileName,
+                    mime: "audio/wav",
+                    msgId,
+                    sourceLabel: "normalized_wav",
+                });
+                if (normalizedFallbackText) {
+                    return normalizedFallbackText;
+                }
+            } catch (error) {
+                console.warn(`[${this.name}] Failed to normalize QQ voice WAV for ${msgId}:`, error);
+            }
+            const wavFallbackText = await this.tryTranscribeWithFallbackProviders({
+                buffer: wavBuffer,
+                fileName: wavFileName,
+                mime: "audio/wav",
+                msgId,
+                sourceLabel: "WAV",
+            });
+            if (wavFallbackText) {
+                return wavFallbackText;
+            }
+            console.warn(`[${this.name}] QQ voice WAV STT returned empty for ${msgId}, skipping original attachment fallback because QQ raw voice is usually SILK_V3 and decoder support is unstable.`);
+            return undefined;
         }
 
         console.log(`[${this.name}] Downloading QQ voice attachment for ${msgId}: ${originalFileName}`);
         const buffer = await this.downloadVoiceAttachmentBuffer(voiceAttachment.url, msgId);
         const detectedFormat = this.detectVoiceBufferFormat(buffer);
-        if (detectedFormat === "silk") {
-            console.warn(`[${this.name}] QQ original voice attachment for ${msgId} is SILK_V3, skipping AMR->WAV transcode fallback.`);
+        if (detectedFormat === "silk" && !QQ_SILK_DECODER_SUPPORTED) {
+            console.warn(`[${this.name}] QQ original voice attachment for ${msgId} is SILK_V3, but native silk decoding is disabled in the current runtime. Skipping raw attachment fallback.`);
             return undefined;
         }
 
         let firstPassText: string | undefined;
         try {
-            const result = await this.withTimeout(
-                this.sttTranscribe({
-                    buffer,
-                    fileName: originalFileName,
-                    mime: voiceAttachment.mime,
-                }),
-                QQ_VOICE_STT_TIMEOUT_MS,
-                `QQ voice STT for ${msgId}`,
-            );
-            firstPassText = this.normalizeOptionalString(result?.text);
+            firstPassText = await this.transcribeVoiceBuffer({
+                buffer,
+                fileName: originalFileName,
+                mime: voiceAttachment.mime,
+                msgId,
+                sourceLabel: "original_attachment",
+            });
             if (firstPassText) {
                 return firstPassText;
             }
-            if (voiceAttachment.mime !== "audio/amr") {
+            if (voiceAttachment.mime !== "audio/amr" && detectedFormat !== "silk") {
                 return undefined;
             }
-            console.warn(`[${this.name}] QQ voice STT returned empty for ${msgId}, retrying after AMR->WAV transcode...`);
+            if (detectedFormat === "silk") {
+                console.warn(`[${this.name}] QQ original voice attachment for ${msgId} is SILK_V3, retrying after SILK->WAV transcode...`);
+            } else {
+                console.warn(`[${this.name}] QQ voice STT returned empty for ${msgId}, retrying after AMR->WAV transcode...`);
+            }
         } catch (error) {
             const messageText = error instanceof Error ? error.message : String(error);
             const shouldRetryAsWav = voiceAttachment.mime === "audio/amr" && /decode_error/i.test(messageText);
-            if (!shouldRetryAsWav) {
+            if (!shouldRetryAsWav && detectedFormat !== "silk") {
                 throw error;
             }
-            console.warn(`[${this.name}] QQ voice STT decode failed for ${msgId}, retrying after AMR->WAV transcode...`);
+            if (detectedFormat === "silk") {
+                console.warn(`[${this.name}] QQ original voice attachment decode failed for ${msgId}, retrying after SILK->WAV transcode...`);
+            } else {
+                console.warn(`[${this.name}] QQ voice STT decode failed for ${msgId}, retrying after AMR->WAV transcode...`);
+            }
         }
 
-        const wavBuffer = await this.transcodeAmrBufferToWav(buffer, originalFileName);
+        const transcodeSourceFileName = detectedFormat === "silk"
+            ? `${path.parse(originalFileName).name}.silk`
+            : originalFileName;
+        const transcodeSourceBuffer = detectedFormat === "silk"
+            ? this.normalizeSilkBufferForTranscode(buffer)
+            : buffer;
+        const wavBuffer = await this.transcodeAmrBufferToWav(transcodeSourceBuffer, transcodeSourceFileName);
         const wavFileName = `${path.parse(originalFileName).name}.wav`;
-        const retryResult = await this.withTimeout(
-            this.sttTranscribe({
-                buffer: wavBuffer,
-                fileName: wavFileName,
-                mime: "audio/wav",
-            }),
-            QQ_VOICE_STT_TIMEOUT_MS,
-            `QQ voice STT retry for ${msgId}`,
-        );
-        return this.normalizeOptionalString(retryResult?.text);
+        return await this.transcribeVoiceBuffer({
+            buffer: wavBuffer,
+            fileName: wavFileName,
+            mime: "audio/wav",
+            msgId,
+            sourceLabel: detectedFormat === "silk" ? "silk_transcode" : "amr_transcode",
+        });
     }
 
     private async buildInboundText(message: any, msgId: string): Promise<string | undefined> {
