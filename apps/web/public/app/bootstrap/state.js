@@ -86,6 +86,14 @@ export const experienceWorkbenchState = {
   generateTaskId: "",
   requestToken: 0,
   activeAgentId: "default",
+  synthesisModal: {
+    open: false,
+    loading: false,
+    submitting: false,
+    error: "",
+    seedCandidateId: "",
+    preview: null,
+  },
 };
 
 export const subtasksState = {

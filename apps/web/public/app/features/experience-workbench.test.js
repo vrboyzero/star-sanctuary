@@ -64,6 +64,15 @@ function createHarness(options = {}) {
       <div id="experienceWorkbenchList"></div>
       <div id="experienceWorkbenchDetail"></div>
     </section>
+    <div id="experienceSynthesisModal" class="hidden">
+      <div id="experienceSynthesisModalTitle"></div>
+      <div id="experienceSynthesisModalSummary"></div>
+      <div id="experienceSynthesisModalStatus" class="hidden"></div>
+      <div id="experienceSynthesisModalList"></div>
+      <button id="experienceSynthesisModalClose"></button>
+      <button id="experienceSynthesisModalCancel"></button>
+      <button id="experienceSynthesisModalSubmit"></button>
+    </div>
   `;
 
   const refs = {
@@ -87,6 +96,14 @@ function createHarness(options = {}) {
     experienceGenerateSkillBtn: document.getElementById("experienceGenerateSkillBtn"),
     experienceWorkbenchListEl: document.getElementById("experienceWorkbenchList"),
     experienceWorkbenchDetailEl: document.getElementById("experienceWorkbenchDetail"),
+    experienceSynthesisModalEl: document.getElementById("experienceSynthesisModal"),
+    experienceSynthesisModalTitleEl: document.getElementById("experienceSynthesisModalTitle"),
+    experienceSynthesisModalSummaryEl: document.getElementById("experienceSynthesisModalSummary"),
+    experienceSynthesisModalStatusEl: document.getElementById("experienceSynthesisModalStatus"),
+    experienceSynthesisModalListEl: document.getElementById("experienceSynthesisModalList"),
+    experienceSynthesisModalCloseBtn: document.getElementById("experienceSynthesisModalClose"),
+    experienceSynthesisModalCancelBtn: document.getElementById("experienceSynthesisModalCancel"),
+    experienceSynthesisModalSubmitBtn: document.getElementById("experienceSynthesisModalSubmit"),
   };
 
   const experienceState = {
@@ -106,6 +123,14 @@ function createHarness(options = {}) {
     generateTaskId: "",
     requestToken: 0,
     activeAgentId: "default",
+    synthesisModal: {
+      open: false,
+      loading: false,
+      submitting: false,
+      error: "",
+      seedCandidateId: "",
+      preview: null,
+    },
   };
   const memoryViewerState = {
     pendingExperienceActionKey: null,
@@ -161,11 +186,13 @@ function createHarness(options = {}) {
     ? options.candidates
     : defaultCandidates;
   const listCandidateIds = Array.isArray(options.listCandidateIds) && options.listCandidateIds.length
-    ? options.listCandidateIds
-    : candidates.map((item) => item.id);
-  const resolveListItems = () => listCandidateIds
-    .map((id) => candidates.find((item) => item.id === id) || null)
-    .filter(Boolean);
+    ? [...options.listCandidateIds]
+    : null;
+  const resolveListItems = () => (
+    listCandidateIds
+      ? listCandidateIds.map((id) => candidates.find((item) => item.id === id) || null).filter(Boolean)
+      : [...candidates]
+  );
   const normalizeFilterValues = (value) => Array.isArray(value)
     ? value.map((item) => String(item ?? "").trim().toLowerCase()).filter(Boolean)
     : [String(value ?? "").trim().toLowerCase()].filter(Boolean);
@@ -181,6 +208,52 @@ function createHarness(options = {}) {
       filtered = filtered.filter((item) => typeValues.includes(String(item?.type ?? "").trim().toLowerCase()));
     }
     return filtered;
+  };
+  const resolveDisplayTaskId = (candidate) => String(candidate?.sourceTaskSnapshot?.taskId || candidate?.taskId || "").trim();
+  const buildSynthesisPreviewPayload = (candidateId) => {
+    const seedCandidate = candidates.find((item) => item.id === candidateId) || null;
+    if (!seedCandidate) {
+      return null;
+    }
+    const relatedItems = candidates
+      .filter((item) => (
+        item.id !== candidateId
+        && item.type === seedCandidate.type
+        && item.status === "draft"
+      ))
+      .map((item, index) => ({
+        candidateId: item.id,
+        type: item.type,
+        status: item.status,
+        title: item.title,
+        slug: item.slug,
+        summary: item.summary,
+        taskId: item.taskId,
+        sourceTaskId: resolveDisplayTaskId(item),
+        updatedAt: item.updatedAt,
+        score: 0.82 - (index * 0.05),
+        relation: index === 0 ? "same_family" : "similar",
+      }));
+    const sameFamilyCount = relatedItems.filter((item) => item.relation === "same_family").length;
+    const similarCount = relatedItems.filter((item) => item.relation === "similar").length;
+    return {
+      seedCandidate,
+      candidateType: seedCandidate.type,
+      totalCount: 1 + relatedItems.length,
+      taskCount: new Set([seedCandidate, ...relatedItems].map((item) => String(item?.sourceTaskId || item?.taskId || "").trim()).filter(Boolean)).size,
+      items: relatedItems,
+      sourceCandidateIds: [seedCandidate.id, ...relatedItems.map((item) => item.candidateId)],
+      selectedSourceCount: 1 + relatedItems.length,
+      sameFamilyCount,
+      similarCount,
+      selectedSameFamilyCount: sameFamilyCount,
+      selectedSimilarCount: similarCount,
+      maxSimilarSourceCount: 5,
+      templateInfo: {
+        id: `${seedCandidate.type}-synthesis`,
+        path: `docs/experience-templates/${seedCandidate.type === "skill" ? "skill-synthesis.md" : "method-synthesis.md"}`,
+      },
+    };
   };
 
   const sendReq = vi.fn(async (req) => {
@@ -241,6 +314,68 @@ function createHarness(options = {}) {
           filter: {
             type: candidateType,
             status: "draft",
+          },
+        },
+      };
+    }
+    if (req.method === "experience.candidate.synthesize.preview") {
+      const payload = buildSynthesisPreviewPayload(req.params?.candidateId);
+      if (!payload) {
+        return { ok: false, error: { code: "not_found", message: "Candidate not found." } };
+      }
+      return { ok: true, payload };
+    }
+    if (req.method === "experience.candidate.synthesize.create") {
+      const seedCandidate = candidates.find((item) => item.id === req.params?.candidateId) || null;
+      if (!seedCandidate) {
+        return { ok: false, error: { code: "not_found", message: "Candidate not found." } };
+      }
+      const sourceCandidateIds = Array.isArray(req.params?.sourceCandidateIds)
+        ? req.params.sourceCandidateIds.map((item) => String(item)).filter(Boolean)
+        : [seedCandidate.id];
+      const sourceCandidates = sourceCandidateIds
+        .map((id) => candidates.find((item) => item.id === id) || null)
+        .filter(Boolean);
+      const synthesizedCandidate = {
+        id: `${seedCandidate.id}-synthesized`,
+        taskId: `${seedCandidate.taskId}::synth::demo`,
+        type: seedCandidate.type,
+        status: "draft",
+        title: `${seedCandidate.title} Synthesized`,
+        slug: `${seedCandidate.slug}-synthesized`,
+        summary: `Synthesized from ${sourceCandidates.length} drafts`,
+        content: seedCandidate.content,
+        createdAt: "2026-04-21T09:00:00.000Z",
+        updatedAt: "2026-04-21T09:00:00.000Z",
+        sourceTaskSnapshot: {
+          ...(seedCandidate.sourceTaskSnapshot || {}),
+          taskId: resolveDisplayTaskId(seedCandidate),
+        },
+        metadata: {
+          draftOrigin: {
+            kind: "synthesized",
+          },
+          synthesis: {
+            seedCandidateId: seedCandidate.id,
+            sourceCandidateIds,
+            sourceCount: sourceCandidates.length,
+            createdBy: "main_model",
+            templateId: `${seedCandidate.type}-synthesis`,
+            templatePath: `docs/experience-templates/${seedCandidate.type === "skill" ? "skill-synthesis.md" : "method-synthesis.md"}`,
+          },
+        },
+      };
+      candidates.unshift(synthesizedCandidate);
+      return {
+        ok: true,
+        payload: {
+          candidate: synthesizedCandidate,
+          created: true,
+          sourceCount: sourceCandidates.length,
+          sourceCandidateIds,
+          templateInfo: {
+            id: `${seedCandidate.type}-synthesis`,
+            path: `docs/experience-templates/${seedCandidate.type === "skill" ? "skill-synthesis.md" : "method-synthesis.md"}`,
           },
         },
       };
@@ -313,6 +448,8 @@ describe("experience workbench capability acquisition", () => {
 
     expect(refs.experienceWorkbenchCapabilityOverviewEl.innerHTML).toContain("Method Draft One");
     expect(refs.experienceWorkbenchCapabilityOverviewEl.innerHTML).toContain("Skill Draft One");
+    expect(refs.experienceWorkbenchCapabilityOverviewEl.textContent).toContain("ID · draft-method-1");
+    expect(refs.experienceWorkbenchCapabilityOverviewEl.textContent).toContain("ID · draft-skill-1");
     expect(refs.experienceWorkbenchCapabilityOverviewEl.innerHTML).not.toContain("Accepted Method");
     expect(refs.experienceWorkbenchCapabilityPaneEl.classList.contains("hidden")).toBe(false);
   });
@@ -590,5 +727,124 @@ describe("experience workbench capability acquisition", () => {
     await Promise.resolve();
 
     expect(getCapabilityLaneDraftCounts(refs.experienceWorkbenchCapabilityOverviewEl)).toEqual(["Draft 59", "Draft 60"]);
+  });
+
+  it("opens the synthesis modal and renders preview rows for similar drafts", async () => {
+    const candidates = [
+      {
+        id: "draft-method-1",
+        taskId: "task-method-1",
+        type: "method",
+        status: "draft",
+        title: "Method Draft One",
+        slug: "method-draft-one",
+        summary: "method summary 1",
+        content: "# Method Draft One",
+        createdAt: "2026-04-20T09:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+        sourceTaskSnapshot: {},
+      },
+      {
+        id: "draft-method-2",
+        taskId: "task-method-2",
+        type: "method",
+        status: "draft",
+        title: "Method Draft Two",
+        slug: "method-draft-two",
+        summary: "method summary 2",
+        content: "# Method Draft Two",
+        createdAt: "2026-04-20T08:00:00.000Z",
+        updatedAt: "2026-04-20T11:00:00.000Z",
+        sourceTaskSnapshot: {},
+      },
+    ];
+    const { refs, feature, sendReq, experienceState } = createHarness({ candidates });
+
+    await feature.openExperienceWorkbench({ tab: "capability-acquisition", preferFirst: false });
+
+    refs.experienceWorkbenchCapabilityOverviewEl
+      .querySelector("[data-capability-synthesize-candidate-id='draft-method-1']")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    await flushAsyncWork(6);
+
+    expect(sendReq).toHaveBeenCalledWith(expect.objectContaining({
+      method: "experience.candidate.synthesize.preview",
+      params: expect.objectContaining({
+        candidateId: "draft-method-1",
+        agentId: "default",
+      }),
+    }));
+    expect(experienceState.synthesisModal.open).toBe(true);
+    expect(refs.experienceSynthesisModalEl.classList.contains("hidden")).toBe(false);
+    expect(refs.experienceSynthesisModalTitleEl.textContent).toContain("Method");
+    expect(refs.experienceSynthesisModalSummaryEl.textContent).toContain("2");
+    expect(refs.experienceSynthesisModalSummaryEl.textContent).toContain("同类命中");
+    expect(refs.experienceSynthesisModalSummaryEl.textContent).toContain("近似命中");
+    expect(refs.experienceSynthesisModalStatusEl.textContent).toContain("优先选择同类草稿");
+    expect(refs.experienceSynthesisModalListEl.querySelectorAll(".experience-synthesis-row")).toHaveLength(2);
+    expect(refs.experienceSynthesisModalListEl.textContent).toContain("Method Draft One");
+    expect(refs.experienceSynthesisModalListEl.textContent).toContain("Method Draft Two");
+  });
+
+  it("creates a synthesized draft from the modal and renders the synthesized badge", async () => {
+    const candidates = [
+      {
+        id: "draft-method-1",
+        taskId: "task-method-1",
+        type: "method",
+        status: "draft",
+        title: "Method Draft One",
+        slug: "method-draft-one",
+        summary: "method summary 1",
+        content: "# Method Draft One",
+        createdAt: "2026-04-20T09:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+        sourceTaskSnapshot: {},
+      },
+      {
+        id: "draft-method-2",
+        taskId: "task-method-2",
+        type: "method",
+        status: "draft",
+        title: "Method Draft Two",
+        slug: "method-draft-two",
+        summary: "method summary 2",
+        content: "# Method Draft Two",
+        createdAt: "2026-04-20T08:00:00.000Z",
+        updatedAt: "2026-04-20T11:00:00.000Z",
+        sourceTaskSnapshot: {},
+      },
+    ];
+    const { refs, feature, sendReq, showNotice } = createHarness({ candidates });
+
+    await feature.openExperienceWorkbench({ tab: "capability-acquisition", preferFirst: false });
+
+    refs.experienceWorkbenchCapabilityOverviewEl
+      .querySelector("[data-capability-synthesize-candidate-id='draft-method-1']")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushAsyncWork(6);
+
+    refs.experienceSynthesisModalSubmitBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushAsyncWork(10);
+
+    expect(sendReq).toHaveBeenCalledWith(expect.objectContaining({
+      method: "experience.candidate.synthesize.create",
+      params: expect.objectContaining({
+        candidateId: "draft-method-1",
+        sourceCandidateIds: ["draft-method-1", "draft-method-2"],
+      }),
+    }));
+    expect(refs.experienceSynthesisModalEl.classList.contains("hidden")).toBe(true);
+    expect(refs.experienceWorkbenchCapabilityOverviewEl.innerHTML).toContain("Method Draft One Synthesized");
+    expect(refs.experienceWorkbenchCapabilityOverviewEl.textContent).toContain("ID · draft-method-1-synthesized");
+    expect(refs.experienceWorkbenchCapabilityOverviewEl.querySelector(".experience-synthesized-badge")).toBeTruthy();
+    expect(refs.experienceWorkbenchCapabilityOverviewEl.querySelector(".experience-candidate-synthesized")).toBeTruthy();
+    expect(showNotice).toHaveBeenCalledWith(
+      "合成草稿已创建",
+      expect.stringContaining("2"),
+      "success",
+      2800,
+    );
   });
 });

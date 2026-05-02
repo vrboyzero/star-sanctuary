@@ -18,6 +18,7 @@ import type {
   ExperienceAssetType,
   ExperienceCandidate,
   ExperienceCandidateListFilter,
+  ExperienceCandidateMetadata,
   ExperienceCandidateStats,
   ExperienceCandidateStatus,
   ExperienceCandidateType,
@@ -188,7 +189,8 @@ CREATE TABLE IF NOT EXISTS experience_candidates (
   created_at TEXT NOT NULL,
   reviewed_at TEXT DEFAULT NULL,
   accepted_at TEXT DEFAULT NULL,
-  rejected_at TEXT DEFAULT NULL
+  rejected_at TEXT DEFAULT NULL,
+  metadata_json TEXT DEFAULT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_experience_candidates_task_id ON experience_candidates(task_id);
@@ -299,6 +301,10 @@ const SCHEMA_TASK_RECAP_COLUMNS = [
   "ALTER TABLE tasks ADD COLUMN resume_context_json TEXT DEFAULT NULL",
 ];
 
+const SCHEMA_EXPERIENCE_METADATA_COLUMNS = [
+  "ALTER TABLE experience_candidates ADD COLUMN metadata_json TEXT DEFAULT NULL",
+];
+
 const SCHEMA_METADATA_INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_chunks_channel ON chunks(channel);
 CREATE INDEX IF NOT EXISTS idx_chunks_topic ON chunks(topic);
@@ -345,6 +351,9 @@ export class MemoryStore {
       try { this.db.exec(sql); } catch { /* column already exists */ }
     }
     for (const sql of SCHEMA_TASK_RECAP_COLUMNS) {
+      try { this.db.exec(sql); } catch { /* column already exists */ }
+    }
+    for (const sql of SCHEMA_EXPERIENCE_METADATA_COLUMNS) {
       try { this.db.exec(sql); } catch { /* column already exists */ }
     }
     this.db.exec(SCHEMA_METADATA_INDEXES);
@@ -951,9 +960,9 @@ export class MemoryStore {
     const stmt = this.db.prepare(`
       INSERT INTO experience_candidates (
         id, task_id, type, status, title, slug, content, summary, quality_score,
-        source_task_snapshot_json, published_path, created_at, reviewed_at, accepted_at, rejected_at
+        source_task_snapshot_json, published_path, created_at, reviewed_at, accepted_at, rejected_at, metadata_json
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -972,6 +981,7 @@ export class MemoryStore {
       candidate.reviewedAt ?? null,
       candidate.acceptedAt ?? null,
       candidate.rejectedAt ?? null,
+      candidate.metadata ? JSON.stringify(candidate.metadata) : null,
     );
   }
 
@@ -1094,6 +1104,7 @@ export class MemoryStore {
         reviewed_at = ?,
         accepted_at = ?,
         rejected_at = ?
+        , metadata_json = ?
       WHERE id = ?
     `);
 
@@ -1109,6 +1120,7 @@ export class MemoryStore {
       updated.reviewedAt ?? null,
       updated.acceptedAt ?? null,
       updated.rejectedAt ?? null,
+      updated.metadata ? JSON.stringify(updated.metadata) : null,
       candidateId,
     );
 
@@ -2441,6 +2453,7 @@ function rowToExperienceCandidate(row: Record<string, unknown>): ExperienceCandi
     reviewedAt: optionalString(row.reviewed_at),
     acceptedAt: optionalString(row.accepted_at),
     rejectedAt: optionalString(row.rejected_at),
+    metadata: safeParseExperienceCandidateMetadata(asNullableString(row.metadata_json)),
   };
 }
 
@@ -2600,6 +2613,11 @@ function safeParseExperienceSnapshot(value: string | null): ExperienceSourceTask
     status: "failed",
     startedAt: new Date(0).toISOString(),
   };
+}
+
+function safeParseExperienceCandidateMetadata(value: string | null): ExperienceCandidateMetadata | undefined {
+  const parsed = safeParseJson(value) as ExperienceCandidateMetadata | undefined;
+  return parsed && typeof parsed === "object" ? parsed : undefined;
 }
 
 function optionalString(value: unknown): string | undefined {

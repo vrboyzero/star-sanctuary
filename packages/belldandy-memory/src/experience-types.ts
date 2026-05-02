@@ -12,6 +12,8 @@ export type ExperienceCandidateType = "method" | "skill";
 export type ExperienceCandidateStatus = "draft" | "reviewed" | "accepted" | "rejected";
 export type ExperienceAssetType = "method" | "skill";
 export type ExperienceUsageVia = "manual" | "search" | "tool" | "auto_suggest";
+export type ExperienceDraftOriginKind = "generated" | "synthesized";
+export type ExperienceSynthesisRelation = "same_family" | "similar";
 
 export interface ExperienceTaskMemoryLink {
   chunkId: string;
@@ -40,6 +42,24 @@ export interface ExperienceSourceTaskSnapshot {
   finishedAt?: string;
 }
 
+export interface ExperienceCandidateDraftOriginMetadata {
+  kind: ExperienceDraftOriginKind;
+}
+
+export interface ExperienceCandidateSynthesisMetadata {
+  seedCandidateId: string;
+  sourceCandidateIds: string[];
+  sourceCount: number;
+  createdBy: "main_model";
+  templateId?: string;
+  templatePath?: string;
+}
+
+export interface ExperienceCandidateMetadata {
+  draftOrigin?: ExperienceCandidateDraftOriginMetadata;
+  synthesis?: ExperienceCandidateSynthesisMetadata;
+}
+
 export interface ExperienceCandidate {
   id: string;
   taskId: string;
@@ -56,6 +76,7 @@ export interface ExperienceCandidate {
   reviewedAt?: string;
   acceptedAt?: string;
   rejectedAt?: string;
+  metadata?: ExperienceCandidateMetadata;
 }
 
 export interface ExperienceCandidateListFilter {
@@ -143,6 +164,28 @@ export interface ExperienceDedupCheckResult {
   decision: ExperienceDedupDecision;
   exactMatch?: ExperienceDedupMatch;
   similarMatches: ExperienceDedupMatch[];
+}
+
+export interface ExperienceSynthesisPreviewItem {
+  candidateId: string;
+  type: ExperienceCandidateType;
+  status: ExperienceCandidateStatus;
+  title: string;
+  slug: string;
+  summary?: string;
+  taskId: string;
+  sourceTaskId?: string;
+  updatedAt?: string;
+  score: number;
+  relation: ExperienceSynthesisRelation;
+}
+
+export interface ExperienceSynthesisPreviewResult {
+  seedCandidateId: string;
+  candidateType: ExperienceCandidateType;
+  totalCount: number;
+  taskCount: number;
+  items: ExperienceSynthesisPreviewItem[];
 }
 
 export interface ExperienceUsageRecordResult {

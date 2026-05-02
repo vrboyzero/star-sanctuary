@@ -11,7 +11,10 @@ import { SkillRegistry } from "@belldandy/skills";
 
 import { createScopedMemoryManagers } from "./resident-memory-managers.js";
 import { startGatewayServer } from "./server.js";
-import { handleMemoryExperienceMethod } from "./server-methods/memory-experience.js";
+import {
+  handleMemoryExperienceMethod,
+  selectExperienceSynthesisPreviewItems,
+} from "./server-methods/memory-experience.js";
 import {
   cleanupGlobalMemoryManagersForTest,
   pairWebSocketClient,
@@ -30,6 +33,63 @@ beforeAll(() => {
 afterEach(() => {
   cleanupGlobalMemoryManagersForTest();
 });
+
+async function writeExperienceSynthesisTestTemplate(stateDir: string, type: "method" | "skill"): Promise<void> {
+  const templatesDir = path.join(stateDir, "experience-templates");
+  await fs.promises.mkdir(templatesDir, { recursive: true });
+  const fileName = type === "skill" ? "skill-synthesis.md" : "method-synthesis.md";
+  const content = type === "skill"
+    ? "# Skill Synthesis Template"
+    : "# Method Synthesis Template";
+  await fs.promises.writeFile(path.join(templatesDir, fileName), content, "utf-8");
+}
+
+function buildValidSynthesizedMethodContent(title: string, summary: string): string {
+  return [
+    `# ${title}`,
+    "",
+    `> ${summary}`,
+    "",
+    "## 0. 元信息",
+    "- 方法定位：测试合成方法",
+    "- 适用对象：测试环境",
+    "- 维护建议：按需更新",
+    "",
+    "## 1. 触发条件",
+    "- 需要把多个近似 method draft 合并为一个更完整的候选。",
+    "",
+    "## 2. 适用场景",
+    "- 同类型草稿大量重复且信息分散时。",
+    "",
+    "## 3. 执行步骤",
+    "1. 汇总相似草稿。",
+    "2. 抽取稳定共性。",
+    "3. 输出结构化新草稿。",
+    "",
+    "## 4. 工具选择",
+    "- 首选工具：主模型",
+    "- 替代工具：人工整理",
+    "- 选择依据：需要更强的综合归纳能力。",
+    "",
+    "## 5. 失败经验",
+    "- 常见误区：直接拼贴原文。",
+    "- 失败信号：结构混乱、重复过多。",
+    "- 规避方式：按统一模板重写。",
+    "",
+    "## 6. 成功案例",
+    "- 案例背景：同类草稿堆积。",
+    "- 做法摘要：归纳后输出新 draft。",
+    "- 结果与启示：审批体验更顺畅。",
+    "",
+    "## 7. 相关资源",
+    "- 相关技能：draft synthesis",
+    "- 相关方法：candidate merge",
+    "- 相关文档 / 路径：docs/experience-templates/method-synthesis.md",
+    "",
+    "## 8. 更新记录",
+    "- 2026-05-02：测试生成初版。",
+  ].join("\n");
+}
 
 test("memory.share.queue supports centralized claim and review across resident agents", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-shared-review-queue-"));
@@ -472,6 +532,898 @@ test("experience.candidate.reject_bulk rejects all draft candidates for a type a
       accepted: 0,
       rejected: 2,
     });
+  } finally {
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("experience synthesis selection prioritizes same_family and backfills similar", () => {
+  const selection = selectExperienceSynthesisPreviewItems([
+    {
+      candidateId: "similar-a",
+      type: "method",
+      status: "draft",
+      title: "Similar A",
+      slug: "similar-a",
+      taskId: "task-similar-a",
+      score: 0.7,
+      relation: "similar",
+    },
+    {
+      candidateId: "same-b",
+      type: "method",
+      status: "draft",
+      title: "Same B",
+      slug: "same-b",
+      taskId: "task-same-b",
+      score: 0.91,
+      relation: "same_family",
+    },
+    {
+      candidateId: "similar-c",
+      type: "method",
+      status: "draft",
+      title: "Similar C",
+      slug: "similar-c",
+      taskId: "task-similar-c",
+      score: 0.69,
+      relation: "similar",
+    },
+    {
+      candidateId: "same-d",
+      type: "method",
+      status: "draft",
+      title: "Same D",
+      slug: "same-d",
+      taskId: "task-same-d",
+      score: 0.88,
+      relation: "same_family",
+    },
+    {
+      candidateId: "similar-e",
+      type: "method",
+      status: "draft",
+      title: "Similar E",
+      slug: "similar-e",
+      taskId: "task-similar-e",
+      score: 0.65,
+      relation: "similar",
+    },
+  ], 4);
+
+  expect(selection.sameFamilyCount).toBe(2);
+  expect(selection.similarCount).toBe(3);
+  expect(selection.selectedSameFamilyCount).toBe(2);
+  expect(selection.selectedSimilarCount).toBe(2);
+  expect(selection.selectedItems.map((item) => item.candidateId)).toEqual([
+    "same-b",
+    "same-d",
+    "similar-a",
+    "similar-c",
+  ]);
+});
+
+test("experience synthesis preview and create log warn details for early invalid requests", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-log-invalid-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-log-invalid-workspace-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+  registerGlobalMemoryManager(memoryManager);
+  const warnLogs: Array<{ message: string; data?: unknown }> = [];
+
+  try {
+    const previewRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-synthesize-preview-missing-id",
+      method: "experience.candidate.synthesize.preview",
+      params: {
+        agentId: "default",
+      },
+    }, {
+      stateDir,
+      logger: {
+        warn: (message, data) => {
+          warnLogs.push({ message, data });
+        },
+      },
+    });
+
+    expect(previewRes?.ok).toBe(false);
+    if (!previewRes || previewRes.ok) {
+      throw new Error("expected preview request to fail");
+    }
+    expect(previewRes.error?.code).toBe("invalid_params");
+
+    const createRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-synthesize-create-missing-id",
+      method: "experience.candidate.synthesize.create",
+      params: {
+        agentId: "default",
+      },
+    }, {
+      stateDir,
+      logger: {
+        warn: (message, data) => {
+          warnLogs.push({ message, data });
+        },
+      },
+    });
+
+    expect(createRes?.ok).toBe(false);
+    if (!createRes || createRes.ok) {
+      throw new Error("expected create request to fail");
+    }
+    expect(createRes.error?.code).toBe("invalid_params");
+    expect(warnLogs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        message: "Experience synthesis preview rejected because candidateId is missing",
+      }),
+      expect.objectContaining({
+        message: "Experience synthesis create rejected because candidateId is missing",
+      }),
+    ]));
+  } finally {
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("experience.candidate.synthesize.preview returns similar draft summary for the seed candidate", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-preview-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-preview-workspace-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+
+  const now = "2026-04-20T00:00:00.000Z";
+  const createTask = (taskId: string, title: string, summary: string) => {
+    (memoryManager as any).store.createTask({
+      id: taskId,
+      conversationId: `conv-${taskId}`,
+      sessionKey: `session-${taskId}`,
+      agentId: "default",
+      source: "chat",
+      status: "success",
+      title,
+      objective: `${title} objective`,
+      summary,
+      reflection: `${title} reflection`,
+      toolCalls: [{ toolName: "web_search", success: true, durationMs: 50 }],
+      artifactPaths: ["docs/example.md"],
+      startedAt: now,
+      finishedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+  };
+
+  createTask("task-synthesize-preview-1", "Tool Call Method Draft One", "整理工具调用信息形成 method。");
+  createTask("task-synthesize-preview-2", "Tool Call Method Draft Two", "继续补充工具调用 method 的边界。");
+  const candidateOne = memoryManager.promoteTaskToMethodCandidate("task-synthesize-preview-1");
+  const candidateTwo = memoryManager.promoteTaskToMethodCandidate("task-synthesize-preview-2");
+  expect(candidateOne?.candidate.id).toBeTruthy();
+  expect(candidateTwo?.candidate.id).toBeTruthy();
+  await writeExperienceSynthesisTestTemplate(stateDir, "method");
+  registerGlobalMemoryManager(memoryManager);
+
+  try {
+    const previewRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-synthesize-preview",
+      method: "experience.candidate.synthesize.preview",
+      params: {
+        candidateId: candidateOne!.candidate.id,
+        agentId: "default",
+      },
+    }, { stateDir });
+    expect(previewRes).toBeTruthy();
+    if (!previewRes || !previewRes.ok) {
+      throw new Error("expected successful synthesize preview response");
+    }
+
+    expect(previewRes.payload?.candidateType).toBe("method");
+    expect(previewRes.payload?.totalCount).toBe(2);
+    expect(previewRes.payload?.taskCount).toBe(2);
+    expect(previewRes.payload?.sourceCandidateIds).toEqual([
+      candidateOne!.candidate.id,
+      candidateTwo!.candidate.id,
+    ]);
+    expect(previewRes.payload?.selectedSourceCount).toBe(2);
+    expect(previewRes.payload?.sameFamilyCount).toBe(1);
+    expect(previewRes.payload?.similarCount).toBe(0);
+    expect(previewRes.payload?.selectedSameFamilyCount).toBe(1);
+    expect(previewRes.payload?.selectedSimilarCount).toBe(0);
+    expect(previewRes.payload?.maxSimilarSourceCount).toBe(5);
+    expect(previewRes.payload?.templateInfo).toMatchObject({
+      id: "method-synthesis",
+    });
+    expect(previewRes.payload?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        candidateId: candidateTwo!.candidate.id,
+        type: "method",
+        status: "draft",
+      }),
+    ]));
+  } finally {
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("experience.candidate.synthesize.preview and create cap similar sources to five per run", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-limit-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-limit-workspace-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+
+  const now = "2026-04-20T00:00:00.000Z";
+  const candidateIds: string[] = [];
+  const repeatedDraftDetail = Array.from({ length: 220 }, (_, lineIndex) => (
+    `第 ${lineIndex + 1} 行：工具调用型方法草稿需要覆盖参数校验、分页拉取、异常恢复、结果归并与输出约束。`
+  )).join("\n");
+  for (let index = 1; index <= 14; index += 1) {
+    const taskId = `task-synthesize-limit-${index}`;
+    (memoryManager as any).store.createTask({
+      id: taskId,
+      conversationId: `conv-${taskId}`,
+      sessionKey: `session-${taskId}`,
+      agentId: "default",
+      source: "chat",
+      status: "success",
+      title: `Method Limit Draft ${index}`,
+      objective: `Method Limit Draft ${index} objective`,
+      summary: `整理第 ${index} 份 method 草稿并保留边界 ${index}。`,
+      reflection: `Method Limit Draft ${index} reflection`,
+      toolCalls: [{ toolName: "web_search", success: true, durationMs: 40 }],
+      artifactPaths: ["docs/example.md"],
+      startedAt: now,
+      finishedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const candidateId = `exp_synthesize_limit_${index}`;
+    memoryManager.createExperienceCandidate({
+      id: candidateId,
+      taskId,
+      type: "method",
+      status: "draft",
+      title: `Tool Call Consolidation Method Draft ${index}`,
+      slug: `tool-call-consolidation-method-draft-${index}`,
+      summary: `汇总工具调用型经验草稿，第 ${index} 份补充不同边界与异常处理。`,
+      content: [
+        `# Tool Call Consolidation Method Draft ${index}`,
+        "",
+        "## Context",
+        "该方法用于把大量工具调用型经验草稿合并整理为更稳定的方法草稿。",
+        `第 ${index} 份草稿补充了分页查询、失败重试、参数校验和输出整理等细节。`,
+        "",
+        "## Shared Signals",
+        "tool call draft synthesis merge preview statistics summarize normalize deduplicate",
+        "web search browser fetch extraction tool pipeline structured result confidence",
+        "",
+        "## Long Notes",
+        repeatedDraftDetail,
+        "",
+        "## Notes",
+        `保留第 ${index} 份草稿特有的边界说明与示例。`,
+      ].join("\n"),
+      sourceTaskSnapshot: {
+        taskId,
+        conversationId: `conv-${taskId}`,
+        agentId: "default",
+        source: "chat",
+        status: "success",
+        title: `Tool Call Consolidation Task ${index}`,
+        objective: "整理工具调用型方法草稿",
+        summary: `工具调用型经验草稿整理样本 ${index}`,
+        reflection: `记录第 ${index} 份草稿的相同主线与差异点`,
+        toolCalls: [{ toolName: "web_search", success: true, durationMs: 40 }],
+        artifactPaths: ["docs/example.md"],
+        startedAt: now,
+        finishedAt: now,
+      },
+      createdAt: now,
+      metadata: {
+        draftOrigin: {
+          kind: "generated",
+        },
+      },
+    });
+    candidateIds.push(candidateId);
+  }
+  await writeExperienceSynthesisTestTemplate(stateDir, "method");
+  registerGlobalMemoryManager(memoryManager);
+
+  try {
+    let capturedUserPromptLength = 0;
+    const previewRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-synthesize-limit-preview",
+      method: "experience.candidate.synthesize.preview",
+      params: {
+        candidateId: candidateIds[0],
+        agentId: "default",
+      },
+    }, { stateDir });
+    expect(previewRes).toBeTruthy();
+    if (!previewRes || !previewRes.ok) {
+      throw new Error("expected successful synthesize preview response");
+    }
+
+    expect(previewRes.payload?.totalCount).toBeGreaterThan(10);
+    expect(Array.isArray(previewRes.payload?.sourceCandidateIds)).toBe(true);
+    expect(previewRes.payload?.sourceCandidateIds).toHaveLength(6);
+    expect(previewRes.payload?.selectedSourceCount).toBe(6);
+    expect(previewRes.payload?.sameFamilyCount).toBeGreaterThanOrEqual(5);
+    expect(previewRes.payload?.selectedSameFamilyCount).toBe(5);
+    expect(previewRes.payload?.selectedSimilarCount).toBe(0);
+    expect(previewRes.payload?.maxSimilarSourceCount).toBe(5);
+
+    const createRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-synthesize-limit-create",
+      method: "experience.candidate.synthesize.create",
+      params: {
+        candidateId: candidateIds[0],
+        sourceCandidateIds: candidateIds,
+        agentId: "default",
+      },
+    }, {
+      stateDir,
+      callPrimaryModel: async (input) => {
+        capturedUserPromptLength = String(input.user || "").length;
+        return JSON.stringify({
+          title: "Method Limit Unified",
+          summary: "按每轮最多五个相似草稿进行合成。",
+          content: buildValidSynthesizedMethodContent(
+            "Method Limit Unified",
+            "按每轮最多五个相似草稿进行合成。",
+          ),
+        });
+      },
+    });
+    expect(createRes).toBeTruthy();
+    if (!createRes || !createRes.ok) {
+      throw new Error("expected successful synthesize create response");
+    }
+
+    expect(createRes.payload?.sourceCount).toBeLessThanOrEqual(6);
+    expect(Array.isArray(createRes.payload?.sourceCandidateIds)).toBe(true);
+    expect(createRes.payload?.sourceCandidateIds).toHaveLength(6);
+    expect(capturedUserPromptLength).toBeGreaterThan(0);
+    expect(capturedUserPromptLength).toBeLessThan(28_000);
+  } finally {
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("experience synthesis limits can be overridden via environment variables", async () => {
+  const previousMaxSimilarSources = process.env.BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SIMILAR_SOURCES;
+  const previousMaxSourceContentChars = process.env.BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SOURCE_CONTENT_CHARS;
+  const previousTotalSourceContentBudget = process.env.BELLDANDY_EXPERIENCE_SYNTHESIS_TOTAL_SOURCE_CONTENT_CHAR_BUDGET;
+  process.env.BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SIMILAR_SOURCES = "3";
+  process.env.BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SOURCE_CONTENT_CHARS = "240";
+  process.env.BELLDANDY_EXPERIENCE_SYNTHESIS_TOTAL_SOURCE_CONTENT_CHAR_BUDGET = "1200";
+
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-env-limit-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-env-limit-workspace-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+
+  const now = "2026-04-20T00:00:00.000Z";
+  const candidateIds: string[] = [];
+  const repeatedDraftDetail = Array.from({ length: 220 }, (_, lineIndex) => (
+    `第 ${lineIndex + 1} 行：工具调用型方法草稿需要覆盖参数校验、分页拉取、异常恢复、结果归并与输出约束。`
+  )).join("\n");
+  for (let index = 1; index <= 8; index += 1) {
+    const taskId = `task-synthesize-env-limit-${index}`;
+    (memoryManager as any).store.createTask({
+      id: taskId,
+      conversationId: `conv-${taskId}`,
+      sessionKey: `session-${taskId}`,
+      agentId: "default",
+      source: "chat",
+      status: "success",
+      title: `Method Env Limit Draft ${index}`,
+      objective: `Method Env Limit Draft ${index} objective`,
+      summary: `整理第 ${index} 份 method 草稿并保留边界 ${index}。`,
+      reflection: `Method Env Limit Draft ${index} reflection`,
+      toolCalls: [{ toolName: "web_search", success: true, durationMs: 40 }],
+      artifactPaths: ["docs/example.md"],
+      startedAt: now,
+      finishedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const candidateId = `exp_synthesize_env_limit_${index}`;
+    memoryManager.createExperienceCandidate({
+      id: candidateId,
+      taskId,
+      type: "method",
+      status: "draft",
+      title: `Tool Call Env Limit Method Draft ${index}`,
+      slug: `tool-call-env-limit-method-draft-${index}`,
+      summary: `汇总工具调用型经验草稿，第 ${index} 份补充不同边界与异常处理。`,
+      content: [
+        `# Tool Call Env Limit Method Draft ${index}`,
+        "",
+        "## Context",
+        "该方法用于把大量工具调用型经验草稿合并整理为更稳定的方法草稿。",
+        "",
+        "## Long Notes",
+        repeatedDraftDetail,
+      ].join("\n"),
+      sourceTaskSnapshot: {
+        taskId,
+        conversationId: `conv-${taskId}`,
+        agentId: "default",
+        source: "chat",
+        status: "success",
+        title: `Tool Call Env Limit Task ${index}`,
+        objective: "整理工具调用型方法草稿",
+        summary: `工具调用型经验草稿整理样本 ${index}`,
+        reflection: `记录第 ${index} 份草稿的相同主线与差异点`,
+        toolCalls: [{ toolName: "web_search", success: true, durationMs: 40 }],
+        artifactPaths: ["docs/example.md"],
+        startedAt: now,
+        finishedAt: now,
+      },
+      createdAt: now,
+      metadata: {
+        draftOrigin: {
+          kind: "generated",
+        },
+      },
+    });
+    candidateIds.push(candidateId);
+  }
+  await writeExperienceSynthesisTestTemplate(stateDir, "method");
+  registerGlobalMemoryManager(memoryManager);
+
+  try {
+    let capturedUserPrompt = "";
+    const previewRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-synthesize-env-limit-preview",
+      method: "experience.candidate.synthesize.preview",
+      params: {
+        candidateId: candidateIds[0],
+        agentId: "default",
+      },
+    }, { stateDir });
+    expect(previewRes).toBeTruthy();
+    if (!previewRes || !previewRes.ok) {
+      throw new Error("expected successful synthesize preview response");
+    }
+
+    expect(previewRes.payload?.sourceCandidateIds).toHaveLength(4);
+    expect(previewRes.payload?.selectedSourceCount).toBe(4);
+    expect(previewRes.payload?.selectedSameFamilyCount).toBe(3);
+    expect(previewRes.payload?.maxSimilarSourceCount).toBe(3);
+
+    const createRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-synthesize-env-limit-create",
+      method: "experience.candidate.synthesize.create",
+      params: {
+        candidateId: candidateIds[0],
+        sourceCandidateIds: candidateIds,
+        agentId: "default",
+      },
+    }, {
+      stateDir,
+      callPrimaryModel: async (input) => {
+        capturedUserPrompt = String(input.user || "");
+        return JSON.stringify({
+          title: "Method Env Limit Unified",
+          summary: "按环境变量限制合成来源数量与正文预算。",
+          content: buildValidSynthesizedMethodContent(
+            "Method Env Limit Unified",
+            "按环境变量限制合成来源数量与正文预算。",
+          ),
+        });
+      },
+    });
+    expect(createRes).toBeTruthy();
+    if (!createRes || !createRes.ok) {
+      throw new Error("expected successful synthesize create response");
+    }
+
+    expect(createRes.payload?.sourceCount).toBeLessThanOrEqual(4);
+    expect(createRes.payload?.sourceCandidateIds).toHaveLength(4);
+    expect(capturedUserPrompt).toContain("sourceContentBudget: 1200");
+    const usedCharsMatch = capturedUserPrompt.match(/sourceContentCharsUsed:\s*(\d+)/);
+    expect(usedCharsMatch).toBeTruthy();
+    expect(Number(usedCharsMatch?.[1] || "0")).toBeLessThanOrEqual(960);
+  } finally {
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    if (previousMaxSimilarSources === undefined) {
+      delete process.env.BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SIMILAR_SOURCES;
+    } else {
+      process.env.BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SIMILAR_SOURCES = previousMaxSimilarSources;
+    }
+    if (previousMaxSourceContentChars === undefined) {
+      delete process.env.BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SOURCE_CONTENT_CHARS;
+    } else {
+      process.env.BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SOURCE_CONTENT_CHARS = previousMaxSourceContentChars;
+    }
+    if (previousTotalSourceContentBudget === undefined) {
+      delete process.env.BELLDANDY_EXPERIENCE_SYNTHESIS_TOTAL_SOURCE_CONTENT_CHAR_BUDGET;
+    } else {
+      process.env.BELLDANDY_EXPERIENCE_SYNTHESIS_TOTAL_SOURCE_CONTENT_CHAR_BUDGET = previousTotalSourceContentBudget;
+    }
+  }
+});
+
+test("experience.candidate.synthesize.create creates a synthesized draft candidate with metadata", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-create-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-create-workspace-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+
+  const now = "2026-04-20T00:00:00.000Z";
+  const createTask = (taskId: string, title: string, summary: string) => {
+    (memoryManager as any).store.createTask({
+      id: taskId,
+      conversationId: `conv-${taskId}`,
+      sessionKey: `session-${taskId}`,
+      agentId: "default",
+      source: "chat",
+      status: "success",
+      title,
+      objective: `${title} objective`,
+      summary,
+      reflection: `${title} reflection`,
+      toolCalls: [{ toolName: "web_search", success: true, durationMs: 40 }],
+      artifactPaths: ["docs/example.md"],
+      startedAt: now,
+      finishedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+  };
+
+  createTask("task-synthesize-create-1", "Tool Call Method Draft One", "整理工具调用信息形成 method。");
+  createTask("task-synthesize-create-2", "Tool Call Method Draft Two", "继续补充工具调用 method 的边界。");
+  const candidateOne = memoryManager.promoteTaskToMethodCandidate("task-synthesize-create-1");
+  const candidateTwo = memoryManager.promoteTaskToMethodCandidate("task-synthesize-create-2");
+  expect(candidateOne?.candidate.id).toBeTruthy();
+  expect(candidateTwo?.candidate.id).toBeTruthy();
+  await writeExperienceSynthesisTestTemplate(stateDir, "method");
+  registerGlobalMemoryManager(memoryManager);
+
+  try {
+    const createRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-synthesize-create",
+      method: "experience.candidate.synthesize.create",
+      params: {
+        candidateId: candidateOne!.candidate.id,
+        sourceCandidateIds: [candidateOne!.candidate.id, candidateTwo!.candidate.id],
+        agentId: "default",
+      },
+    }, {
+      stateDir,
+      callPrimaryModel: async () => JSON.stringify({
+        title: "Tool Call Method Unified",
+        summary: "把多个工具调用 method 草稿合成为更稳定的候选。",
+        content: buildValidSynthesizedMethodContent(
+          "Tool Call Method Unified",
+          "把多个工具调用 method 草稿合成为更稳定的候选。",
+        ),
+      }),
+    });
+    expect(createRes).toBeTruthy();
+    if (!createRes || !createRes.ok) {
+      throw new Error("expected successful synthesize create response");
+    }
+
+    const createdCandidate = (createRes.payload?.candidate ?? {}) as Record<string, any>;
+    expect(createRes.payload?.created).toBe(true);
+    expect(createRes.payload?.sourceCount).toBe(2);
+    expect(createdCandidate.status).toBe("draft");
+    expect(createdCandidate.type).toBe("method");
+    expect(createdCandidate.title).toBe("Tool Call Method Unified");
+    expect(createdCandidate.metadata?.draftOrigin?.kind).toBe("synthesized");
+    expect(createdCandidate.metadata?.synthesis?.seedCandidateId).toBe(candidateOne!.candidate.id);
+    expect(createdCandidate.metadata?.synthesis?.sourceCandidateIds).toEqual([
+      candidateOne!.candidate.id,
+      candidateTwo!.candidate.id,
+    ]);
+    expect(createdCandidate.metadata?.synthesis?.templateId).toBe("method-synthesis");
+    expect(String(createdCandidate.taskId || "")).toContain("::synth::");
+
+    const storedCandidate = memoryManager.getExperienceCandidate(String(createdCandidate.id || ""));
+    expect(storedCandidate?.metadata?.draftOrigin?.kind).toBe("synthesized");
+    expect(storedCandidate?.metadata?.synthesis?.sourceCount).toBe(2);
+  } finally {
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("experience.candidate.synthesize.create logs error details when model output is invalid", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-create-log-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-create-log-workspace-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+
+  const now = "2026-04-20T00:00:00.000Z";
+  const createTask = (taskId: string, title: string, summary: string) => {
+    (memoryManager as any).store.createTask({
+      id: taskId,
+      conversationId: `conv-${taskId}`,
+      sessionKey: `session-${taskId}`,
+      agentId: "default",
+      source: "chat",
+      status: "success",
+      title,
+      objective: `${title} objective`,
+      summary,
+      reflection: `${title} reflection`,
+      toolCalls: [{ toolName: "web_search", success: true, durationMs: 40 }],
+      artifactPaths: ["docs/example.md"],
+      startedAt: now,
+      finishedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+  };
+
+  createTask("task-synthesize-create-log-1", "Tool Call Method Draft One", "整理工具调用信息形成 method。");
+  createTask("task-synthesize-create-log-2", "Tool Call Method Draft Two", "继续补充工具调用 method 的边界。");
+  const candidateOne = memoryManager.promoteTaskToMethodCandidate("task-synthesize-create-log-1");
+  const candidateTwo = memoryManager.promoteTaskToMethodCandidate("task-synthesize-create-log-2");
+  expect(candidateOne?.candidate.id).toBeTruthy();
+  expect(candidateTwo?.candidate.id).toBeTruthy();
+  await writeExperienceSynthesisTestTemplate(stateDir, "method");
+  registerGlobalMemoryManager(memoryManager);
+
+  const errorLogs: Array<{ message: string; data?: unknown }> = [];
+
+  try {
+    await expect(handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-synthesize-create-invalid-json",
+      method: "experience.candidate.synthesize.create",
+      params: {
+        candidateId: candidateOne!.candidate.id,
+        sourceCandidateIds: [candidateOne!.candidate.id, candidateTwo!.candidate.id],
+        agentId: "default",
+      },
+    }, {
+      stateDir,
+      callPrimaryModel: async () => "not a json payload",
+      logger: {
+        error: (message, data) => {
+          errorLogs.push({ message, data });
+        },
+      },
+    })).rejects.toThrow("Model did not return a valid JSON object.");
+
+    expect(errorLogs).toHaveLength(1);
+    expect(errorLogs[0]?.message).toBe("Experience synthesis create failed");
+    expect(errorLogs[0]?.data).toEqual(expect.objectContaining({
+      candidateId: candidateOne!.candidate.id,
+      candidateType: "method",
+      sourceCount: 2,
+      error: expect.objectContaining({
+        message: expect.stringContaining("Model did not return a valid JSON object."),
+      }),
+    }));
+  } finally {
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("experience.candidate.synthesize.create accepts chat completion content arrays from reasoning models", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-content-array-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-content-array-workspace-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+
+  const now = "2026-04-20T00:00:00.000Z";
+  const createTask = (taskId: string, title: string, summary: string) => {
+    (memoryManager as any).store.createTask({
+      id: taskId,
+      conversationId: `conv-${taskId}`,
+      sessionKey: `session-${taskId}`,
+      agentId: "default",
+      source: "chat",
+      status: "success",
+      title,
+      objective: `${title} objective`,
+      summary,
+      reflection: `${title} reflection`,
+      toolCalls: [{ toolName: "web_search", success: true, durationMs: 40 }],
+      artifactPaths: ["docs/example.md"],
+      startedAt: now,
+      finishedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+  };
+
+  createTask("task-synthesize-content-array-1", "Tool Call Method Draft One", "整理工具调用信息形成 method。");
+  createTask("task-synthesize-content-array-2", "Tool Call Method Draft Two", "继续补充工具调用 method 的边界。");
+  const candidateOne = memoryManager.promoteTaskToMethodCandidate("task-synthesize-content-array-1");
+  const candidateTwo = memoryManager.promoteTaskToMethodCandidate("task-synthesize-content-array-2");
+  expect(candidateOne?.candidate.id).toBeTruthy();
+  expect(candidateTwo?.candidate.id).toBeTruthy();
+  await writeExperienceSynthesisTestTemplate(stateDir, "method");
+  registerGlobalMemoryManager(memoryManager);
+
+  const originalFetch = globalThis.fetch;
+
+  try {
+    globalThis.fetch = (async () => ({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: [{
+                type: "text",
+                text: JSON.stringify({
+                  title: "Tool Call Method Array Unified",
+                  summary: "把 content array 形式的推理模型输出解析为合成 draft。",
+                  content: buildValidSynthesizedMethodContent(
+                    "Tool Call Method Array Unified",
+                    "把 content array 形式的推理模型输出解析为合成 draft。",
+                  ),
+                }),
+              }],
+            },
+            finish_reason: "stop",
+          },
+        ],
+      }),
+      text: async () => "",
+    })) as unknown as typeof fetch;
+
+    const createRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-synthesize-content-array",
+      method: "experience.candidate.synthesize.create",
+      params: {
+        candidateId: candidateOne!.candidate.id,
+        sourceCandidateIds: [candidateOne!.candidate.id, candidateTwo!.candidate.id],
+        agentId: "default",
+      },
+    }, {
+      stateDir,
+      primaryModelConfig: {
+        baseUrl: "https://example.test/v1",
+        apiKey: "test-api-key",
+        model: "reasoning-model",
+      },
+    });
+
+    expect(createRes).toBeTruthy();
+    expect(createRes?.ok).toBe(true);
+    if (!createRes || !createRes.ok) {
+      throw new Error("expected successful synthesize create response");
+    }
+    const createdCandidate = (createRes.payload?.candidate ?? {}) as Record<string, any>;
+    expect(createdCandidate.title).toBe("Tool Call Method Array Unified");
+  } finally {
+    globalThis.fetch = originalFetch;
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("experience.candidate.synthesize.create warns when source draft set is oversized", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-create-warn-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-create-warn-workspace-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+
+  const now = "2026-04-20T00:00:00.000Z";
+  const candidateIds: string[] = [];
+  for (let index = 1; index <= 12; index += 1) {
+    const taskId = `task-synthesize-create-warn-${index}`;
+    (memoryManager as any).store.createTask({
+      id: taskId,
+      conversationId: `conv-${taskId}`,
+      sessionKey: `session-${taskId}`,
+      agentId: "default",
+      source: "chat",
+      status: "success",
+      title: `Tool Call Method Draft ${index}`,
+      objective: `Tool Call Method Draft ${index} objective`,
+      summary: `整理第 ${index} 份工具调用 method 草稿。`,
+      reflection: `Tool Call Method Draft ${index} reflection`,
+      toolCalls: [{ toolName: "web_search", success: true, durationMs: 40 }],
+      artifactPaths: ["docs/example.md"],
+      startedAt: now,
+      finishedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const candidate = memoryManager.promoteTaskToMethodCandidate(taskId);
+    expect(candidate?.candidate.id).toBeTruthy();
+    candidateIds.push(String(candidate?.candidate.id || ""));
+  }
+  await writeExperienceSynthesisTestTemplate(stateDir, "method");
+  registerGlobalMemoryManager(memoryManager);
+
+  const warnLogs: Array<{ message: string; data?: unknown }> = [];
+
+  try {
+    const createRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-synthesize-create-warn",
+      method: "experience.candidate.synthesize.create",
+      params: {
+        candidateId: candidateIds[0],
+        sourceCandidateIds: candidateIds,
+        agentId: "default",
+      },
+    }, {
+      stateDir,
+      callPrimaryModel: async () => JSON.stringify({
+        title: "Large Tool Call Method Unified",
+        summary: "把大量工具调用 method 草稿合成为更稳定的候选。",
+        content: buildValidSynthesizedMethodContent(
+          "Large Tool Call Method Unified",
+          "把大量工具调用 method 草稿合成为更稳定的候选。",
+        ),
+      }),
+      logger: {
+        warn: (message, data) => {
+          warnLogs.push({ message, data });
+        },
+      },
+    });
+
+    expect(createRes).toBeTruthy();
+    expect(createRes?.ok).toBe(true);
+    expect(warnLogs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        message: "Experience synthesis source set is large; model call may become unstable",
+        data: expect.objectContaining({
+          requestedSourceCount: 12,
+          reason: expect.stringContaining("requestedSourceCount>="),
+        }),
+      }),
+    ]));
   } finally {
     memoryManager.close();
     await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});

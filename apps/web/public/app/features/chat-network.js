@@ -419,6 +419,11 @@ export function createChatNetworkFeature({
       debugLog?.("[ws] dropped invalid request frame", frame);
       return Promise.resolve(null);
     }
+    const rawTimeoutMs = Number(normalizedFrame.timeoutMs);
+    const timeoutMs = Number.isFinite(rawTimeoutMs) && rawTimeoutMs > 0
+      ? rawTimeoutMs
+      : 30_000;
+    delete normalizedFrame.timeoutMs;
 
     socket.send(JSON.stringify(normalizedFrame));
     return new Promise((resolve) => {
@@ -428,7 +433,7 @@ export function createChatNetworkFeature({
           pendingReq.delete(normalizedFrame.id);
           resolve(null);
         }
-      }, 30_000);
+      }, timeoutMs);
     });
   }
 

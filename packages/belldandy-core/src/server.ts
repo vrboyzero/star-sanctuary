@@ -1591,6 +1591,8 @@ async function handleReq(
       "experience.candidate.accept",
       "experience.candidate.reject",
       "experience.candidate.reject_bulk",
+      "experience.candidate.synthesize.preview",
+      "experience.candidate.synthesize.create",
       "experience.usage.get",
       "experience.usage.list",
       "experience.usage.stats",
@@ -1631,6 +1633,11 @@ async function handleReq(
     const allowed = await isClientAllowed({ clientId: ctx.clientId, stateDir: ctx.stateDir });
     if (!allowed) {
       const pairing = await ensurePairingCode({ clientId: ctx.clientId, stateDir: ctx.stateDir });
+      ctx.log.warn("gateway-security", "Secure method rejected because client is not paired", {
+        clientId: ctx.clientId,
+        method: req.method,
+        pairingCode: pairing.code,
+      });
       sendGatewayEvent(ws, {
         type: "event",
         event: "pairing.required",
@@ -1975,16 +1982,31 @@ async function handleReq(
     case "experience.candidate.accept":
     case "experience.candidate.reject":
     case "experience.candidate.reject_bulk":
+    case "experience.candidate.synthesize.preview":
+    case "experience.candidate.synthesize.create":
     case "experience.usage.get":
     case "experience.usage.list":
     case "experience.usage.stats":
     case "experience.usage.revoke":
     case "experience.skill.freshness.update":
+      if (req.method === "experience.candidate.synthesize.preview" || req.method === "experience.candidate.synthesize.create") {
+        ctx.log.info("memory-experience", "Experience synthesis request received", {
+          clientId: ctx.clientId,
+          method: req.method,
+          requestId: req.id,
+        });
+      }
       return handleMemoryExperienceMethod(req, {
         stateDir: ctx.stateDir,
         residentMemoryManagers: ctx.residentMemoryManagers,
         agentRegistry: ctx.agentRegistry,
         skillRegistry: ctx.skillRegistry,
+        primaryModelConfig: ctx.primaryModelConfig,
+        logger: {
+          debug: (message, data) => ctx.log.debug("memory-experience", message, data),
+          warn: (message, data) => ctx.log.warn("memory-experience", message, data),
+          error: (message, data) => ctx.log.error("memory-experience", message, data),
+        },
       });
 
     case "dream.run":

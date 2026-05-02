@@ -15,6 +15,7 @@ import type {
     MemorySearchResult,
 } from "./types.js";
 import { ExperiencePromoter } from "./experience-promoter.js";
+import { buildExperienceSynthesisPreview } from "./experience-synthesis.js";
 import { TaskProcessor } from "./task-processor.js";
 import { TaskSummarizer } from "./task-summarizer.js";
 import { shouldAutoPromoteTaskByPolicy } from "./task-auto-promotion-policy.js";
@@ -32,10 +33,12 @@ import type {
 import type {
     ExperienceAssetType,
     ExperienceCandidate,
+    ExperienceCandidateMetadata,
     ExperienceCandidateStats,
     ExperienceCandidateType,
     ExperienceCandidateListFilter,
     ExperiencePromoteResult,
+    ExperienceSynthesisPreviewResult,
     ExperienceUsage,
     ExperienceUsageListFilter,
     ExperienceUsageRecordResult,
@@ -1071,9 +1074,15 @@ export class MemoryManager {
                 reviewedAt: candidate.reviewedAt,
                 acceptedAt: candidate.acceptedAt,
                 rejectedAt: candidate.rejectedAt,
+                metadata: candidate.metadata,
             }) ?? existing;
         }
 
+        this.store.createExperienceCandidate(candidate);
+        return this.store.getExperienceCandidate(candidate.id) ?? candidate;
+    }
+
+    createExperienceCandidate(candidate: ExperienceCandidate): ExperienceCandidate {
         this.store.createExperienceCandidate(candidate);
         return this.store.getExperienceCandidate(candidate.id) ?? candidate;
     }
@@ -1084,6 +1093,52 @@ export class MemoryManager {
 
     getExperienceCandidateStats(filter?: ExperienceCandidateListFilter): ExperienceCandidateStats {
         return this.store.getExperienceCandidateStats(filter);
+    }
+
+    previewExperienceCandidateSynthesis(candidateId: string, options: { limit?: number } = {}): ExperienceSynthesisPreviewResult | null {
+        const seedCandidate = this.store.getExperienceCandidate(candidateId);
+        if (!seedCandidate) return null;
+        const candidates = this.store.listExperienceCandidates(1000, {
+            type: seedCandidate.type,
+            status: "draft",
+        });
+        return buildExperienceSynthesisPreview(seedCandidate, candidates, options);
+    }
+
+    createSynthesizedExperienceCandidate(input: {
+        seedCandidate: ExperienceCandidate;
+        sourceCandidates: ExperienceCandidate[];
+        title: string;
+        slug: string;
+        summary?: string;
+        content: string;
+        metadata?: ExperienceCandidateMetadata;
+    }): ExperienceCandidate {
+        const now = new Date().toISOString();
+        const sourceCount = Array.isArray(input.sourceCandidates) ? input.sourceCandidates.length : 0;
+        const sourceScores = (Array.isArray(input.sourceCandidates) ? input.sourceCandidates : [])
+            .map((item) => Number(item?.qualityScore))
+            .filter((item) => Number.isFinite(item)) as number[];
+        const qualityScore = sourceScores.length > 0
+            ? Math.min(100, Math.round((sourceScores.reduce((sum, value) => sum + value, 0) / sourceScores.length) + Math.min(10, sourceCount)))
+            : input.seedCandidate.qualityScore;
+        const sourceTaskId = input.seedCandidate.sourceTaskSnapshot?.taskId || input.seedCandidate.taskId;
+        const taskId = `${sourceTaskId}::synth::${randomUUID().slice(0, 8)}`;
+        const candidate: ExperienceCandidate = {
+            id: `exp_${randomUUID().slice(0, 8)}`,
+            taskId,
+            type: input.seedCandidate.type,
+            status: "draft",
+            title: input.title,
+            slug: input.slug,
+            content: input.content,
+            summary: input.summary,
+            qualityScore,
+            sourceTaskSnapshot: input.seedCandidate.sourceTaskSnapshot,
+            createdAt: now,
+            metadata: input.metadata,
+        };
+        return this.createExperienceCandidate(candidate);
     }
 
     recordExperienceUsage(input: {

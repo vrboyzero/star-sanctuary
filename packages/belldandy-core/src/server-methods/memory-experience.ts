@@ -1,6 +1,21 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
 import type { AgentRegistry } from "@belldandy/agent";
 import type { GatewayReqFrame, GatewayResFrame } from "@belldandy/protocol";
-import { createTaskWorkSurface, getGlobalMemoryManager } from "@belldandy/memory";
+import {
+  buildExperienceCandidateSlug,
+  createTaskWorkSurface,
+  getGlobalMemoryManager,
+  readFirstMarkdownTitle,
+  validateMethodCandidateDraftForPublish,
+  validateSkillCandidateDraftForPublish,
+} from "@belldandy/memory";
+import type {
+  ExperienceCandidate,
+  ExperienceCandidateType,
+  ExperienceSynthesisPreviewItem,
+} from "@belldandy/memory";
 import type { SkillRegistry } from "@belldandy/skills";
 import { publishSkillCandidate } from "@belldandy/skills";
 
@@ -39,7 +54,35 @@ type MemoryExperienceMethodContext = {
   agentRegistry?: AgentRegistry;
   skillRegistry?: SkillRegistry;
   residentMemoryManagers?: ScopedMemoryManagerRecord[];
+  primaryModelConfig?: {
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+    thinking?: Record<string, unknown>;
+    reasoningEffort?: string;
+  };
+  callPrimaryModel?: (input: {
+    system: string;
+    user: string;
+    maxTokens?: number;
+    model?: string;
+    thinking?: Record<string, unknown>;
+    reasoningEffort?: string;
+  }) => Promise<string>;
+  logger?: {
+    debug?: (message: string, data?: unknown) => void;
+    warn?: (message: string, data?: unknown) => void;
+    error?: (message: string, data?: unknown) => void;
+  };
 };
+
+const DEFAULT_EXPERIENCE_SYNTHESIS_MAX_SIMILAR_SOURCES = 5;
+const DEFAULT_EXPERIENCE_SYNTHESIS_MAX_SOURCE_CONTENT_CHARS = 1_600;
+const DEFAULT_EXPERIENCE_SYNTHESIS_TOTAL_SOURCE_CONTENT_CHAR_BUDGET = 10_000;
+const EXPERIENCE_SYNTHESIS_MODEL_CALL_TIMEOUT_MS = 120_000;
+const EXPERIENCE_SYNTHESIS_MAX_SIMILAR_SOURCES_ENV = "BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SIMILAR_SOURCES";
+const EXPERIENCE_SYNTHESIS_MAX_SOURCE_CONTENT_CHARS_ENV = "BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SOURCE_CONTENT_CHARS";
+const EXPERIENCE_SYNTHESIS_TOTAL_SOURCE_CONTENT_CHAR_BUDGET_ENV = "BELLDANDY_EXPERIENCE_SYNTHESIS_TOTAL_SOURCE_CONTENT_CHAR_BUDGET";
 
 export async function handleMemoryExperienceMethod(
   req: GatewayReqFrame,
@@ -50,6 +93,9 @@ export async function handleMemoryExperienceMethod(
   }
 
   const params = isObjectRecord(req.params) ? req.params : {};
+  const logDebug = (message: string, data?: unknown) => ctx.logger?.debug?.(message, data);
+  const logWarn = (message: string, data?: unknown) => ctx.logger?.warn?.(message, data);
+  const logError = (message: string, data?: unknown) => ctx.logger?.error?.(message, data);
 
   switch (req.method) {
     case "memory.search": {
@@ -673,6 +719,292 @@ export async function handleMemoryExperienceMethod(
       });
     }
 
+    case "experience.candidate.synthesize.preview": {
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
+      if (!manager) return notAvailable(req.id);
+
+      const candidateId = readRequiredString(params, "candidateId");
+      const limit = clampListLimit(params.limit, 50, 200);
+      if (!candidateId) {
+        logWarn("Experience synthesis preview rejected because candidateId is missing", {
+          limit,
+        });
+        return invalid(req.id, "candidateId is required");
+      }
+
+      const seedCandidate = manager.getExperienceCandidate(candidateId);
+      if (!seedCandidate) {
+        logWarn("Experience synthesis preview rejected because seed candidate was not found", {
+          candidateId,
+          limit,
+        });
+        return notFound(req.id, "Experience candidate not found.");
+      }
+
+      const preview = manager.previewExperienceCandidateSynthesis(candidateId, { limit });
+      if (!preview) {
+        logWarn("Experience synthesis preview rejected because preview data could not be prepared", {
+          candidateId,
+          candidateType: seedCandidate.type,
+          limit,
+        });
+        return notFound(req.id, "Experience candidate not found.");
+      }
+      const maxSimilarSources = getExperienceSynthesisMaxSimilarSources();
+      const selection = selectExperienceSynthesisPreviewItems(preview.items, maxSimilarSources);
+      const selectedSourceCandidateIds = [seedCandidate.id, ...selection.selectedItems.map((item) => item.candidateId)];
+      logDebug("Experience synthesis preview prepared", {
+        candidateId: seedCandidate.id,
+        candidateType: seedCandidate.type,
+        limit,
+        totalCount: preview.totalCount,
+        matchedCount: preview.items.length,
+        taskCount: preview.taskCount,
+        sameFamilyCount: selection.sameFamilyCount,
+        similarCount: selection.similarCount,
+        selectedSameFamilyCount: selection.selectedSameFamilyCount,
+        selectedSimilarCount: selection.selectedSimilarCount,
+        maxSimilarSources,
+      });
+
+      const templateInfo = await resolveExperienceSynthesisTemplateInfo(ctx.stateDir, seedCandidate.type);
+      return ok(req.id, {
+        seedCandidate: toExperienceCandidatePayloadItem(seedCandidate, residentPolicy),
+        candidateType: seedCandidate.type,
+        totalCount: preview.totalCount,
+        taskCount: preview.taskCount,
+        items: preview.items,
+        sourceCandidateIds: selectedSourceCandidateIds,
+        selectedSourceCount: selectedSourceCandidateIds.length,
+        sameFamilyCount: selection.sameFamilyCount,
+        similarCount: selection.similarCount,
+        selectedSameFamilyCount: selection.selectedSameFamilyCount,
+        selectedSimilarCount: selection.selectedSimilarCount,
+        maxSimilarSourceCount: maxSimilarSources,
+        templateInfo,
+        queryView: buildResidentMemoryQueryView(residentPolicy),
+      });
+    }
+
+    case "experience.candidate.synthesize.create": {
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
+      if (!manager) return notAvailable(req.id);
+
+      const candidateId = readRequiredString(params, "candidateId");
+      if (!candidateId) {
+        logWarn("Experience synthesis create rejected because candidateId is missing", {
+          requestedSourceCount: readOptionalStringArray(params, "sourceCandidateIds").length,
+        });
+        return invalid(req.id, "candidateId is required");
+      }
+      const seedCandidate = manager.getExperienceCandidate(candidateId);
+      if (!seedCandidate) {
+        logWarn("Experience synthesis create rejected because seed candidate was not found", {
+          candidateId,
+          requestedSourceCount: readOptionalStringArray(params, "sourceCandidateIds").length,
+        });
+        return notFound(req.id, "Experience candidate not found.");
+      }
+      if (seedCandidate.status !== "draft") {
+        logWarn("Experience synthesis create rejected because seed candidate is not draft", {
+          candidateId: seedCandidate.id,
+          candidateType: seedCandidate.type,
+          status: seedCandidate.status,
+        });
+        return invalid(req.id, `Only draft candidates can be synthesized. Current status: ${seedCandidate.status}.`);
+      }
+
+      const preview = manager.previewExperienceCandidateSynthesis(candidateId, { limit: 200 });
+      if (!preview) {
+        logWarn("Experience synthesis create rejected because preview data could not be prepared", {
+          candidateId: seedCandidate.id,
+          candidateType: seedCandidate.type,
+        });
+        return notFound(req.id, "Experience candidate not found.");
+      }
+      const requestedSourceCandidateIds = readOptionalStringArray(params, "sourceCandidateIds");
+      const requestedPreviewItems = requestedSourceCandidateIds.length > 0
+        ? filterExperienceSynthesisPreviewItemsByCandidateIds(preview.items, requestedSourceCandidateIds)
+        : preview.items;
+      const maxSimilarSources = getExperienceSynthesisMaxSimilarSources();
+      const selection = selectExperienceSynthesisPreviewItems(
+        requestedPreviewItems,
+        maxSimilarSources,
+      );
+      const orderedSourceCandidateIds = [
+        seedCandidate.id,
+        ...requestedPreviewItems.map((item) => item.candidateId),
+      ];
+      const limitedOrderedSourceCandidateIds = [
+        seedCandidate.id,
+        ...selection.selectedItems.map((item) => item.candidateId),
+      ];
+      if (orderedSourceCandidateIds.length > limitedOrderedSourceCandidateIds.length) {
+        logWarn("Experience synthesis source candidates were truncated to the per-run limit", {
+          candidateId: seedCandidate.id,
+          candidateType: seedCandidate.type,
+          requestedSourceCount: requestedSourceCandidateIds.length,
+          orderedSourceCount: orderedSourceCandidateIds.length,
+          selectedSourceCount: limitedOrderedSourceCandidateIds.length,
+          selectedSameFamilyCount: selection.selectedSameFamilyCount,
+          selectedSimilarCount: selection.selectedSimilarCount,
+          maxSimilarSources,
+        });
+      }
+      const sourceCandidates = limitedOrderedSourceCandidateIds
+        .map((id) => manager.getExperienceCandidate(id))
+        .filter((item): item is ExperienceCandidate => {
+          if (!item) {
+            return false;
+          }
+          return item.type === seedCandidate.type
+            && item.status === "draft";
+        });
+      logDebug("Experience synthesis create requested", {
+        candidateId: seedCandidate.id,
+        candidateType: seedCandidate.type,
+        requestedSourceCount: requestedSourceCandidateIds.length,
+        orderedSourceCount: orderedSourceCandidateIds.length,
+        selectedSourceCount: limitedOrderedSourceCandidateIds.length,
+        selectedSameFamilyCount: selection.selectedSameFamilyCount,
+        selectedSimilarCount: selection.selectedSimilarCount,
+        resolvedDraftSourceCount: sourceCandidates.length,
+        previewMatchedCount: preview.items.length,
+      });
+      if (!sourceCandidates.length) {
+        logWarn("Experience synthesis create aborted because no draft source candidates were resolved", {
+          candidateId: seedCandidate.id,
+          candidateType: seedCandidate.type,
+          requestedSourceCandidateIds,
+          orderedSourceCandidateIds,
+        });
+        return invalid(req.id, "No draft source candidates are available for synthesis.");
+      }
+
+      try {
+        const template = await resolveExperienceSynthesisTemplate(ctx.stateDir, seedCandidate.type);
+        const systemPrompt = buildExperienceSynthesisSystemPrompt(template.content);
+        const userPrompt = buildExperienceSynthesisUserPrompt({
+          templateId: template.id,
+          seedCandidate,
+          sourceCandidates,
+        });
+        const scaleWarning = buildExperienceSynthesisScaleWarning({
+          requestedSourceCount: requestedSourceCandidateIds.length > 0
+            ? requestedSourceCandidateIds.length
+            : preview.items.length + 1,
+          orderedSourceCount: limitedOrderedSourceCandidateIds.length,
+          sourceCandidates,
+          systemPrompt,
+          userPrompt,
+        });
+        if (scaleWarning) {
+          logWarn("Experience synthesis source set is large; model call may become unstable", {
+            candidateId: seedCandidate.id,
+            candidateType: seedCandidate.type,
+            templateId: template.id,
+            ...scaleWarning,
+          });
+        }
+        logDebug("Calling primary model for experience synthesis", {
+          candidateId: seedCandidate.id,
+          candidateType: seedCandidate.type,
+          sourceCount: sourceCandidates.length,
+          templateId: template.id,
+          systemPromptLength: systemPrompt.length,
+          userPromptLength: userPrompt.length,
+        });
+        const rawModelOutput = await callPrimaryModelForExperienceSynthesis({
+          ctx,
+          system: systemPrompt,
+          user: userPrompt,
+        });
+        logDebug("Primary model returned experience synthesis output", {
+          candidateId: seedCandidate.id,
+          candidateType: seedCandidate.type,
+          outputLength: rawModelOutput.length,
+        });
+        const parsed = parseExperienceSynthesisModelOutput(rawModelOutput);
+        const title = normalizeText(parsed.title) || readFirstMarkdownTitle(parsed.content) || seedCandidate.title;
+        const summary = normalizeText(parsed.summary) || readExperienceSynthesisSummary(seedCandidate.type, parsed.content) || seedCandidate.summary;
+        const slug = buildExperienceCandidateSlug(seedCandidate.type, {
+          title,
+          slug: normalizeText(parsed.slug),
+          fallback: seedCandidate.sourceTaskSnapshot?.taskId || seedCandidate.taskId,
+          objective: seedCandidate.sourceTaskSnapshot?.objective,
+          summary,
+        });
+        const validationIssues = seedCandidate.type === "method"
+          ? validateMethodCandidateDraftForPublish(parsed.content)
+          : validateSkillCandidateDraftForPublish(parsed.content);
+        if (validationIssues.length > 0) {
+          logWarn("Synthesized experience draft failed validation", {
+            candidateId: seedCandidate.id,
+            candidateType: seedCandidate.type,
+            sourceCount: sourceCandidates.length,
+            validationIssues,
+          });
+          return invalid(req.id, `Synthesized ${seedCandidate.type} draft failed validation: ${validationIssues.join("；")}`);
+        }
+
+        const createdCandidate = manager.createSynthesizedExperienceCandidate({
+          seedCandidate,
+          sourceCandidates,
+          title,
+          slug,
+          summary,
+          content: parsed.content,
+          metadata: {
+            draftOrigin: {
+              kind: "synthesized",
+            },
+            synthesis: {
+              seedCandidateId: seedCandidate.id,
+              sourceCandidateIds: sourceCandidates.map((item) => item.id),
+              sourceCount: sourceCandidates.length,
+              createdBy: "main_model",
+              templateId: template.id,
+              templatePath: template.path ?? undefined,
+            },
+          },
+        });
+        logDebug("Experience synthesis draft created", {
+          candidateId: seedCandidate.id,
+          createdCandidateId: createdCandidate.id,
+          candidateType: seedCandidate.type,
+          sourceCount: sourceCandidates.length,
+          templateId: template.id,
+        });
+        const skillFreshnessSnapshot = await buildScopedSkillFreshnessSnapshot(ctx.stateDir, manager);
+        return ok(req.id, {
+          candidate: attachSkillFreshnessToCandidatePayload(
+            toExperienceCandidatePayloadItem(createdCandidate, residentPolicy),
+            createdCandidate,
+            skillFreshnessSnapshot,
+          ),
+          created: true,
+          sourceCount: sourceCandidates.length,
+          sourceCandidateIds: sourceCandidates.map((item) => item.id),
+          templateInfo: {
+            id: template.id,
+            path: template.path,
+          },
+          queryView: buildResidentMemoryQueryView(residentPolicy),
+        });
+      } catch (error) {
+        logError("Experience synthesis create failed", {
+          candidateId: seedCandidate.id,
+          candidateType: seedCandidate.type,
+          sourceCount: sourceCandidates.length,
+          requestedSourceCount: requestedSourceCandidateIds.length,
+          error: summarizeExperienceSynthesisError(error),
+        });
+        throw error;
+      }
+    }
+
     case "experience.usage.get": {
       const manager = resolveScopedMemoryManager(params);
       const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
@@ -826,11 +1158,68 @@ function readOptionalBoolean(params: Record<string, unknown>, key: string): bool
   return undefined;
 }
 
+function readOptionalStringArray(params: Record<string, unknown>, key: string): string[] {
+  const raw = params[key];
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter(Boolean);
+}
+
 function readOptionalNonNegativeInteger(params: Record<string, unknown>, key: string): number | undefined {
   const raw = params[key];
   const parsed = typeof raw === "number" ? raw : Number(raw);
   if (!Number.isInteger(parsed) || parsed < 0) return undefined;
   return parsed;
+}
+
+function normalizeText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function dedupeStrings(values: string[]): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const normalized = normalizeText(value);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number, minimum = 1): number {
+  const raw = process.env[name];
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  const normalized = Math.floor(parsed);
+  return normalized >= minimum ? normalized : fallback;
+}
+
+function getExperienceSynthesisMaxSimilarSources(): number {
+  return readPositiveIntegerEnv(
+    EXPERIENCE_SYNTHESIS_MAX_SIMILAR_SOURCES_ENV,
+    DEFAULT_EXPERIENCE_SYNTHESIS_MAX_SIMILAR_SOURCES,
+  );
+}
+
+function getExperienceSynthesisMaxSourceContentChars(): number {
+  return readPositiveIntegerEnv(
+    EXPERIENCE_SYNTHESIS_MAX_SOURCE_CONTENT_CHARS_ENV,
+    DEFAULT_EXPERIENCE_SYNTHESIS_MAX_SOURCE_CONTENT_CHARS,
+    200,
+  );
+}
+
+function getExperienceSynthesisTotalSourceContentCharBudget(): number {
+  return readPositiveIntegerEnv(
+    EXPERIENCE_SYNTHESIS_TOTAL_SOURCE_CONTENT_CHAR_BUDGET_ENV,
+    DEFAULT_EXPERIENCE_SYNTHESIS_TOTAL_SOURCE_CONTENT_CHAR_BUDGET,
+    1_000,
+  );
 }
 
 function confirmationRequired(id: string, message: string): GatewayResFrame {
@@ -1053,6 +1442,497 @@ function toTaskListPayloadItems(items: Array<any>, summaryOnly: boolean): Array<
     createdAt: item.createdAt,
     metadata: item.metadata,
   }));
+}
+
+async function resolveExperienceSynthesisTemplateInfo(
+  stateDir: string,
+  type: ExperienceCandidateType,
+): Promise<{ id: string; path: string | null }> {
+  const resolved = await resolveExperienceSynthesisTemplate(stateDir, type, { includeContent: false });
+  return {
+    id: resolved.id,
+    path: resolved.path,
+  };
+}
+
+async function resolveExperienceSynthesisTemplate(
+  stateDir: string,
+  type: ExperienceCandidateType,
+  options: { includeContent?: boolean } = {},
+): Promise<{ id: string; path: string | null; content: string }> {
+  const fileName = type === "skill" ? "skill-synthesis.md" : "method-synthesis.md";
+  const candidatePaths = [
+    path.join(stateDir, "experience-templates", fileName),
+    path.resolve(process.cwd(), "docs", "experience-templates", fileName),
+  ];
+  for (const candidatePath of candidatePaths) {
+    const content = await fs.readFile(candidatePath, "utf-8").catch(() => "");
+    if (!content.trim()) {
+      continue;
+    }
+    return {
+      id: `${type}-synthesis`,
+      path: candidatePath,
+      content: options.includeContent === false ? "" : content,
+    };
+  }
+  throw new Error(`Experience synthesis template not found for ${type}. Checked: ${candidatePaths.join(" | ")}`);
+}
+
+function buildExperienceSynthesisSystemPrompt(templateContent: string): string {
+  return [
+    "你是经验能力合成器。",
+    "你的任务是阅读多个相似的经验草稿，综合生成一个新的高质量 draft 候选。",
+    "严格遵守模板中的结构、约束、章节与质量要求。",
+    "不要输出解释，不要输出额外 prose，只返回一个 JSON 对象。",
+    'JSON 结构必须是 {"title":"...","summary":"...","content":"完整 markdown"}。',
+    "",
+    "以下是合成模板：",
+    templateContent.trim(),
+  ].join("\n");
+}
+
+function filterExperienceSynthesisPreviewItemsByCandidateIds(
+  items: ExperienceSynthesisPreviewItem[],
+  candidateIds: string[],
+): ExperienceSynthesisPreviewItem[] {
+  const requestedIds = new Set(dedupeStrings(candidateIds));
+  if (!requestedIds.size) {
+    return Array.isArray(items) ? [...items] : [];
+  }
+  return (Array.isArray(items) ? items : []).filter((item) => requestedIds.has(String(item?.candidateId ?? "")));
+}
+
+export function selectExperienceSynthesisPreviewItems(
+  items: ExperienceSynthesisPreviewItem[],
+  maxCount: number,
+): {
+  selectedItems: ExperienceSynthesisPreviewItem[];
+  sameFamilyCount: number;
+  similarCount: number;
+  selectedSameFamilyCount: number;
+  selectedSimilarCount: number;
+} {
+  const normalizedMaxCount = Number.isInteger(maxCount) && maxCount > 0 ? maxCount : getExperienceSynthesisMaxSimilarSources();
+  const sameFamilyItems: ExperienceSynthesisPreviewItem[] = [];
+  const similarItems: ExperienceSynthesisPreviewItem[] = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const relation = normalizeText(item?.relation).toLowerCase();
+    if (relation === "same_family") {
+      sameFamilyItems.push(item);
+      continue;
+    }
+    similarItems.push(item);
+  }
+  const selectedSameFamilyItems = sameFamilyItems.slice(0, normalizedMaxCount);
+  const selectedSimilarItems = similarItems.slice(0, Math.max(0, normalizedMaxCount - selectedSameFamilyItems.length));
+  return {
+    selectedItems: [...selectedSameFamilyItems, ...selectedSimilarItems],
+    sameFamilyCount: sameFamilyItems.length,
+    similarCount: similarItems.length,
+    selectedSameFamilyCount: selectedSameFamilyItems.length,
+    selectedSimilarCount: selectedSimilarItems.length,
+  };
+}
+
+function buildExperienceSynthesisUserPrompt(input: {
+  templateId: string;
+  seedCandidate: ExperienceCandidate;
+  sourceCandidates: ExperienceCandidate[];
+}): string {
+  const sourcePayloadInfo = buildExperienceSynthesisSourcePayload(input.sourceCandidates);
+  const sourcePayload = sourcePayloadInfo.text;
+
+  return [
+    `candidateType: ${input.seedCandidate.type}`,
+    `templateId: ${input.templateId}`,
+    `seedCandidateId: ${input.seedCandidate.id}`,
+    `seedCandidateTitle: ${input.seedCandidate.title}`,
+    `sourceCount: ${input.sourceCandidates.length}`,
+    `sourceContentBudget: ${sourcePayloadInfo.totalBudget}`,
+    `sourceContentCharsUsed: ${sourcePayloadInfo.usedChars}`,
+    "",
+    "要求：",
+    "1. 生成一个新的、更完整的 draft，而不是拼接原文。",
+    "2. 优先保留多个草稿反复出现的稳定共性。",
+    "3. 如果不同草稿存在冲突，输出更稳妥、更通用、边界更清晰的版本。",
+    "4. content 必须是完整 markdown，并满足后续 publish 校验。",
+    "5. title / summary / content 三个字段都必须填写。",
+    "",
+    sourcePayload,
+  ].join("\n");
+}
+
+function buildExperienceSynthesisSourcePayload(sourceCandidates: ExperienceCandidate[]): {
+  text: string;
+  usedChars: number;
+  totalBudget: number;
+} {
+  const candidates = Array.isArray(sourceCandidates) ? sourceCandidates : [];
+  if (!candidates.length) {
+    return {
+      text: "",
+      usedChars: 0,
+      totalBudget: getExperienceSynthesisTotalSourceContentCharBudget(),
+    };
+  }
+
+  const totalBudget = getExperienceSynthesisTotalSourceContentCharBudget();
+  const perCandidateMaxChars = getExperienceSynthesisMaxSourceContentChars();
+  const perCandidateContentLimit = Math.min(
+    perCandidateMaxChars,
+    Math.max(600, Math.floor(totalBudget / candidates.length)),
+  );
+  let usedChars = 0;
+  const sections = candidates.map((candidate, index) => {
+    const snapshot = candidate.sourceTaskSnapshot && typeof candidate.sourceTaskSnapshot === "object"
+      ? candidate.sourceTaskSnapshot as unknown as Record<string, unknown>
+      : {};
+    const toolCalls = Array.isArray(snapshot.toolCalls) ? snapshot.toolCalls : [];
+    const toolNames = toolCalls.length > 0
+      ? toolCalls.map((item) => normalizeText((item as { toolName?: unknown } | null | undefined)?.toolName)).filter(Boolean)
+      : [];
+    const contentExcerpt = truncateText(candidate.content, perCandidateContentLimit);
+    usedChars += contentExcerpt.length;
+    return [
+      `## Source ${index + 1}`,
+      `- candidateId: ${candidate.id}`,
+      `- type: ${candidate.type}`,
+      `- taskId: ${candidate.taskId}`,
+      `- sourceTaskId: ${normalizeText(snapshot.taskId) || candidate.taskId}`,
+      `- title: ${candidate.title}`,
+      `- slug: ${candidate.slug}`,
+      `- summary: ${candidate.summary || "-"}`,
+      `- objective: ${normalizeText(snapshot.objective) || "-"}`,
+      `- taskSummary: ${normalizeText(snapshot.summary) || "-"}`,
+      `- reflection: ${normalizeText(snapshot.reflection) || "-"}`,
+      `- outcome: ${normalizeText(snapshot.outcome) || "-"}`,
+      `- tools: ${toolNames.join(", ") || "-"}`,
+      "",
+      "### Draft Content",
+      contentExcerpt,
+    ].join("\n");
+  }).join("\n\n");
+
+  return {
+    text: sections,
+    usedChars,
+    totalBudget,
+  };
+}
+
+const EXPERIENCE_SYNTHESIS_LARGE_SOURCE_COUNT_WARN_THRESHOLD = 12;
+const EXPERIENCE_SYNTHESIS_LARGE_PROMPT_CHAR_WARN_THRESHOLD = 28_000;
+
+function buildExperienceSynthesisScaleWarning(input: {
+  requestedSourceCount: number;
+  orderedSourceCount: number;
+  sourceCandidates: ExperienceCandidate[];
+  systemPrompt: string;
+  userPrompt: string;
+}): Record<string, unknown> | null {
+  const requestedSourceCount = input.requestedSourceCount;
+  const orderedSourceCount = input.orderedSourceCount;
+  const sourceCount = input.sourceCandidates.length;
+  const systemPromptLength = input.systemPrompt.length;
+  const userPromptLength = input.userPrompt.length;
+  const promptLength = systemPromptLength + userPromptLength;
+  const sourcePayloadInfo = buildExperienceSynthesisSourcePayload(input.sourceCandidates);
+  const reasons: string[] = [];
+  if (requestedSourceCount >= EXPERIENCE_SYNTHESIS_LARGE_SOURCE_COUNT_WARN_THRESHOLD) {
+    reasons.push(`requestedSourceCount>=${EXPERIENCE_SYNTHESIS_LARGE_SOURCE_COUNT_WARN_THRESHOLD}`);
+  }
+  if (orderedSourceCount >= EXPERIENCE_SYNTHESIS_LARGE_SOURCE_COUNT_WARN_THRESHOLD) {
+    reasons.push(`orderedSourceCount>=${EXPERIENCE_SYNTHESIS_LARGE_SOURCE_COUNT_WARN_THRESHOLD}`);
+  }
+  if (sourceCount >= EXPERIENCE_SYNTHESIS_LARGE_SOURCE_COUNT_WARN_THRESHOLD) {
+    reasons.push(`sourceCount>=${EXPERIENCE_SYNTHESIS_LARGE_SOURCE_COUNT_WARN_THRESHOLD}`);
+  }
+  if (promptLength >= EXPERIENCE_SYNTHESIS_LARGE_PROMPT_CHAR_WARN_THRESHOLD) {
+    reasons.push(`promptLength>=${EXPERIENCE_SYNTHESIS_LARGE_PROMPT_CHAR_WARN_THRESHOLD}`);
+  }
+  if (!reasons.length) {
+    return null;
+  }
+  return {
+    reason: reasons.join(", "),
+    requestedSourceCount,
+    orderedSourceCount,
+    sourceCount,
+    systemPromptLength,
+    userPromptLength,
+    promptLength,
+    sourceContentBudget: sourcePayloadInfo.totalBudget,
+    sourceContentCharsUsed: sourcePayloadInfo.usedChars,
+    candidateIdsSample: input.sourceCandidates.slice(0, 8).map((candidate) => candidate.id),
+  };
+}
+
+async function callPrimaryModelForExperienceSynthesis(input: {
+  ctx: MemoryExperienceMethodContext;
+  system: string;
+  user: string;
+}): Promise<string> {
+  if (typeof input.ctx.callPrimaryModel === "function") {
+    return await input.ctx.callPrimaryModel({
+      system: input.system,
+      user: input.user,
+      maxTokens: 8_000,
+      model: input.ctx.primaryModelConfig?.model,
+      thinking: input.ctx.primaryModelConfig?.thinking,
+      reasoningEffort: input.ctx.primaryModelConfig?.reasoningEffort,
+    });
+  }
+
+  const config = input.ctx.primaryModelConfig;
+  if (!config?.baseUrl || !config.apiKey || !config.model) {
+    throw new Error("Primary model is not configured for experience synthesis.");
+  }
+
+  const payload: Record<string, unknown> = {
+    model: config.model,
+    messages: [
+      { role: "system", content: input.system },
+      { role: "user", content: input.user },
+    ],
+    temperature: 0.2,
+    max_tokens: 8_000,
+  };
+  if (config.thinking) {
+    payload.thinking = config.thinking;
+  }
+  if (config.reasoningEffort) {
+    payload.reasoning_effort = config.reasoningEffort;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort(new Error(`Experience synthesis model call timed out after ${EXPERIENCE_SYNTHESIS_MODEL_CALL_TIMEOUT_MS}ms.`));
+  }, EXPERIENCE_SYNTHESIS_MODEL_CALL_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch(buildOpenAIChatCompletionsUrl(config.baseUrl), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`Experience synthesis model call timed out after ${EXPERIENCE_SYNTHESIS_MODEL_CALL_TIMEOUT_MS}ms.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Experience synthesis model call failed: ${response.status} ${truncateText(text, 200)}`.trim());
+  }
+  const data = await response.json() as {
+    choices?: Array<{
+      message?: {
+        content?: string | Array<{ text?: string | null; type?: string | null }> | null;
+        reasoning_content?: string | null;
+      };
+      finish_reason?: string | null;
+    }>;
+  };
+  const choice = data.choices?.[0];
+  const content = extractExperienceSynthesisResponseText(choice?.message?.content);
+  if (!content) {
+    const reasoningContent = normalizeText(choice?.message?.reasoning_content);
+    const finishReason = normalizeText(choice?.finish_reason);
+    throw new Error(
+      `Experience synthesis model returned empty content. finish_reason=${finishReason || "unknown"}, reasoning_content=${reasoningContent ? `present(${reasoningContent.length})` : "absent"}.`,
+    );
+  }
+  return content;
+}
+
+function extractExperienceSynthesisResponseText(
+  content: string | Array<{ text?: string | null; type?: string | null }> | null | undefined,
+): string {
+  if (typeof content === "string") {
+    return normalizeText(content);
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const chunks: string[] = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    if (typeof part.text === "string" && part.text.trim()) {
+      chunks.push(part.text.trim());
+    }
+  }
+  return normalizeText(chunks.join("\n"));
+}
+
+function parseExperienceSynthesisModelOutput(raw: string): { title: string; summary: string; slug: string; content: string } {
+  const extracted = normalizeJsonCandidate(raw);
+  const parsed = JSON.parse(extracted) as Record<string, unknown>;
+  const title = normalizeText(parsed.title);
+  const summary = normalizeText(parsed.summary);
+  const slug = normalizeText(parsed.slug);
+  const content = normalizeText(parsed.content);
+  if (!content) {
+    throw new Error("Synthesized candidate content is empty.");
+  }
+  return {
+    title,
+    summary,
+    slug,
+    content,
+  };
+}
+
+function summarizeExperienceSynthesisError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: truncateText(error.stack || "", 1200),
+    };
+  }
+  return {
+    message: String(error),
+  };
+}
+
+function normalizeJsonCandidate(raw: string): string {
+  const direct = stripMarkdownFence(stripReasoningArtifacts(raw));
+  if (direct.startsWith("{") && direct.endsWith("}")) {
+    return direct;
+  }
+
+  const extracted = extractFirstJsonObject(direct);
+  if (extracted) {
+    return extracted;
+  }
+  throw new Error(`Model did not return a valid JSON object. Preview: ${truncateText(raw, 160)}`);
+}
+
+function stripMarkdownFence(value: string): string {
+  return value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+}
+
+function stripReasoningArtifacts(value: string): string {
+  return value
+    .replace(/^\uFEFF/, "")
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, "")
+    .trim();
+}
+
+function extractFirstJsonObject(value: string): string | null {
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (start < 0) {
+      if (char === "{") {
+        start = index;
+        depth = 1;
+        inString = false;
+        escaped = false;
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return value.slice(start, index + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function readExperienceSynthesisSummary(type: ExperienceCandidateType, content: string): string {
+  const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  const frontmatterBody = frontmatter?.[1] || "";
+  const preferredKey = type === "skill" ? "description" : "summary";
+  const frontmatterValue = readFrontmatterValue(frontmatterBody, preferredKey)
+    || readFrontmatterValue(frontmatterBody, "summary");
+  if (frontmatterValue) {
+    return frontmatterValue;
+  }
+  const blockquoteLine = content.match(/^>\s+(.+)$/m)?.[1]?.trim();
+  if (blockquoteLine) {
+    return blockquoteLine;
+  }
+  const paragraph = content
+    .replace(/^---[\s\S]*?---\s*/m, "")
+    .split(/\r?\n\r?\n/)
+    .map((item) => item.trim())
+    .find((item) => item && !item.startsWith("#"));
+  return paragraph || "";
+}
+
+function readFrontmatterValue(frontmatter: string, key: string): string {
+  const pattern = new RegExp(`^${escapeRegExp(key)}\\s*:\\s*(.+)$`, "im");
+  const match = frontmatter.match(pattern);
+  if (!match) {
+    return "";
+  }
+  return String(match[1] ?? "").trim().replace(/^['"]|['"]$/g, "");
+}
+
+function truncateText(value: string | undefined, maxLength = 2800): string {
+  const normalized = normalizeText(value);
+  if (!normalized) return "";
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, Math.max(0, maxLength - 3))}...`
+    : normalized;
+}
+
+function buildOpenAIChatCompletionsUrl(baseUrl: string): string {
+  const trimmed = String(baseUrl ?? "").trim().replace(/\/+$/, "");
+  if (!trimmed) {
+    return "/v1/chat/completions";
+  }
+  if (trimmed.endsWith("/chat/completions")) {
+    return trimmed;
+  }
+  return /\/v\d+$/.test(trimmed)
+    ? `${trimmed}/chat/completions`
+    : `${trimmed}/v1/chat/completions`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function ok(id: string, payload: Record<string, unknown>): GatewayResFrame {

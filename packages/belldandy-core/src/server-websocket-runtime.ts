@@ -336,12 +336,30 @@ export function createGatewayWebSocketRuntime(
         return;
       }
 
-      const response = await options.onRequest(ws, frame, {
-        clientId: state.clientId ?? state.sessionId,
-        userUuid: state.userUuid,
-      });
-      if (response) {
-        sendGatewayResponse(ws, response);
+      try {
+        const response = await options.onRequest(ws, frame, {
+          clientId: state.clientId ?? state.sessionId,
+          userUuid: state.userUuid,
+        });
+        if (response) {
+          sendGatewayResponse(ws, response);
+        }
+      } catch (error) {
+        options.log.error("ws", "Request handler threw an uncaught error", {
+          clientId: state.clientId ?? state.sessionId,
+          method: frame.method,
+          requestId: frame.id,
+          error: summarizeWebSocketRuntimeError(error),
+        });
+        sendGatewayResponse(ws, {
+          type: "res",
+          id: frame.id,
+          ok: false,
+          error: {
+            code: "internal_error",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        });
       }
     });
 
@@ -375,6 +393,19 @@ export function sendGatewayEvent(ws: WebSocket, frame: GatewayEventFrame) {
 function sendGatewayFrame(ws: WebSocket, frame: GatewayFrame) {
   if (ws.readyState !== 1) return;
   ws.send(JSON.stringify(frame));
+}
+
+function summarizeWebSocketRuntimeError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack ? String(error.stack).slice(0, 1600) : undefined,
+    };
+  }
+  return {
+    message: String(error),
+  };
 }
 
 function verifyWebSocketOrigin(origin: string | undefined, host: string, log: GatewayWebSocketLog): boolean {

@@ -172,10 +172,33 @@ export function createExperienceWorkbenchFeature({
     experienceGenerateSkillBtn,
     experienceWorkbenchListEl,
     experienceWorkbenchDetailEl,
+    experienceSynthesisModalEl,
+    experienceSynthesisModalTitleEl,
+    experienceSynthesisModalSummaryEl,
+    experienceSynthesisModalStatusEl,
+    experienceSynthesisModalListEl,
+    experienceSynthesisModalCloseBtn,
+    experienceSynthesisModalCancelBtn,
+    experienceSynthesisModalSubmitBtn,
   } = refs;
 
   let uiBound = false;
   let pendingGenerateActionKey = "";
+
+  function getSynthesisModalState() {
+    const state = getExperienceWorkbenchState();
+    if (!state.synthesisModal || typeof state.synthesisModal !== "object") {
+      state.synthesisModal = {
+        open: false,
+        loading: false,
+        submitting: false,
+        error: "",
+        seedCandidateId: "",
+        preview: null,
+      };
+    }
+    return state.synthesisModal;
+  }
 
   function getActiveAgentId() {
     const state = getExperienceWorkbenchState();
@@ -354,6 +377,7 @@ export function createExperienceWorkbenchFeature({
         item?.slug,
         item?.summary,
         item?.taskId,
+        item?.sourceTaskSnapshot?.taskId,
         item?.publishedPath,
       ]
         .map((value) => normalizeText(value).toLowerCase())
@@ -411,6 +435,35 @@ export function createExperienceWorkbenchFeature({
     return segments.slice(-3).join("/");
   }
 
+  function resolveExperienceDisplayTaskId(candidate) {
+    const snapshotTaskId = normalizeText(candidate?.sourceTaskSnapshot?.taskId);
+    return snapshotTaskId || normalizeText(candidate?.taskId);
+  }
+
+  function isSynthesizedCandidate(candidate) {
+    return normalizeText(candidate?.metadata?.draftOrigin?.kind).toLowerCase() === "synthesized";
+  }
+
+  function getSynthesisSourceCount(candidate) {
+    const sourceCount = Number(candidate?.metadata?.synthesis?.sourceCount);
+    return Number.isFinite(sourceCount) && sourceCount > 0 ? sourceCount : 0;
+  }
+
+  function upsertExperienceCandidateList(items, candidate, options = {}) {
+    const safeItems = Array.isArray(items) ? [...items] : [];
+    const normalizedCandidateId = normalizeText(candidate?.id);
+    if (!normalizedCandidateId) {
+      return safeItems;
+    }
+    const draftOnly = options?.draftOnly === true;
+    const nextItems = safeItems.filter((item) => normalizeText(item?.id) !== normalizedCandidateId);
+    if (!draftOnly || normalizeCandidateStatus(candidate?.status) === "draft") {
+      nextItems.unshift(candidate);
+    }
+    nextItems.sort(compareCandidateByUpdatedAtDesc);
+    return nextItems;
+  }
+
   function formatCandidateTypeLabel(value) {
     return normalizeCandidateType(value) === "skill"
       ? t("experience.listTypeSkill", {}, "Skill")
@@ -423,6 +476,14 @@ export function createExperienceWorkbenchFeature({
     if (normalized === "accepted") return t("experience.listStatusAccepted", {}, "Accepted");
     if (normalized === "rejected") return t("experience.listStatusRejected", {}, "Rejected");
     return t("experience.listStatusUnknown", {}, "Unknown");
+  }
+
+  function formatSynthesisRelationLabel(value) {
+    const normalized = normalizeText(value).toLowerCase();
+    if (normalized === "same_family") {
+      return t("experience.synthesizeRelationSameFamily", {}, "同类");
+    }
+    return t("experience.synthesizeRelationSimilar", {}, "近似");
   }
 
   function renderExperienceWorkbenchStats(stats = null) {
@@ -490,13 +551,17 @@ export function createExperienceWorkbenchFeature({
       const skillFreshnessStatus = typeof item?.skillFreshness?.status === "string"
         ? item.skillFreshness.status.trim()
         : "";
+      const displayTaskId = resolveExperienceDisplayTaskId(item);
+      const synthesized = isSynthesizedCandidate(item);
+      const synthesisSourceCount = getSynthesisSourceCount(item);
       return `
-        <div class="memory-list-item ${isActive ? "active" : ""}" data-experience-candidate-id="${escapeHtml(String(item?.id || ""))}">
+        <div class="memory-list-item ${isActive ? "active" : ""} ${synthesized ? "experience-candidate-synthesized" : ""}" data-experience-candidate-id="${escapeHtml(String(item?.id || ""))}">
           <div class="memory-list-item-title">${escapeHtml(title)}</div>
           <div class="memory-list-item-meta">
             <span>${escapeHtml(formatCandidateTypeLabel(item?.type))}</span>
             <span>${escapeHtml(formatCandidateStatusLabel(item?.status))}</span>
-            ${item?.taskId ? `<span>${escapeHtml(t("experience.listTaskLabel", {}, "Task"))} ${escapeHtml(String(item.taskId))}</span>` : ""}
+            ${displayTaskId ? `<span>${escapeHtml(t("experience.listTaskLabel", {}, "Task"))} ${escapeHtml(displayTaskId)}</span>` : ""}
+            ${synthesized ? `<span class="memory-badge experience-synthesized-badge">${escapeHtml(t("experience.synthesizedBadge", { count: String(synthesisSourceCount || 0) }, synthesisSourceCount > 0 ? `合成稿 · ${synthesisSourceCount}` : "合成稿"))}</span>` : ""}
             ${item?.publishedPath ? `<span class="memory-badge memory-badge-shared">${escapeHtml(t("experience.listPublishedBadge", {}, "Published"))}</span>` : ""}
             ${skillFreshnessStatus ? `<span class="memory-badge">${escapeHtml(skillFreshnessStatus)}</span>` : ""}
             <span>${escapeHtml(formatDateTime(item?.updatedAt || item?.createdAt))}</span>
@@ -638,30 +703,44 @@ export function createExperienceWorkbenchFeature({
           ${safeItems.map((item) => {
             const acceptBusy = pendingActionKey === `candidate:${item?.id}:accept`;
             const rejectBusy = pendingActionKey === `candidate:${item?.id}:reject`;
+            const synthesizeBusy = pendingActionKey === `synthesize-preview:${item?.id}` || pendingActionKey === `synthesize-create:${item?.id}`;
             const reviewDisabled = Boolean(pendingActionKey) && !acceptBusy && !rejectBusy;
             const skillFreshnessStatus = normalizeText(item?.skillFreshness?.status);
             const skillFreshnessSummary = normalizeText(item?.skillFreshness?.summary);
             const summary = normalizeText(item?.summary) || t("experience.listNoSummary", {}, "No summary yet.");
+            const displayTaskId = resolveExperienceDisplayTaskId(item);
+            const synthesized = isSynthesizedCandidate(item);
+            const synthesisSourceCount = getSynthesisSourceCount(item);
+            const candidateId = normalizeText(item?.id);
             return `
-              <div class="memory-usage-overview-row experience-capability-row">
+              <div class="memory-usage-overview-row experience-capability-row ${synthesized ? "experience-candidate-synthesized" : ""}">
                 <div class="memory-usage-overview-row-main experience-capability-row-main">
                   <div class="memory-usage-overview-key">${escapeHtml(item?.title || item?.slug || item?.id || t("memory.candidateUntitled", {}, "Untitled Candidate"))}</div>
                   <div class="memory-usage-overview-meta">
+                    ${candidateId ? `<span class="experience-capability-candidate-id">${escapeHtml(`ID · ${candidateId}`)}</span>` : ""}
                     <span>${escapeHtml(formatCandidateStatusLabel(item?.status))}</span>
-                    ${item?.taskId ? `<span>${escapeHtml(t("experience.listTaskLabel", {}, "Task"))} ${escapeHtml(String(item.taskId))}</span>` : ""}
+                    ${displayTaskId ? `<span>${escapeHtml(t("experience.listTaskLabel", {}, "Task"))} ${escapeHtml(displayTaskId)}</span>` : ""}
                     ${skillFreshnessStatus ? `<span>${escapeHtml(skillFreshnessStatus)}</span>` : ""}
                     <span>${escapeHtml(formatDateTime(item?.updatedAt || item?.createdAt))}</span>
                   </div>
                   <div class="memory-detail-badges">
                     <span class="memory-badge">${escapeHtml(formatCandidateTypeLabel(item?.type))}</span>
                     <span class="memory-badge">${escapeHtml(formatCandidateStatusLabel(item?.status))}</span>
+                    ${synthesized ? `<span class="memory-badge experience-synthesized-badge">${escapeHtml(t("experience.synthesizedBadge", { count: String(synthesisSourceCount || 0) }, synthesisSourceCount > 0 ? `合成稿 · ${synthesisSourceCount}` : "合成稿"))}</span>` : ""}
                     ${skillFreshnessSummary ? `<span class="memory-badge">${escapeHtml(skillFreshnessSummary)}</span>` : ""}
                   </div>
                   <div class="experience-capability-summary">${escapeHtml(summary)}</div>
                 </div>
                 <div class="experience-capability-actions">
                   <button class="memory-usage-action-btn" data-capability-open-candidate-id="${escapeHtml(String(item?.id || ""))}">${escapeHtml(t("experience.capabilityViewDetail", {}, "查看详情"))}</button>
-                  ${item?.taskId ? `<button class="memory-usage-action-btn" data-capability-open-task-id="${escapeHtml(String(item.taskId))}">${escapeHtml(t("experience.capabilityOpenTask", {}, "打开任务"))}</button>` : ""}
+                  ${displayTaskId ? `<button class="memory-usage-action-btn" data-capability-open-task-id="${escapeHtml(displayTaskId)}">${escapeHtml(t("experience.capabilityOpenTask", {}, "打开任务"))}</button>` : ""}
+                  <button
+                    class="memory-usage-action-btn"
+                    data-capability-synthesize-candidate-id="${escapeHtml(String(item?.id || ""))}"
+                    ${synthesizeBusy || reviewDisabled ? "disabled" : ""}
+                  >${escapeHtml(synthesizeBusy
+                    ? t("experience.capabilitySynthesizeBusy", {}, "合成准备中…")
+                    : t("experience.capabilitySynthesize", {}, "合成"))}</button>
                   <button
                     class="memory-usage-action-btn"
                     data-capability-review-candidate-action="accept"
@@ -709,6 +788,12 @@ export function createExperienceWorkbenchFeature({
         const candidateId = node.getAttribute("data-capability-review-candidate-id");
         const action = node.getAttribute("data-capability-review-candidate-action");
         await reviewExperienceCandidate(candidateId, action);
+      });
+    });
+    experienceWorkbenchCapabilityOverviewEl.querySelectorAll("[data-capability-synthesize-candidate-id]").forEach((node) => {
+      node.addEventListener("click", async () => {
+        const candidateId = node.getAttribute("data-capability-synthesize-candidate-id");
+        await openExperienceSynthesisModal(candidateId);
       });
     });
     experienceWorkbenchCapabilityOverviewEl.querySelectorAll("[data-capability-bulk-reject-type]").forEach((node) => {
@@ -875,6 +960,40 @@ export function createExperienceWorkbenchFeature({
     });
   }
 
+  async function requestExperienceCandidateSynthesizePreview(candidateId) {
+    const normalizedCandidateId = normalizeText(candidateId);
+    if (!normalizedCandidateId) return null;
+    return sendReq({
+      type: "req",
+      id: makeId(),
+      method: "experience.candidate.synthesize.preview",
+      params: {
+        candidateId: normalizedCandidateId,
+        agentId: getActiveAgentId(),
+        limit: 50,
+      },
+    });
+  }
+
+  async function requestExperienceCandidateSynthesizeCreate(candidateId, sourceCandidateIds = []) {
+    const normalizedCandidateId = normalizeText(candidateId);
+    if (!normalizedCandidateId) return null;
+    const normalizedSourceCandidateIds = Array.isArray(sourceCandidateIds)
+      ? sourceCandidateIds.map((item) => normalizeText(item)).filter(Boolean)
+      : [];
+    return sendReq({
+      type: "req",
+      id: makeId(),
+      method: "experience.candidate.synthesize.create",
+      timeoutMs: 420_000,
+      params: {
+        candidateId: normalizedCandidateId,
+        agentId: getActiveAgentId(),
+        ...(normalizedSourceCandidateIds.length ? { sourceCandidateIds: normalizedSourceCandidateIds } : {}),
+      },
+    });
+  }
+
   function buildExperiencePublishConfirmMessage(candidate) {
     const safeCandidate = candidate && typeof candidate === "object" ? candidate : {};
     const title = normalizeText(safeCandidate.title)
@@ -962,6 +1081,346 @@ export function createExperienceWorkbenchFeature({
     return rejectedIds.size;
   }
 
+  function applyCreatedExperienceCandidate(candidate) {
+    if (!candidate || typeof candidate !== "object") return;
+    const normalizedCandidateId = normalizeText(candidate.id);
+    if (!normalizedCandidateId) return;
+    const state = getExperienceWorkbenchState();
+    state.items = upsertExperienceCandidateList(state.items, candidate);
+    state.draftItems = upsertExperienceCandidateList(state.draftItems, candidate, { draftOnly: true });
+    state.selectedId = normalizedCandidateId;
+    state.selectedCandidate = {
+      ...(findExperienceCandidateInState(normalizedCandidateId) || {}),
+      ...candidate,
+    };
+    state.stats = mergeExperienceStats(state.stats, countExperienceStats(state.items));
+  }
+
+  function renderExperienceSynthesisModal() {
+    if (
+      !experienceSynthesisModalEl
+      || !experienceSynthesisModalTitleEl
+      || !experienceSynthesisModalSummaryEl
+      || !experienceSynthesisModalStatusEl
+      || !experienceSynthesisModalListEl
+      || !experienceSynthesisModalSubmitBtn
+      || !experienceSynthesisModalCancelBtn
+      || !experienceSynthesisModalCloseBtn
+    ) {
+      return;
+    }
+
+    const modalState = getSynthesisModalState();
+    const preview = modalState.preview && typeof modalState.preview === "object" ? modalState.preview : null;
+    const seedCandidate = preview?.seedCandidate || findExperienceCandidateInState(modalState.seedCandidateId);
+    const candidateType = normalizeCandidateType(preview?.candidateType || seedCandidate?.type);
+    const isSkill = candidateType === "skill";
+    const totalCount = Number(preview?.totalCount);
+    const taskCount = Number(preview?.taskCount);
+    const sourceCandidateIds = Array.isArray(preview?.sourceCandidateIds)
+      ? preview.sourceCandidateIds.map((item) => normalizeText(item)).filter(Boolean)
+      : [];
+    const sameFamilyCount = Number(preview?.sameFamilyCount);
+    const similarCount = Number(preview?.similarCount);
+    const selectedSameFamilyCount = Number(preview?.selectedSameFamilyCount);
+    const selectedSourceCount = Number(preview?.selectedSourceCount);
+    const selectedSimilarCount = Number(preview?.selectedSimilarCount);
+    const maxSimilarSourceCount = Number(preview?.maxSimilarSourceCount);
+    const templatePath = normalizeText(preview?.templateInfo?.path);
+    const seedTitle = normalizeText(seedCandidate?.title)
+      || normalizeText(seedCandidate?.slug)
+      || normalizeText(seedCandidate?.id)
+      || t("memory.candidateUntitled", {}, "Untitled Candidate");
+    const seedDisplayTaskId = resolveExperienceDisplayTaskId(seedCandidate);
+    const previewItems = Array.isArray(preview?.items) ? preview.items : [];
+    const derivedSameFamilyCount = previewItems.filter((item) => normalizeText(item?.relation).toLowerCase() === "same_family").length;
+    const derivedSimilarCount = Math.max(0, previewItems.length - derivedSameFamilyCount);
+    const effectiveSameFamilyCount = Number.isFinite(sameFamilyCount) && sameFamilyCount >= 0
+      ? sameFamilyCount
+      : derivedSameFamilyCount;
+    const effectiveSimilarCount = Number.isFinite(similarCount) && similarCount >= 0
+      ? similarCount
+      : derivedSimilarCount;
+    const effectiveSelectedSourceCount = Number.isFinite(selectedSourceCount) && selectedSourceCount > 0
+      ? selectedSourceCount
+      : sourceCandidateIds.length;
+    const effectiveSelectedSameFamilyCount = Number.isFinite(selectedSameFamilyCount) && selectedSameFamilyCount >= 0
+      ? selectedSameFamilyCount
+      : Math.min(effectiveSameFamilyCount, Math.max(0, effectiveSelectedSourceCount - 1));
+    const effectiveSelectedSimilarCount = Number.isFinite(selectedSimilarCount) && selectedSimilarCount >= 0
+      ? selectedSimilarCount
+      : Math.max(0, Math.max(0, effectiveSelectedSourceCount - 1) - effectiveSelectedSameFamilyCount);
+    const effectiveMaxSimilarSourceCount = Number.isFinite(maxSimilarSourceCount) && maxSimilarSourceCount > 0
+      ? maxSimilarSourceCount
+      : Math.max(0, effectiveSelectedSameFamilyCount + effectiveSelectedSimilarCount);
+    const statusText = modalState.loading
+      ? t("experience.synthesizeModalLoading", {}, "正在检索同类与近似草稿…")
+      : modalState.error
+        ? modalState.error
+        : (Number.isFinite(totalCount)
+            && totalCount > 1
+            && effectiveMaxSimilarSourceCount > 0
+          ? t(
+            "experience.synthesizeModalSelectionNotice",
+            {
+              total: String(totalCount),
+              sameFamily: String(effectiveSameFamilyCount),
+              selected: String(effectiveSelectedSourceCount),
+              selectedSameFamily: String(effectiveSelectedSameFamilyCount),
+              similar: String(effectiveSelectedSimilarCount),
+              matchedSimilar: String(effectiveSimilarCount),
+              max: String(effectiveMaxSimilarSourceCount),
+            },
+            `共命中 ${totalCount} 个候选，其中同类 ${effectiveSameFamilyCount} 个、近似 ${effectiveSimilarCount} 个。系统会优先选择同类草稿；若不足 ${effectiveMaxSimilarSourceCount} 个相似来源，再从近似草稿补位。本次将提交 ${effectiveSelectedSourceCount} 条来源，其中同类 ${effectiveSelectedSameFamilyCount} 个、近似 ${effectiveSelectedSimilarCount} 个。`,
+          )
+          : "");
+
+    experienceSynthesisModalEl.classList.toggle("hidden", !modalState.open);
+    experienceSynthesisModalTitleEl.textContent = isSkill
+      ? t("experience.synthesizeModalTitleSkill", {}, "合成 Skill 草稿")
+      : t("experience.synthesizeModalTitleMethod", {}, "合成 Method 草稿");
+
+    experienceSynthesisModalSummaryEl.innerHTML = `
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">${escapeHtml(t("experience.synthesizeModalTotal", {}, "候选总数"))}</span>
+        <div class="memory-detail-text">${escapeHtml(Number.isFinite(totalCount) ? String(totalCount) : "--")}</div>
+      </div>
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">${escapeHtml(t("experience.synthesizeModalTaskCount", {}, "涉及任务数"))}</span>
+        <div class="memory-detail-text">${escapeHtml(Number.isFinite(taskCount) ? String(taskCount) : "--")}</div>
+      </div>
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">${escapeHtml(t("experience.synthesizeModalSeedLabel", {}, "种子草稿"))}</span>
+        <div class="memory-detail-text">${escapeHtml(seedTitle)}</div>
+      </div>
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">${escapeHtml(t("experience.synthesizeModalSameFamilyCount", {}, "同类命中"))}</span>
+        <div class="memory-detail-text">${escapeHtml(Number.isFinite(effectiveSameFamilyCount) ? String(effectiveSameFamilyCount) : "--")}</div>
+      </div>
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">${escapeHtml(t("experience.synthesizeModalSimilarCount", {}, "近似命中"))}</span>
+        <div class="memory-detail-text">${escapeHtml(Number.isFinite(effectiveSimilarCount) ? String(effectiveSimilarCount) : "--")}</div>
+      </div>
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">${escapeHtml(t("experience.synthesizeModalSelectedCount", {}, "本次参与"))}</span>
+        <div class="memory-detail-text">${escapeHtml(Number.isFinite(effectiveSelectedSourceCount) ? String(effectiveSelectedSourceCount) : "--")}</div>
+      </div>
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">${escapeHtml(t("experience.synthesizeModalSelectedMixLabel", {}, "参与构成"))}</span>
+        <div class="memory-detail-text">${escapeHtml(t(
+          "experience.synthesizeModalSelectedMixValue",
+          {
+            sameFamily: String(Number.isFinite(effectiveSelectedSameFamilyCount) ? effectiveSelectedSameFamilyCount : 0),
+            similar: String(Number.isFinite(effectiveSelectedSimilarCount) ? effectiveSelectedSimilarCount : 0),
+          },
+          `同类 ${Number.isFinite(effectiveSelectedSameFamilyCount) ? effectiveSelectedSameFamilyCount : 0} · 近似 ${Number.isFinite(effectiveSelectedSimilarCount) ? effectiveSelectedSimilarCount : 0}`,
+        ))}</div>
+      </div>
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">${escapeHtml(t("experience.synthesizeModalTemplateLabel", {}, "模板"))}</span>
+        <div class="memory-detail-text">${escapeHtml(templatePath ? summarizePathLabel(templatePath) : "-")}</div>
+      </div>
+    `;
+
+    experienceSynthesisModalStatusEl.classList.toggle("hidden", !statusText);
+    experienceSynthesisModalStatusEl.textContent = statusText;
+
+    if (modalState.loading) {
+      experienceSynthesisModalListEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(t("experience.synthesizeModalLoading", {}, "正在检索同类与近似草稿…"))}</div>`;
+    } else if (!previewItems.length && !seedCandidate) {
+      experienceSynthesisModalListEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(t("experience.synthesizeModalEmpty", {}, "没有可用于合成的近似草稿。"))}</div>`;
+    } else {
+      const rows = [];
+      if (seedCandidate) {
+        rows.push(`
+          <div class="experience-synthesis-row experience-candidate-synthesized" data-synthesis-preview-candidate-id="${escapeHtml(String(seedCandidate.id || ""))}">
+            <div class="experience-synthesis-row-main">
+              <div class="experience-synthesis-row-title">${escapeHtml(seedTitle)}</div>
+              <div class="experience-synthesis-row-meta">
+                <span>${escapeHtml(formatCandidateTypeLabel(candidateType))}</span>
+                <span>${escapeHtml(formatCandidateStatusLabel(seedCandidate.status))}</span>
+                ${seedDisplayTaskId ? `<span>${escapeHtml(t("experience.listTaskLabel", {}, "Task"))} ${escapeHtml(seedDisplayTaskId)}</span>` : ""}
+              </div>
+              <div class="experience-synthesis-row-summary">${escapeHtml(normalizeText(seedCandidate.summary) || t("experience.listNoSummary", {}, "No summary yet."))}</div>
+            </div>
+            <div class="experience-synthesis-row-side">
+              <span class="memory-badge experience-synthesized-badge">${escapeHtml(t("experience.synthesizeModalSeedLabel", {}, "种子草稿"))}</span>
+            </div>
+          </div>
+        `);
+      }
+      previewItems.forEach((item) => {
+        const displayTaskId = normalizeText(item?.sourceTaskId) || normalizeText(item?.taskId);
+        rows.push(`
+          <div class="experience-synthesis-row" data-synthesis-preview-candidate-id="${escapeHtml(String(item?.candidateId || ""))}">
+            <div class="experience-synthesis-row-main">
+              <div class="experience-synthesis-row-title">${escapeHtml(item?.title || item?.slug || item?.candidateId || t("memory.candidateUntitled", {}, "Untitled Candidate"))}</div>
+              <div class="experience-synthesis-row-meta">
+                <span>${escapeHtml(formatCandidateStatusLabel(item?.status))}</span>
+                ${displayTaskId ? `<span>${escapeHtml(t("experience.listTaskLabel", {}, "Task"))} ${escapeHtml(displayTaskId)}</span>` : ""}
+                <span>score ${escapeHtml(Number.isFinite(Number(item?.score)) ? Number(item.score).toFixed(2) : "--")}</span>
+              </div>
+              <div class="experience-synthesis-row-summary">${escapeHtml(normalizeText(item?.summary) || t("experience.listNoSummary", {}, "No summary yet."))}</div>
+            </div>
+            <div class="experience-synthesis-row-side">
+              <span class="memory-badge">${escapeHtml(formatSynthesisRelationLabel(item?.relation))}</span>
+            </div>
+          </div>
+        `);
+      });
+      experienceSynthesisModalListEl.innerHTML = rows.join("");
+    }
+
+    experienceSynthesisModalSubmitBtn.textContent = modalState.submitting
+      ? (isSkill
+        ? t("experience.synthesizeSubmitBusySkill", {}, "合成 Skill 中…")
+        : t("experience.synthesizeSubmitBusyMethod", {}, "合成 Method 中…"))
+      : (isSkill
+        ? t("experience.synthesizeSubmitSkill", {}, "合成 Skill")
+        : t("experience.synthesizeSubmitMethod", {}, "合成 Method"));
+    experienceSynthesisModalSubmitBtn.disabled = modalState.loading || modalState.submitting || !sourceCandidateIds.length;
+    experienceSynthesisModalCancelBtn.disabled = modalState.submitting;
+    experienceSynthesisModalCloseBtn.disabled = modalState.submitting;
+  }
+
+  function closeExperienceSynthesisModal(options = {}) {
+    const modalState = getSynthesisModalState();
+    const force = options?.force === true;
+    if (modalState.submitting && !force) {
+      return;
+    }
+    modalState.open = false;
+    modalState.loading = false;
+    modalState.submitting = false;
+    modalState.error = "";
+    modalState.seedCandidateId = "";
+    modalState.preview = null;
+    renderExperienceSynthesisModal();
+  }
+
+  async function openExperienceSynthesisModal(candidateId) {
+    const normalizedCandidateId = normalizeText(candidateId);
+    if (!normalizedCandidateId) return null;
+    if (!isConnected?.()) {
+      showNotice(
+        t("experience.synthesizePreviewFailedTitle", {}, "合成预览失败"),
+        t("experience.disconnected", {}, "Connect to the server to view experience candidates."),
+        "error",
+      );
+      return null;
+    }
+    if (getPendingActionKey()) return null;
+
+    const modalState = getSynthesisModalState();
+    modalState.open = true;
+    modalState.loading = true;
+    modalState.submitting = false;
+    modalState.error = "";
+    modalState.seedCandidateId = normalizedCandidateId;
+    modalState.preview = null;
+    renderExperienceSynthesisModal();
+
+    const memoryViewerState = typeof getMemoryViewerState === "function" ? getMemoryViewerState() : null;
+    if (memoryViewerState) {
+      memoryViewerState.pendingExperienceActionKey = `synthesize-preview:${normalizedCandidateId}`;
+    }
+    renderExperienceWorkbenchCapabilityOverviewPanel();
+    syncGenerateControls();
+
+    try {
+      const res = await requestExperienceCandidateSynthesizePreview(normalizedCandidateId);
+      if (!res || !res.ok) {
+        modalState.error = res?.error?.message || t("experience.synthesizePreviewFailedTitle", {}, "合成预览失败");
+        showNotice(
+          t("experience.synthesizePreviewFailedTitle", {}, "合成预览失败"),
+          modalState.error,
+          "error",
+        );
+        return null;
+      }
+      modalState.preview = res.payload ?? null;
+      return res.payload ?? null;
+    } finally {
+      modalState.loading = false;
+      if (memoryViewerState) {
+        memoryViewerState.pendingExperienceActionKey = null;
+      }
+      renderExperienceWorkbenchCapabilityOverviewPanel();
+      syncGenerateControls();
+      renderExperienceSynthesisModal();
+    }
+  }
+
+  async function submitExperienceSynthesis() {
+    const modalState = getSynthesisModalState();
+    const preview = modalState.preview && typeof modalState.preview === "object" ? modalState.preview : null;
+    const candidateId = normalizeText(modalState.seedCandidateId);
+    const sourceCandidateIds = Array.isArray(preview?.sourceCandidateIds)
+      ? preview.sourceCandidateIds.map((item) => normalizeText(item)).filter(Boolean)
+      : [];
+    if (!candidateId || !sourceCandidateIds.length) {
+      return null;
+    }
+    if (!isConnected?.()) {
+      showNotice(
+        t("experience.synthesizeCreateFailedTitle", {}, "合成失败"),
+        t("experience.disconnected", {}, "Connect to the server to view experience candidates."),
+        "error",
+      );
+      return null;
+    }
+    if (getPendingActionKey()) return null;
+
+    const memoryViewerState = typeof getMemoryViewerState === "function" ? getMemoryViewerState() : null;
+    if (memoryViewerState) {
+      memoryViewerState.pendingExperienceActionKey = `synthesize-create:${candidateId}`;
+    }
+    modalState.submitting = true;
+    modalState.error = "";
+    renderExperienceWorkbenchCapabilityOverviewPanel();
+    syncGenerateControls();
+    renderExperienceSynthesisModal();
+
+    try {
+      const res = await requestExperienceCandidateSynthesizeCreate(candidateId, sourceCandidateIds);
+      if (!res || !res.ok) {
+        modalState.error = res?.error?.message || t("experience.synthesizeCreateFailedTitle", {}, "合成失败");
+        showNotice(
+          t("experience.synthesizeCreateFailedTitle", {}, "合成失败"),
+          modalState.error,
+          "error",
+        );
+        return null;
+      }
+
+      const createdCandidate = res.payload?.candidate ?? null;
+      closeExperienceSynthesisModal({ force: true });
+      showNotice(
+        t("experience.synthesizeCreateSuccessTitle", {}, "合成草稿已创建"),
+        t("experience.synthesizeCreateSuccessMessage", { count: String(Number(res.payload?.sourceCount) || sourceCandidateIds.length) }, `已生成新的合成 draft，并汇总 ${sourceCandidateIds.length} 个来源草稿。`),
+        "success",
+        2800,
+      );
+      if (createdCandidate?.id) {
+        applyCreatedExperienceCandidate(createdCandidate);
+        await syncExperienceWorkbenchUi({ preferFirst: false, loadDetailIfNeeded: false });
+      }
+      await loadExperienceWorkbench(false);
+      if (createdCandidate?.id && getActiveTab() === "candidates") {
+        await loadExperienceCandidateDetail(String(createdCandidate.id));
+      }
+      return createdCandidate;
+    } finally {
+      modalState.submitting = false;
+      if (memoryViewerState) {
+        memoryViewerState.pendingExperienceActionKey = null;
+      }
+      renderExperienceWorkbenchCapabilityOverviewPanel();
+      syncGenerateControls();
+      renderExperienceSynthesisModal();
+    }
+  }
+
   function renderExperienceAggregatePanel(candidate) {
     if (!candidate || typeof candidate !== "object") return "";
     const snapshot = candidate.sourceTaskSnapshot && typeof candidate.sourceTaskSnapshot === "object"
@@ -982,6 +1441,7 @@ export function createExperienceWorkbenchFeature({
     const indexLabel = normalizedType === "skill"
       ? t("experience.openSkillsTab", {}, "进入技能列表")
       : t("experience.openMethodsTab", {}, "进入方法列表");
+    const displayTaskId = resolveExperienceDisplayTaskId(candidate);
     const publishedLabel = candidate.publishedPath
       ? summarizePathLabel(candidate.publishedPath)
       : t("experience.aggregateNotPublished", {}, "未发布");
@@ -989,6 +1449,8 @@ export function createExperienceWorkbenchFeature({
       || learningReviewInput?.summaryLines?.[0]
       || "-";
     const toolCallCount = toolCalls.length;
+    const synthesized = isSynthesizedCandidate(candidate);
+    const synthesisSourceCount = getSynthesisSourceCount(candidate);
     return `
       <div class="memory-detail-card">
         <div class="goal-summary-header">
@@ -999,12 +1461,13 @@ export function createExperienceWorkbenchFeature({
           <div class="memory-detail-badges">
             <span class="memory-badge">${escapeHtml(formatCandidateTypeLabel(candidate.type))}</span>
             <span class="memory-badge">${escapeHtml(formatCandidateStatusLabel(candidate.status))}</span>
+            ${synthesized ? `<span class="memory-badge experience-synthesized-badge">${escapeHtml(t("experience.synthesizedBadge", { count: String(synthesisSourceCount || 0) }, synthesisSourceCount > 0 ? `合成稿 · ${synthesisSourceCount}` : "合成稿"))}</span>` : ""}
             ${candidate.publishedPath ? `<span class="memory-badge memory-badge-shared">${escapeHtml(t("experience.listPublishedBadge", {}, "Published"))}</span>` : ""}
             ${skillFreshness?.summary || skillFreshness?.status ? `<span class="memory-badge">${escapeHtml(String(skillFreshness.summary || skillFreshness.status))}</span>` : ""}
           </div>
         </div>
         <div class="memory-detail-grid">
-          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateTaskLabel", {}, "来源任务"))}</span><div class="memory-detail-text">${candidate.taskId ? `<button class="memory-path-link" data-open-task-id="${escapeHtml(candidate.taskId)}">${escapeHtml(candidate.taskId)}</button>` : "-"}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateTaskLabel", {}, "来源任务"))}</span><div class="memory-detail-text">${displayTaskId ? `<button class="memory-path-link" data-open-task-id="${escapeHtml(displayTaskId)}">${escapeHtml(displayTaskId)}</button>` : "-"}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateSlugLabel", {}, "标识"))}</span><div class="memory-detail-text">${escapeHtml(candidate.slug || "-")}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregatePublishedLabel", {}, "发布资产"))}</span><div class="memory-detail-text">${candidate.publishedPath ? `<button class="memory-path-link" data-open-source="${escapeHtml(candidate.publishedPath)}">${escapeHtml(publishedLabel)}</button>` : escapeHtml(publishedLabel)}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateUpdatedLabel", {}, "最近更新时间"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(candidate.updatedAt || candidate.createdAt))}</div></div>
@@ -1012,6 +1475,8 @@ export function createExperienceWorkbenchFeature({
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateArtifactsLabel", {}, "来源产物"))}</span><div class="memory-detail-text">${escapeHtml(String(artifactPaths.length || contextTargets.artifactCount || 0))}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateToolCallsLabel", {}, "工具调用"))}</span><div class="memory-detail-text">${escapeHtml(String(toolCallCount))}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateLearningLabel", {}, "Learning / Review"))}</span><div class="memory-detail-text">${escapeHtml(learningHeadline)}</div></div>
+          ${synthesized ? `<div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateSynthesizedLabel", {}, "草稿来源"))}</span><div class="memory-detail-text">${escapeHtml(t("experience.synthesizedBadge", { count: String(synthesisSourceCount || 0) }, synthesisSourceCount > 0 ? `合成稿 · ${synthesisSourceCount}` : "合成稿"))}</div></div>` : ""}
+          ${synthesized ? `<div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateSynthesisSourcesLabel", {}, "合成来源数"))}</span><div class="memory-detail-text">${escapeHtml(String(synthesisSourceCount || 0))}</div></div>` : ""}
         </div>
         <div class="goal-detail-actions">
           ${contextTargets.sourceTaskId ? `<button class="button goal-inline-action-secondary" data-open-task-id="${escapeHtml(contextTargets.sourceTaskId)}">${escapeHtml(t("memory.contextOpenSourceTask", {}, "打开来源任务"))}</button>` : ""}
@@ -1087,6 +1552,7 @@ export function createExperienceWorkbenchFeature({
     renderExperienceWorkbenchStats(state.stats);
     syncExperienceWorkbenchTabUi();
     renderExperienceWorkbenchCapabilityOverviewPanel();
+    renderExperienceSynthesisModal();
 
     const selectedVisible = filteredItems.some((item) => String(item?.id || "") === String(state.selectedId || ""));
     if (!selectedVisible) {
@@ -1129,6 +1595,7 @@ export function createExperienceWorkbenchFeature({
       state.stats = null;
       state.selectedId = null;
       state.selectedCandidate = null;
+      closeExperienceSynthesisModal();
       renderExperienceWorkbenchStats(null);
       renderExperienceWorkbenchListEmpty(t("experience.disconnected", {}, "Connect to the server to view experience candidates."));
       renderExperienceWorkbenchDetailEmpty(t("experience.disconnected", {}, "Connect to the server to view experience candidates."));
@@ -1536,6 +2003,28 @@ export function createExperienceWorkbenchFeature({
         void loadExperienceWorkbenchUsageOverview();
       });
     }
+    if (experienceSynthesisModalCloseBtn) {
+      experienceSynthesisModalCloseBtn.addEventListener("click", () => {
+        closeExperienceSynthesisModal();
+      });
+    }
+    if (experienceSynthesisModalCancelBtn) {
+      experienceSynthesisModalCancelBtn.addEventListener("click", () => {
+        closeExperienceSynthesisModal();
+      });
+    }
+    if (experienceSynthesisModalSubmitBtn) {
+      experienceSynthesisModalSubmitBtn.addEventListener("click", () => {
+        void submitExperienceSynthesis();
+      });
+    }
+    if (experienceSynthesisModalEl) {
+      experienceSynthesisModalEl.addEventListener("click", (event) => {
+        if (event.target === experienceSynthesisModalEl) {
+          closeExperienceSynthesisModal();
+        }
+      });
+    }
   }
 
   function resetExperienceWorkbenchStateForAgent(agentId = getActiveAgentId()) {
@@ -1550,6 +2039,15 @@ export function createExperienceWorkbenchFeature({
     state.selectedCandidate = null;
     state.stats = null;
     state.activeTab = "capability-acquisition";
+    state.synthesisModal = {
+      open: false,
+      loading: false,
+      submitting: false,
+      error: "",
+      seedCandidateId: "",
+      preview: null,
+    };
+    renderExperienceSynthesisModal();
   }
 
   async function refreshExperienceWorkbenchForAgentSwitch(agentId = getActiveAgentId()) {
