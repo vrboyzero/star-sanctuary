@@ -300,6 +300,9 @@ function createSettingsRefs(overrides = {}) {
     cfgSkillGenerationConfirmRequired: overrides.cfgSkillGenerationConfirmRequired || createCheckbox(false),
     cfgMethodPublishConfirmRequired: overrides.cfgMethodPublishConfirmRequired || createCheckbox(false),
     cfgSkillPublishConfirmRequired: overrides.cfgSkillPublishConfirmRequired || createCheckbox(false),
+    cfgExperienceSynthesisMaxSimilarSources: overrides.cfgExperienceSynthesisMaxSimilarSources || createInput(""),
+    cfgExperienceSynthesisMaxSourceContentChars: overrides.cfgExperienceSynthesisMaxSourceContentChars || createInput(""),
+    cfgExperienceSynthesisTotalSourceContentCharBudget: overrides.cfgExperienceSynthesisTotalSourceContentCharBudget || createInput(""),
     cfgMemoryDeepRetrievalEnabled: overrides.cfgMemoryDeepRetrievalEnabled || createCheckbox(false),
     cfgEmbeddingQueryPrefix: overrides.cfgEmbeddingQueryPrefix || createInput(""),
     cfgEmbeddingPassagePrefix: overrides.cfgEmbeddingPassagePrefix || createInput(""),
@@ -681,6 +684,9 @@ describe("settings controller", () => {
       BELLDANDY_SKILL_GENERATION_CONFIRM_REQUIRED: "false",
       BELLDANDY_METHOD_PUBLISH_CONFIRM_REQUIRED: "true",
       BELLDANDY_SKILL_PUBLISH_CONFIRM_REQUIRED: "true",
+      BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SIMILAR_SOURCES: "8",
+      BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SOURCE_CONTENT_CHARS: "1600",
+      BELLDANDY_EXPERIENCE_SYNTHESIS_TOTAL_SOURCE_CONTENT_CHAR_BUDGET: "10000",
       BELLDANDY_MEMORY_DEEP_RETRIEVAL: "true",
       BELLDANDY_EMBEDDING_QUERY_PREFIX: "query: ",
       BELLDANDY_EMBEDDING_PASSAGE_PREFIX: "passage: ",
@@ -872,6 +878,9 @@ describe("settings controller", () => {
     expect(refs.cfgTaskSummaryBaseUrl.value).toBe("https://task-summary.example.com/v1");
     expect(refs.cfgExperienceAutoPromotionEnabled.checked).toBe(false);
     expect(refs.cfgMethodGenerationConfirmRequired.checked).toBe(true);
+    expect(refs.cfgExperienceSynthesisMaxSimilarSources.value).toBe("8");
+    expect(refs.cfgExperienceSynthesisMaxSourceContentChars.value).toBe("1600");
+    expect(refs.cfgExperienceSynthesisTotalSourceContentCharBudget.value).toBe("10000");
     expect(refs.cfgMemoryDeepRetrievalEnabled.checked).toBe(true);
     expect(refs.cfgEmbeddingQueryPrefix.value).toBe("query: ");
     expect(refs.cfgMemoryIndexerVerboseWatch.checked).toBe(true);
@@ -1139,6 +1148,9 @@ describe("settings controller", () => {
       cfgSkillGenerationConfirmRequired: createCheckbox(false),
       cfgMethodPublishConfirmRequired: createCheckbox(true),
       cfgSkillPublishConfirmRequired: createCheckbox(true),
+      cfgExperienceSynthesisMaxSimilarSources: createInput("8"),
+      cfgExperienceSynthesisMaxSourceContentChars: createInput("1600"),
+      cfgExperienceSynthesisTotalSourceContentCharBudget: createInput("10000"),
       cfgMemoryDeepRetrievalEnabled: createCheckbox(true),
       cfgEmbeddingQueryPrefix: createInput(" query: "),
       cfgEmbeddingPassagePrefix: createInput(" passage: "),
@@ -1379,6 +1391,9 @@ describe("settings controller", () => {
       BELLDANDY_SKILL_GENERATION_CONFIRM_REQUIRED: "false",
       BELLDANDY_METHOD_PUBLISH_CONFIRM_REQUIRED: "true",
       BELLDANDY_SKILL_PUBLISH_CONFIRM_REQUIRED: "true",
+      BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SIMILAR_SOURCES: "8",
+      BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SOURCE_CONTENT_CHARS: "1600",
+      BELLDANDY_EXPERIENCE_SYNTHESIS_TOTAL_SOURCE_CONTENT_CHAR_BUDGET: "10000",
       BELLDANDY_MEMORY_DEEP_RETRIEVAL: "true",
       BELLDANDY_EMBEDDING_QUERY_PREFIX: "query:",
       BELLDANDY_EMBEDDING_PASSAGE_PREFIX: "passage:",

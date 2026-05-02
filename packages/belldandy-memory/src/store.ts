@@ -1076,6 +1076,22 @@ export class MemoryStore {
     return Number(result.changes ?? 0);
   }
 
+  deleteExperienceCandidates(filter?: ExperienceCandidateListFilter): number {
+    this.ensureOpen();
+    const { clause, params } = this.buildExperienceCandidateFilterClause(filter);
+    const stmt = this.db.prepare(`
+      DELETE FROM experience_candidates
+      WHERE id IN (
+        SELECT c.id
+        FROM experience_candidates c
+        LEFT JOIN tasks t ON t.id = c.task_id
+        WHERE 1 = 1${clause}
+      )
+    `);
+    const result = stmt.run(...params);
+    return Number(result.changes ?? 0);
+  }
+
   updateExperienceCandidate(candidateId: string, patch: Partial<ExperienceCandidate>): ExperienceCandidate | null {
     const existing = this.getExperienceCandidate(candidateId);
     if (!existing) return null;
@@ -1665,6 +1681,30 @@ export class MemoryStore {
     if (filter.agentId) {
       conditions.push(`t.agent_id = ?`);
       params.push(filter.agentId);
+    }
+
+    if (typeof filter.synthesisConsumed === "boolean") {
+      if (filter.synthesisConsumed) {
+        conditions.push(`COALESCE(json_extract(c.metadata_json, '$.synthesisConsumed.consumed'), 0) = 1`);
+      } else {
+        conditions.push(`COALESCE(json_extract(c.metadata_json, '$.synthesisConsumed.consumed'), 0) <> 1`);
+      }
+    }
+
+    if (filter.consumedByCandidateId) {
+      conditions.push(`COALESCE(json_extract(c.metadata_json, '$.synthesisConsumed.consumedByCandidateId'), '') = ?`);
+      params.push(filter.consumedByCandidateId);
+    }
+
+    if (filter.draftOriginKind) {
+      if (Array.isArray(filter.draftOriginKind) && filter.draftOriginKind.length > 0) {
+        const placeholders = filter.draftOriginKind.map(() => "?").join(", ");
+        conditions.push(`COALESCE(json_extract(c.metadata_json, '$.draftOrigin.kind'), '') IN (${placeholders})`);
+        params.push(...filter.draftOriginKind);
+      } else if (typeof filter.draftOriginKind === "string") {
+        conditions.push(`COALESCE(json_extract(c.metadata_json, '$.draftOrigin.kind'), '') = ?`);
+        params.push(filter.draftOriginKind);
+      }
     }
 
     return {

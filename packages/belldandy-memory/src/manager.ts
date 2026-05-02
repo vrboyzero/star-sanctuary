@@ -1101,6 +1101,7 @@ export class MemoryManager {
         const candidates = this.store.listExperienceCandidates(1000, {
             type: seedCandidate.type,
             status: "draft",
+            synthesisConsumed: false,
         });
         return buildExperienceSynthesisPreview(seedCandidate, candidates, options);
     }
@@ -1139,6 +1140,43 @@ export class MemoryManager {
             metadata: input.metadata,
         };
         return this.createExperienceCandidate(candidate);
+    }
+
+    markExperienceCandidatesSynthesisConsumed(input: {
+        candidateIds: string[];
+        consumedByCandidateId: string;
+        consumedRunId?: string;
+        consumedAt?: string;
+    }): ExperienceCandidate[] {
+        const consumedByCandidateId = String(input.consumedByCandidateId ?? "").trim();
+        if (!consumedByCandidateId) return [];
+        const consumedAt = String(input.consumedAt ?? "").trim() || new Date().toISOString();
+        const consumedRunId = String(input.consumedRunId ?? "").trim() || `synth_${randomUUID().slice(0, 8)}`;
+        const updatedCandidates: ExperienceCandidate[] = [];
+        const seen = new Set<string>();
+        for (const rawCandidateId of Array.isArray(input.candidateIds) ? input.candidateIds : []) {
+            const candidateId = String(rawCandidateId ?? "").trim();
+            if (!candidateId || candidateId === consumedByCandidateId || seen.has(candidateId)) {
+                continue;
+            }
+            seen.add(candidateId);
+            const existing = this.store.getExperienceCandidate(candidateId);
+            if (!existing) continue;
+            const metadata: ExperienceCandidateMetadata = {
+                ...(existing.metadata ?? {}),
+                synthesisConsumed: {
+                    consumed: true,
+                    consumedByCandidateId,
+                    consumedAt,
+                    consumedRunId,
+                },
+            };
+            const updated = this.store.updateExperienceCandidate(candidateId, { metadata });
+            if (updated) {
+                updatedCandidates.push(updated);
+            }
+        }
+        return updatedCandidates;
     }
 
     recordExperienceUsage(input: {
@@ -1344,6 +1382,10 @@ export class MemoryManager {
 
     rejectExperienceCandidates(filter?: ExperienceCandidateListFilter): number {
         return this.store.rejectExperienceCandidates(filter);
+    }
+
+    deleteExperienceCandidates(filter?: ExperienceCandidateListFilter): number {
+        return this.store.deleteExperienceCandidates(filter);
     }
 
     async linkTaskMemoriesFromSource(

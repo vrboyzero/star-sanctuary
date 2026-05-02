@@ -55,9 +55,17 @@ export interface ExperienceCandidateSynthesisMetadata {
   templatePath?: string;
 }
 
+export interface ExperienceCandidateSynthesisConsumedMetadata {
+  consumed: true;
+  consumedByCandidateId: string;
+  consumedAt: string;
+  consumedRunId: string;
+}
+
 export interface ExperienceCandidateMetadata {
   draftOrigin?: ExperienceCandidateDraftOriginMetadata;
   synthesis?: ExperienceCandidateSynthesisMetadata;
+  synthesisConsumed?: ExperienceCandidateSynthesisConsumedMetadata;
 }
 
 export interface ExperienceCandidate {
@@ -84,6 +92,9 @@ export interface ExperienceCandidateListFilter {
   type?: ExperienceCandidateType | ExperienceCandidateType[];
   status?: ExperienceCandidateStatus | ExperienceCandidateStatus[];
   agentId?: string;
+  synthesisConsumed?: boolean;
+  consumedByCandidateId?: string;
+  draftOriginKind?: ExperienceDraftOriginKind | ExperienceDraftOriginKind[];
 }
 
 export interface ExperienceCandidateStats {

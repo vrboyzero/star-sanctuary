@@ -1982,6 +1982,7 @@ async function handleReq(
     case "experience.candidate.accept":
     case "experience.candidate.reject":
     case "experience.candidate.reject_bulk":
+    case "experience.candidate.cleanup_consumed":
     case "experience.candidate.synthesize.preview":
     case "experience.candidate.synthesize.create":
     case "experience.usage.get":
@@ -1989,8 +1990,17 @@ async function handleReq(
     case "experience.usage.stats":
     case "experience.usage.revoke":
     case "experience.skill.freshness.update":
-      if (req.method === "experience.candidate.synthesize.preview" || req.method === "experience.candidate.synthesize.create") {
+      if (
+        req.method === "experience.candidate.synthesize.preview"
+        || req.method === "experience.candidate.synthesize.create"
+      ) {
         ctx.log.info("memory-experience", "Experience synthesis request received", {
+          clientId: ctx.clientId,
+          method: req.method,
+          requestId: req.id,
+        });
+      } else if (req.method === "experience.candidate.cleanup_consumed") {
+        ctx.log.info("memory-experience", "Experience consumed draft cleanup request received", {
           clientId: ctx.clientId,
           method: req.method,
           requestId: req.id,

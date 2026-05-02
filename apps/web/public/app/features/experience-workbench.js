@@ -167,6 +167,7 @@ export function createExperienceWorkbenchFeature({
     experienceWorkbenchTypeFilterEl,
     experienceWorkbenchStatusFilterEl,
     experienceWorkbenchResetFiltersBtn,
+    experienceWorkbenchCleanupConsumedBtn,
     experienceGenerateTaskIdEl,
     experienceGenerateMethodBtn,
     experienceGenerateSkillBtn,
@@ -180,6 +181,8 @@ export function createExperienceWorkbenchFeature({
     experienceSynthesisModalCloseBtn,
     experienceSynthesisModalCancelBtn,
     experienceSynthesisModalSubmitBtn,
+    experienceSynthesisModalConsumeSourcesEl,
+    experienceSynthesisModalConsumeSourcesLabelEl,
   } = refs;
 
   let uiBound = false;
@@ -195,7 +198,11 @@ export function createExperienceWorkbenchFeature({
         error: "",
         seedCandidateId: "",
         preview: null,
+        markSourcesConsumed: true,
       };
+    }
+    if (typeof state.synthesisModal.markSourcesConsumed !== "boolean") {
+      state.synthesisModal.markSourcesConsumed = true;
     }
     return state.synthesisModal;
   }
@@ -397,6 +404,13 @@ export function createExperienceWorkbenchFeature({
     };
   }
 
+  function getConsumedDraftCount() {
+    const state = getExperienceWorkbenchState();
+    return (Array.isArray(state.items) ? state.items : []).filter((item) => (
+      normalizeCandidateStatus(item?.status) === "draft" && isSynthesisConsumedCandidate(item)
+    )).length;
+  }
+
   function syncExperienceWorkbenchHeaderTitle() {
     if (!experienceWorkbenchTitleEl) return;
     const agentName = typeof getSelectedAgentLabel === "function"
@@ -405,6 +419,13 @@ export function createExperienceWorkbenchFeature({
     experienceWorkbenchTitleEl.textContent = agentName
       ? t("experience.titleWithAgent", { agentName }, `${agentName} Experience Workbench`)
       : t("experience.title", {}, "Experience Workbench");
+  }
+
+  function syncCleanupConsumedButton() {
+    if (!experienceWorkbenchCleanupConsumedBtn) return;
+    const consumedDraftCount = getConsumedDraftCount();
+    experienceWorkbenchCleanupConsumedBtn.classList.toggle("hidden", consumedDraftCount <= 0);
+    experienceWorkbenchCleanupConsumedBtn.disabled = Boolean(getPendingActionKey());
   }
 
   function renderExperienceWorkbenchListEmpty(message) {
@@ -447,6 +468,27 @@ export function createExperienceWorkbenchFeature({
   function getSynthesisSourceCount(candidate) {
     const sourceCount = Number(candidate?.metadata?.synthesis?.sourceCount);
     return Number.isFinite(sourceCount) && sourceCount > 0 ? sourceCount : 0;
+  }
+
+  function isSynthesisConsumedCandidate(candidate) {
+    return candidate?.metadata?.synthesisConsumed?.consumed === true;
+  }
+
+  function getSynthesisConsumedInfo(candidate) {
+    const metadata = candidate?.metadata?.synthesisConsumed;
+    if (!metadata || metadata.consumed !== true) {
+      return null;
+    }
+    const consumedByCandidateId = normalizeText(metadata.consumedByCandidateId);
+    const consumedAt = normalizeText(metadata.consumedAt);
+    const consumedRunId = normalizeText(metadata.consumedRunId);
+    return consumedByCandidateId || consumedAt || consumedRunId
+      ? {
+        consumedByCandidateId,
+        consumedAt,
+        consumedRunId,
+      }
+      : null;
   }
 
   function upsertExperienceCandidateList(items, candidate, options = {}) {
@@ -960,6 +1002,17 @@ export function createExperienceWorkbenchFeature({
     });
   }
 
+  async function requestExperienceCandidateCleanupConsumed() {
+    return sendReq({
+      type: "req",
+      id: makeId(),
+      method: "experience.candidate.cleanup_consumed",
+      params: {
+        agentId: getActiveAgentId(),
+      },
+    });
+  }
+
   async function requestExperienceCandidateSynthesizePreview(candidateId) {
     const normalizedCandidateId = normalizeText(candidateId);
     if (!normalizedCandidateId) return null;
@@ -975,12 +1028,13 @@ export function createExperienceWorkbenchFeature({
     });
   }
 
-  async function requestExperienceCandidateSynthesizeCreate(candidateId, sourceCandidateIds = []) {
+  async function requestExperienceCandidateSynthesizeCreate(candidateId, sourceCandidateIds = [], options = {}) {
     const normalizedCandidateId = normalizeText(candidateId);
     if (!normalizedCandidateId) return null;
     const normalizedSourceCandidateIds = Array.isArray(sourceCandidateIds)
       ? sourceCandidateIds.map((item) => normalizeText(item)).filter(Boolean)
       : [];
+    const markSourcesConsumed = options?.markSourcesConsumed !== false;
     return sendReq({
       type: "req",
       id: makeId(),
@@ -990,6 +1044,7 @@ export function createExperienceWorkbenchFeature({
         candidateId: normalizedCandidateId,
         agentId: getActiveAgentId(),
         ...(normalizedSourceCandidateIds.length ? { sourceCandidateIds: normalizedSourceCandidateIds } : {}),
+        markSourcesConsumed,
       },
     });
   }
@@ -1222,6 +1277,18 @@ export function createExperienceWorkbenchFeature({
       </div>
     `;
 
+    if (experienceSynthesisModalConsumeSourcesEl) {
+      experienceSynthesisModalConsumeSourcesEl.checked = modalState.markSourcesConsumed !== false;
+      experienceSynthesisModalConsumeSourcesEl.disabled = modalState.submitting;
+    }
+    if (experienceSynthesisModalConsumeSourcesLabelEl) {
+      experienceSynthesisModalConsumeSourcesLabelEl.textContent = t(
+        "experience.synthesizeConsumeSourcesLabel",
+        {},
+        "合成成功后，将本次参与的旧草稿标记为已消化",
+      );
+    }
+
     experienceSynthesisModalStatusEl.classList.toggle("hidden", !statusText);
     experienceSynthesisModalStatusEl.textContent = statusText;
 
@@ -1295,6 +1362,7 @@ export function createExperienceWorkbenchFeature({
     modalState.error = "";
     modalState.seedCandidateId = "";
     modalState.preview = null;
+    modalState.markSourcesConsumed = true;
     renderExperienceSynthesisModal();
   }
 
@@ -1318,6 +1386,7 @@ export function createExperienceWorkbenchFeature({
     modalState.error = "";
     modalState.seedCandidateId = normalizedCandidateId;
     modalState.preview = null;
+    modalState.markSourcesConsumed = true;
     renderExperienceSynthesisModal();
 
     const memoryViewerState = typeof getMemoryViewerState === "function" ? getMemoryViewerState() : null;
@@ -1358,6 +1427,7 @@ export function createExperienceWorkbenchFeature({
     const sourceCandidateIds = Array.isArray(preview?.sourceCandidateIds)
       ? preview.sourceCandidateIds.map((item) => normalizeText(item)).filter(Boolean)
       : [];
+    const markSourcesConsumed = modalState.markSourcesConsumed !== false;
     if (!candidateId || !sourceCandidateIds.length) {
       return null;
     }
@@ -1382,7 +1452,9 @@ export function createExperienceWorkbenchFeature({
     renderExperienceSynthesisModal();
 
     try {
-      const res = await requestExperienceCandidateSynthesizeCreate(candidateId, sourceCandidateIds);
+      const res = await requestExperienceCandidateSynthesizeCreate(candidateId, sourceCandidateIds, {
+        markSourcesConsumed,
+      });
       if (!res || !res.ok) {
         modalState.error = res?.error?.message || t("experience.synthesizeCreateFailedTitle", {}, "合成失败");
         showNotice(
@@ -1395,9 +1467,23 @@ export function createExperienceWorkbenchFeature({
 
       const createdCandidate = res.payload?.candidate ?? null;
       closeExperienceSynthesisModal({ force: true });
+      const consumedSourceCount = Number(res.payload?.consumedSourceCount);
       showNotice(
         t("experience.synthesizeCreateSuccessTitle", {}, "合成草稿已创建"),
-        t("experience.synthesizeCreateSuccessMessage", { count: String(Number(res.payload?.sourceCount) || sourceCandidateIds.length) }, `已生成新的合成 draft，并汇总 ${sourceCandidateIds.length} 个来源草稿。`),
+        markSourcesConsumed
+          ? t(
+            "experience.synthesizeCreateSuccessMessageConsumed",
+            {
+              count: String(Number(res.payload?.sourceCount) || sourceCandidateIds.length),
+              consumed: String(Number.isFinite(consumedSourceCount) ? consumedSourceCount : 0),
+            },
+            `已生成新的合成 draft，并汇总 ${sourceCandidateIds.length} 个来源草稿；其中 ${Number.isFinite(consumedSourceCount) ? consumedSourceCount : 0} 个旧草稿已标记为已消化。`,
+          )
+          : t(
+            "experience.synthesizeCreateSuccessMessage",
+            { count: String(Number(res.payload?.sourceCount) || sourceCandidateIds.length) },
+            `已生成新的合成 draft，并汇总 ${sourceCandidateIds.length} 个来源草稿。`,
+          ),
         "success",
         2800,
       );
@@ -1451,6 +1537,7 @@ export function createExperienceWorkbenchFeature({
     const toolCallCount = toolCalls.length;
     const synthesized = isSynthesizedCandidate(candidate);
     const synthesisSourceCount = getSynthesisSourceCount(candidate);
+    const synthesisConsumedInfo = getSynthesisConsumedInfo(candidate);
     return `
       <div class="memory-detail-card">
         <div class="goal-summary-header">
@@ -1477,6 +1564,8 @@ export function createExperienceWorkbenchFeature({
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateLearningLabel", {}, "Learning / Review"))}</span><div class="memory-detail-text">${escapeHtml(learningHeadline)}</div></div>
           ${synthesized ? `<div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateSynthesizedLabel", {}, "草稿来源"))}</span><div class="memory-detail-text">${escapeHtml(t("experience.synthesizedBadge", { count: String(synthesisSourceCount || 0) }, synthesisSourceCount > 0 ? `合成稿 · ${synthesisSourceCount}` : "合成稿"))}</div></div>` : ""}
           ${synthesized ? `<div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateSynthesisSourcesLabel", {}, "合成来源数"))}</span><div class="memory-detail-text">${escapeHtml(String(synthesisSourceCount || 0))}</div></div>` : ""}
+          ${synthesisConsumedInfo ? `<div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateConsumedLabel", {}, "已消化状态"))}</span><div class="memory-detail-text">${synthesisConsumedInfo.consumedByCandidateId ? `<button class="memory-path-link" data-open-candidate-id="${escapeHtml(synthesisConsumedInfo.consumedByCandidateId)}">${escapeHtml(t("experience.aggregateConsumedValue", { id: synthesisConsumedInfo.consumedByCandidateId }, `已被合成稿 ${synthesisConsumedInfo.consumedByCandidateId} 消化`))}</button>` : escapeHtml(t("experience.aggregateConsumedFallback", {}, "已被后续合成消化"))}</div></div>` : ""}
+          ${synthesisConsumedInfo ? `<div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateConsumedAtLabel", {}, "消化时间"))}</span><div class="memory-detail-text">${escapeHtml(synthesisConsumedInfo.consumedAt ? formatDateTime(synthesisConsumedInfo.consumedAt) : "-")}</div></div>` : ""}
         </div>
         <div class="goal-detail-actions">
           ${contextTargets.sourceTaskId ? `<button class="button goal-inline-action-secondary" data-open-task-id="${escapeHtml(contextTargets.sourceTaskId)}">${escapeHtml(t("memory.contextOpenSourceTask", {}, "打开来源任务"))}</button>` : ""}
@@ -1551,6 +1640,7 @@ export function createExperienceWorkbenchFeature({
     state.stats = mergeExperienceStats(state.stats, countExperienceStats(state.items));
     renderExperienceWorkbenchStats(state.stats);
     syncExperienceWorkbenchTabUi();
+    syncCleanupConsumedButton();
     renderExperienceWorkbenchCapabilityOverviewPanel();
     renderExperienceSynthesisModal();
 
@@ -1601,6 +1691,7 @@ export function createExperienceWorkbenchFeature({
       renderExperienceWorkbenchDetailEmpty(t("experience.disconnected", {}, "Connect to the server to view experience candidates."));
       renderExperienceWorkbenchCapabilityOverviewEmpty(t("experience.disconnected", {}, "Connect to the server to view experience candidates."));
       renderExperienceWorkbenchUsageOverviewEmpty(t("experience.disconnected", {}, "Connect to the server to view experience candidates."));
+      syncCleanupConsumedButton();
       return;
     }
 
@@ -1622,7 +1713,7 @@ export function createExperienceWorkbenchFeature({
       loadAllExperienceCandidateItems(requestContext, {
         limit: EXPERIENCE_CANDIDATE_PAGE_SIZE,
         maxPages: EXPERIENCE_CANDIDATE_MAX_PAGES,
-        filter: { status: "draft" },
+        filter: { status: "draft", synthesisConsumed: false },
       }),
       sendReq({
         type: "req",
@@ -1649,6 +1740,7 @@ export function createExperienceWorkbenchFeature({
       renderExperienceWorkbenchDetailEmpty(res?.error?.message || t("experience.loadFailed", {}, "Failed to load experience candidates."));
       renderExperienceWorkbenchCapabilityOverviewEmpty(state.draftItemsError);
       renderExperienceWorkbenchUsageOverviewEmpty(res?.error?.message || t("experience.loadFailed", {}, "Failed to load experience candidates."));
+      syncCleanupConsumedButton();
       return;
     }
 
@@ -1659,6 +1751,7 @@ export function createExperienceWorkbenchFeature({
       ? ""
       : draftRes?.error?.message || t("experience.capabilityLoadFailed", {}, "Failed to load draft capability candidates.");
     state.stats = mergeExperienceStats(statsRes?.payload?.stats, countExperienceStats(state.items));
+    syncCleanupConsumedButton();
     const filteredItems = getFilteredExperienceItems();
     const hasExistingSelection = state.selectedId && filteredItems.some((item) => String(item?.id || "") === String(state.selectedId));
     if (!hasExistingSelection) {
@@ -1966,6 +2059,11 @@ export function createExperienceWorkbenchFeature({
         void syncExperienceWorkbenchUi({ preferFirst: true, loadDetailIfNeeded: true });
       });
     }
+    if (experienceWorkbenchCleanupConsumedBtn) {
+      experienceWorkbenchCleanupConsumedBtn.addEventListener("click", () => {
+        void cleanupConsumedExperienceCandidates();
+      });
+    }
     if (experienceGenerateTaskIdEl) {
       experienceGenerateTaskIdEl.addEventListener("input", () => {
         const state = getExperienceWorkbenchState();
@@ -2018,6 +2116,11 @@ export function createExperienceWorkbenchFeature({
         void submitExperienceSynthesis();
       });
     }
+    if (experienceSynthesisModalConsumeSourcesEl) {
+      experienceSynthesisModalConsumeSourcesEl.addEventListener("change", () => {
+        getSynthesisModalState().markSourcesConsumed = experienceSynthesisModalConsumeSourcesEl.checked !== false;
+      });
+    }
     if (experienceSynthesisModalEl) {
       experienceSynthesisModalEl.addEventListener("click", (event) => {
         if (event.target === experienceSynthesisModalEl) {
@@ -2025,6 +2128,41 @@ export function createExperienceWorkbenchFeature({
         }
       });
     }
+  }
+
+  async function cleanupConsumedExperienceCandidates() {
+    const consumedDraftCount = getConsumedDraftCount();
+    if (consumedDraftCount <= 0) return null;
+    if (!isConnected?.()) {
+      showNotice(
+        "清理旧稿失败",
+        t("experience.disconnected", {}, "Connect to the server to view experience candidates."),
+        "error",
+      );
+      return null;
+    }
+    const confirmed = window.confirm(`确认清理 ${consumedDraftCount} 个已消化旧草稿？此操作会删除这些 draft 候选。`);
+    if (!confirmed) return null;
+
+    const res = await requestExperienceCandidateCleanupConsumed();
+    if (!res || !res.ok) {
+      showNotice(
+        "清理旧稿失败",
+        res?.error?.message || "未能清理已消化旧草稿。",
+        "error",
+      );
+      return null;
+    }
+
+    await loadExperienceWorkbench(false);
+    await syncExperienceWorkbenchUi({ preferFirst: true, loadDetailIfNeeded: true });
+    showNotice(
+      "旧稿已清理",
+      `已清理 ${Number(res.payload?.count) || 0} 个已消化旧草稿。`,
+      "success",
+      2600,
+    );
+    return res.payload ?? null;
   }
 
   function resetExperienceWorkbenchStateForAgent(agentId = getActiveAgentId()) {
@@ -2046,6 +2184,7 @@ export function createExperienceWorkbenchFeature({
       error: "",
       seedCandidateId: "",
       preview: null,
+      markSourcesConsumed: true,
     };
     renderExperienceSynthesisModal();
   }

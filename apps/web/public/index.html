@@ -459,6 +459,7 @@
                         <option value="rejected" data-i18n="experience.listStatusRejected">已拒绝</option>
                       </select>
                       <button id="experienceWorkbenchResetFilters" class="button" data-i18n="experience.resetFilters">重置</button>
+                      <button id="experienceWorkbenchCleanupConsumedBtn" class="button experience-cleanup-consumed-btn hidden">清理旧稿</button>
                     </div>
                   </div>
                   <div class="memory-toolbar-actions experience-workbench-generate">
@@ -1434,6 +1435,21 @@
               <span data-i18n="settings.skillPublishConfirmRequiredLabel">Skill 发布需确认</span>
             </label>
             <div class="form-help" data-i18n="settings.skillPublishConfirmRequiredHelp">开启后，技能发布动作必须经过确认。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.experienceSynthesisMaxSimilarSourcesLabel">Experience Synthesis Max Similar Sources</label>
+            <input id="cfgExperienceSynthesisMaxSimilarSources" class="input" inputmode="numeric" placeholder="5" />
+            <div class="form-help" data-i18n="settings.experienceSynthesisMaxSimilarSourcesHelp">单次合成时，除种子草稿外，最多再带多少条同类 / 相似来源草稿。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.experienceSynthesisMaxSourceContentCharsLabel">Experience Synthesis Max Source Content Chars</label>
+            <input id="cfgExperienceSynthesisMaxSourceContentChars" class="input" inputmode="numeric" placeholder="1600" />
+            <div class="form-help" data-i18n="settings.experienceSynthesisMaxSourceContentCharsHelp">单个来源草稿正文最多摘取多少字符给主模型。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.experienceSynthesisTotalSourceContentCharBudgetLabel">Experience Synthesis Total Source Content Budget</label>
+            <input id="cfgExperienceSynthesisTotalSourceContentCharBudget" class="input" inputmode="numeric" placeholder="10000" />
+            <div class="form-help" data-i18n="settings.experienceSynthesisTotalSourceContentCharBudgetHelp">单次合成时，所有来源草稿正文摘录的总字符预算。</div>
           </div>
 
           <hr class="theme-divider">
@@ -2615,6 +2631,10 @@
       <div class="modal-body experience-synthesis-modal-body">
         <div id="experienceSynthesisModalSummary" class="experience-synthesis-modal-summary"></div>
         <div id="experienceSynthesisModalStatus" class="experience-synthesis-modal-status hidden"></div>
+        <label class="experience-synthesis-option">
+          <input id="experienceSynthesisModalConsumeSources" type="checkbox" checked />
+          <span id="experienceSynthesisModalConsumeSourcesLabel">合成成功后，将本次参与的旧草稿标记为已消化</span>
+        </label>
         <div id="experienceSynthesisModalList" class="experience-synthesis-modal-list"></div>
       </div>
       <div class="modal-footer">

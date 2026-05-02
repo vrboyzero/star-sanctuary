@@ -24,10 +24,11 @@ export function buildExperienceSynthesisPreview(
       candidate
       && candidate.type === seedCandidate.type
       && candidate.status === "draft"
+      && candidate.metadata?.synthesisConsumed?.consumed !== true
       && candidate.id !== seedCandidate.id,
     )
     .map((candidate) => {
-      const score = computeSimilarityScore(
+      const baseScore = computeSimilarityScore(
         seedComposite,
         buildCandidateComposite(candidate),
         seedTitle,
@@ -35,6 +36,7 @@ export function buildExperienceSynthesisPreview(
         seedSlug,
         normalizeExperienceKey(candidate.slug),
       );
+      const score = Math.min(1, baseScore + computeBusinessSignalScore(seedCandidate, candidate));
       if (score < SYNTHESIS_SIMILARITY_THRESHOLD) {
         return null;
       }
@@ -101,6 +103,62 @@ function buildCandidateComposite(candidate: ExperienceCandidate): string {
     toolNames.join(" "),
     artifactPaths.join(" "),
   ].filter(Boolean).join(" "));
+}
+
+function computeBusinessSignalScore(seedCandidate: ExperienceCandidate, candidate: ExperienceCandidate): number {
+  const seedSnapshot = seedCandidate.sourceTaskSnapshot && typeof seedCandidate.sourceTaskSnapshot === "object"
+    ? seedCandidate.sourceTaskSnapshot as unknown as Record<string, unknown>
+    : {};
+  const candidateSnapshot = candidate.sourceTaskSnapshot && typeof candidate.sourceTaskSnapshot === "object"
+    ? candidate.sourceTaskSnapshot as unknown as Record<string, unknown>
+    : {};
+  const seedToolNames = new Set(extractToolNames(seedSnapshot));
+  const candidateToolNames = new Set(extractToolNames(candidateSnapshot));
+  const toolOverlap = intersectCount(seedToolNames, candidateToolNames);
+  const objectiveScore = keywordOverlapScore(
+    normalizeExperienceText(normalizeOptionalString(seedSnapshot.objective) || normalizeOptionalString(seedSnapshot.summary)),
+    normalizeExperienceText(normalizeOptionalString(candidateSnapshot.objective) || normalizeOptionalString(candidateSnapshot.summary)),
+  );
+  const reflectionScore = keywordOverlapScore(
+    normalizeExperienceText(normalizeOptionalString(seedSnapshot.reflection)),
+    normalizeExperienceText(normalizeOptionalString(candidateSnapshot.reflection)),
+  );
+  const generatedParity =
+    normalizeOptionalString(seedCandidate.metadata?.draftOrigin?.kind)
+    && normalizeOptionalString(seedCandidate.metadata?.draftOrigin?.kind) === normalizeOptionalString(candidate.metadata?.draftOrigin?.kind)
+      ? 0.04
+      : 0;
+  return Math.min(
+    0.2,
+    (toolOverlap > 0 ? Math.min(0.08, toolOverlap * 0.03) : 0)
+      + Math.min(0.05, objectiveScore * 0.1)
+      + Math.min(0.03, reflectionScore * 0.06)
+      + generatedParity,
+  );
+}
+
+function extractToolNames(snapshot: Record<string, unknown>): string[] {
+  const toolCalls = Array.isArray(snapshot.toolCalls) ? snapshot.toolCalls : [];
+  return toolCalls
+    .map((item) => (item && typeof item === "object" ? normalizeOptionalString((item as Record<string, unknown>).toolName) : ""))
+    .filter(Boolean);
+}
+
+function intersectCount(left: Set<string>, right: Set<string>): number {
+  if (!left.size || !right.size) return 0;
+  let count = 0;
+  for (const item of left) {
+    if (right.has(item)) count += 1;
+  }
+  return count;
+}
+
+function keywordOverlapScore(left: string, right: string): number {
+  const leftTokens = new Set(tokenize(left));
+  const rightTokens = new Set(tokenize(right));
+  const intersection = intersectCount(leftTokens, rightTokens);
+  const baseline = Math.max(leftTokens.size, rightTokens.size, 1);
+  return intersection / baseline;
 }
 
 function truncateText(value: string | undefined, maxLength = 1600): string {

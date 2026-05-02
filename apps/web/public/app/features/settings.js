@@ -156,6 +156,9 @@ export function createSettingsController({
     cfgSkillGenerationConfirmRequired,
     cfgMethodPublishConfirmRequired,
     cfgSkillPublishConfirmRequired,
+    cfgExperienceSynthesisMaxSimilarSources,
+    cfgExperienceSynthesisMaxSourceContentChars,
+    cfgExperienceSynthesisTotalSourceContentCharBudget,
     cfgMemoryDeepRetrievalEnabled,
     cfgEmbeddingQueryPrefix,
     cfgEmbeddingPassagePrefix,
@@ -786,6 +789,9 @@ export function createSettingsController({
     if (cfgSkillGenerationConfirmRequired) cfgSkillGenerationConfirmRequired.checked = c["BELLDANDY_SKILL_GENERATION_CONFIRM_REQUIRED"] === "true";
     if (cfgMethodPublishConfirmRequired) cfgMethodPublishConfirmRequired.checked = c["BELLDANDY_METHOD_PUBLISH_CONFIRM_REQUIRED"] === "true";
     if (cfgSkillPublishConfirmRequired) cfgSkillPublishConfirmRequired.checked = c["BELLDANDY_SKILL_PUBLISH_CONFIRM_REQUIRED"] === "true";
+    if (cfgExperienceSynthesisMaxSimilarSources) cfgExperienceSynthesisMaxSimilarSources.value = c["BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SIMILAR_SOURCES"] || "";
+    if (cfgExperienceSynthesisMaxSourceContentChars) cfgExperienceSynthesisMaxSourceContentChars.value = c["BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SOURCE_CONTENT_CHARS"] || "";
+    if (cfgExperienceSynthesisTotalSourceContentCharBudget) cfgExperienceSynthesisTotalSourceContentCharBudget.value = c["BELLDANDY_EXPERIENCE_SYNTHESIS_TOTAL_SOURCE_CONTENT_CHAR_BUDGET"] || "";
     if (cfgMemoryDeepRetrievalEnabled) cfgMemoryDeepRetrievalEnabled.checked = c["BELLDANDY_MEMORY_DEEP_RETRIEVAL"] === "true";
     if (cfgEmbeddingQueryPrefix) cfgEmbeddingQueryPrefix.value = c["BELLDANDY_EMBEDDING_QUERY_PREFIX"] || "";
     if (cfgEmbeddingPassagePrefix) cfgEmbeddingPassagePrefix.value = c["BELLDANDY_EMBEDDING_PASSAGE_PREFIX"] || "";
@@ -1558,6 +1564,9 @@ export function createSettingsController({
     if (cfgSkillGenerationConfirmRequired) updates["BELLDANDY_SKILL_GENERATION_CONFIRM_REQUIRED"] = cfgSkillGenerationConfirmRequired.checked ? "true" : "false";
     if (cfgMethodPublishConfirmRequired) updates["BELLDANDY_METHOD_PUBLISH_CONFIRM_REQUIRED"] = cfgMethodPublishConfirmRequired.checked ? "true" : "false";
     if (cfgSkillPublishConfirmRequired) updates["BELLDANDY_SKILL_PUBLISH_CONFIRM_REQUIRED"] = cfgSkillPublishConfirmRequired.checked ? "true" : "false";
+    if (cfgExperienceSynthesisMaxSimilarSources) updates["BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SIMILAR_SOURCES"] = cfgExperienceSynthesisMaxSimilarSources.value.trim();
+    if (cfgExperienceSynthesisMaxSourceContentChars) updates["BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SOURCE_CONTENT_CHARS"] = cfgExperienceSynthesisMaxSourceContentChars.value.trim();
+    if (cfgExperienceSynthesisTotalSourceContentCharBudget) updates["BELLDANDY_EXPERIENCE_SYNTHESIS_TOTAL_SOURCE_CONTENT_CHAR_BUDGET"] = cfgExperienceSynthesisTotalSourceContentCharBudget.value.trim();
     if (cfgMemoryDeepRetrievalEnabled) updates["BELLDANDY_MEMORY_DEEP_RETRIEVAL"] = cfgMemoryDeepRetrievalEnabled.checked ? "true" : "false";
     if (cfgEmbeddingQueryPrefix) updates["BELLDANDY_EMBEDDING_QUERY_PREFIX"] = cfgEmbeddingQueryPrefix.value.trim();
     if (cfgEmbeddingPassagePrefix) updates["BELLDANDY_EMBEDDING_PASSAGE_PREFIX"] = cfgEmbeddingPassagePrefix.value.trim();

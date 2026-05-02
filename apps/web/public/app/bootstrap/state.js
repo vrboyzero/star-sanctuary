@@ -93,6 +93,7 @@ export const experienceWorkbenchState = {
     error: "",
     seedCandidateId: "",
     preview: null,
+    markSourcesConsumed: true,
   },
 };
 

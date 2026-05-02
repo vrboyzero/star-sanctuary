@@ -539,6 +539,119 @@ test("experience.candidate.reject_bulk rejects all draft candidates for a type a
   }
 });
 
+test("experience.candidate.cleanup_consumed deletes only consumed draft candidates", async () => {
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "star-sanctuary-exp-cleanup-"));
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "star-sanctuary-exp-cleanup-state-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+  const now = new Date().toISOString();
+  const createTask = (taskId: string, title: string) => {
+    (memoryManager as any).store.createTask({
+      id: taskId,
+      conversationId: `conv-${taskId}`,
+      sessionKey: `session-${taskId}`,
+      agentId: "default",
+      title,
+      source: "chat",
+      status: "success",
+      objective: `${title} objective`,
+      summary: `${title} summary`,
+      reflection: `${title} reflection`,
+      toolCalls: [{ toolName: "memory_search", success: true, durationMs: 30 }],
+      artifactPaths: [],
+      startedAt: now,
+      finishedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+  };
+  const debugLogs: Array<{ message: string; data?: unknown }> = [];
+
+  createTask("task-cleanup-consumed-1", "Consumed Draft");
+  createTask("task-cleanup-active-1", "Active Draft");
+  createTask("task-cleanup-accepted-1", "Accepted Draft");
+  const consumedDraft = memoryManager.promoteTaskToMethodCandidate("task-cleanup-consumed-1")?.candidate;
+  const activeDraft = memoryManager.promoteTaskToMethodCandidate("task-cleanup-active-1")?.candidate;
+  const acceptedDraft = memoryManager.promoteTaskToMethodCandidate("task-cleanup-accepted-1")?.candidate;
+  expect(consumedDraft?.id).toBeTruthy();
+  expect(activeDraft?.id).toBeTruthy();
+  expect(acceptedDraft?.id).toBeTruthy();
+  if (!consumedDraft?.id || !activeDraft?.id || !acceptedDraft?.id) {
+    throw new Error("expected cleanup candidates to be created");
+  }
+
+  memoryManager.markExperienceCandidatesSynthesisConsumed({
+    candidateIds: [String(consumedDraft.id)],
+    consumedByCandidateId: "exp_synth_demo",
+    consumedAt: now,
+    consumedRunId: "cleanup-demo",
+  });
+  memoryManager.acceptExperienceCandidate(String(acceptedDraft.id));
+  registerGlobalMemoryManager(memoryManager);
+
+  try {
+    const cleanupRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-cleanup-consumed",
+      method: "experience.candidate.cleanup_consumed",
+      params: {
+        agentId: "default",
+      },
+    }, {
+      stateDir,
+      logger: {
+        debug: (message, data) => {
+          debugLogs.push({ message, data });
+        },
+      },
+    });
+    expect(cleanupRes).toBeTruthy();
+    if (!cleanupRes || !cleanupRes.ok) {
+      throw new Error("expected successful cleanup_consumed response");
+    }
+    expect(cleanupRes.payload?.count).toBe(1);
+    expect(debugLogs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        message: "Experience consumed draft cleanup completed",
+        data: expect.objectContaining({
+          count: 1,
+          filter: expect.objectContaining({
+            status: "draft",
+            synthesisConsumed: true,
+          }),
+        }),
+      }),
+    ]));
+
+    const listRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-list-after-cleanup",
+      method: "experience.candidate.list",
+      params: {
+        agentId: "default",
+        limit: 10,
+      },
+    }, { stateDir });
+    expect(listRes).toBeTruthy();
+    if (!listRes || !listRes.ok) {
+      throw new Error("expected successful list response after cleanup");
+    }
+    const remainingIds = Array.isArray(listRes.payload?.items)
+      ? listRes.payload.items.map((item: any) => String(item?.id || ""))
+      : [];
+    expect(remainingIds).not.toContain(String(consumedDraft.id));
+    expect(remainingIds).toContain(String(activeDraft.id));
+    expect(remainingIds).toContain(String(acceptedDraft.id));
+  } finally {
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("experience synthesis selection prioritizes same_family and backfills similar", () => {
   const selection = selectExperienceSynthesisPreviewItems([
     {
@@ -1124,6 +1237,7 @@ test("experience.candidate.synthesize.create creates a synthesized draft candida
         candidateId: candidateOne!.candidate.id,
         sourceCandidateIds: [candidateOne!.candidate.id, candidateTwo!.candidate.id],
         agentId: "default",
+        markSourcesConsumed: true,
       },
     }, {
       stateDir,
@@ -1155,10 +1269,18 @@ test("experience.candidate.synthesize.create creates a synthesized draft candida
     ]);
     expect(createdCandidate.metadata?.synthesis?.templateId).toBe("method-synthesis");
     expect(String(createdCandidate.taskId || "")).toContain("::synth::");
+    expect(createRes.payload?.consumedSourceCount).toBe(2);
+    expect(createRes.payload?.markSourcesConsumed).toBe(true);
 
     const storedCandidate = memoryManager.getExperienceCandidate(String(createdCandidate.id || ""));
     expect(storedCandidate?.metadata?.draftOrigin?.kind).toBe("synthesized");
     expect(storedCandidate?.metadata?.synthesis?.sourceCount).toBe(2);
+    const consumedSourceOne = memoryManager.getExperienceCandidate(candidateOne!.candidate.id);
+    const consumedSourceTwo = memoryManager.getExperienceCandidate(candidateTwo!.candidate.id);
+    expect(consumedSourceOne?.metadata?.synthesisConsumed?.consumed).toBe(true);
+    expect(consumedSourceTwo?.metadata?.synthesisConsumed?.consumed).toBe(true);
+    expect(consumedSourceOne?.metadata?.synthesisConsumed?.consumedByCandidateId).toBe(String(createdCandidate.id || ""));
+    expect(consumedSourceTwo?.metadata?.synthesisConsumed?.consumedByCandidateId).toBe(String(createdCandidate.id || ""));
   } finally {
     memoryManager.close();
     await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
@@ -1226,7 +1348,7 @@ test("experience.candidate.synthesize.create logs error details when model outpu
           errorLogs.push({ message, data });
         },
       },
-    })).rejects.toThrow("Model did not return a valid JSON object.");
+    })).rejects.toThrow("Model did not return a valid JSON object");
 
     expect(errorLogs).toHaveLength(1);
     expect(errorLogs[0]?.message).toBe("Experience synthesis create failed");
@@ -1235,7 +1357,7 @@ test("experience.candidate.synthesize.create logs error details when model outpu
       candidateType: "method",
       sourceCount: 2,
       error: expect.objectContaining({
-        message: expect.stringContaining("Model did not return a valid JSON object."),
+        message: expect.stringContaining("Model did not return a valid JSON object"),
       }),
     }));
   } finally {
@@ -1340,6 +1462,85 @@ test("experience.candidate.synthesize.create accepts chat completion content arr
     expect(createdCandidate.title).toBe("Tool Call Method Array Unified");
   } finally {
     globalThis.fetch = originalFetch;
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("experience.candidate.synthesize.create repairs truncated json object when the tail is incomplete", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-truncated-json-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-synthesize-truncated-json-workspace-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+
+  const now = "2026-04-20T00:00:00.000Z";
+  const createTask = (taskId: string, title: string, summary: string) => {
+    (memoryManager as any).store.createTask({
+      id: taskId,
+      conversationId: `conv-${taskId}`,
+      sessionKey: `session-${taskId}`,
+      agentId: "default",
+      source: "chat",
+      status: "success",
+      title,
+      objective: `${title} objective`,
+      summary,
+      reflection: `${title} reflection`,
+      toolCalls: [{ toolName: "web_search", success: true, durationMs: 40 }],
+      artifactPaths: ["docs/example.md"],
+      startedAt: now,
+      finishedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+  };
+
+  createTask("task-synthesize-truncated-json-1", "Tool Call Method Draft One", "整理工具调用信息形成 method。");
+  createTask("task-synthesize-truncated-json-2", "Tool Call Method Draft Two", "继续补充工具调用 method 的边界。");
+  const candidateOne = memoryManager.promoteTaskToMethodCandidate("task-synthesize-truncated-json-1");
+  const candidateTwo = memoryManager.promoteTaskToMethodCandidate("task-synthesize-truncated-json-2");
+  expect(candidateOne?.candidate.id).toBeTruthy();
+  expect(candidateTwo?.candidate.id).toBeTruthy();
+  await writeExperienceSynthesisTestTemplate(stateDir, "method");
+  registerGlobalMemoryManager(memoryManager);
+
+  const validPayload = JSON.stringify({
+    title: "Tool Call Method Truncated Repaired",
+    summary: "当模型输出 JSON 尾部缺失时，服务端会尝试补全闭合后继续解析。",
+    content: buildValidSynthesizedMethodContent(
+      "Tool Call Method Truncated Repaired",
+      "当模型输出 JSON 尾部缺失时，服务端会尝试补全闭合后继续解析。",
+    ),
+  });
+  const truncatedPayload = validPayload.slice(0, -1);
+
+  try {
+    const createRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-synthesize-truncated-json",
+      method: "experience.candidate.synthesize.create",
+      params: {
+        candidateId: candidateOne!.candidate.id,
+        sourceCandidateIds: [candidateOne!.candidate.id, candidateTwo!.candidate.id],
+        agentId: "default",
+      },
+    }, {
+      stateDir,
+      callPrimaryModel: async () => truncatedPayload,
+    });
+
+    expect(createRes).toBeTruthy();
+    expect(createRes?.ok).toBe(true);
+    if (!createRes || !createRes.ok) {
+      throw new Error("expected successful synthesize create response");
+    }
+    const createdCandidate = (createRes.payload?.candidate ?? {}) as Record<string, any>;
+    expect(createdCandidate.title).toBe("Tool Call Method Truncated Repaired");
+  } finally {
     memoryManager.close();
     await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
@@ -2035,6 +2236,14 @@ test("experience candidate rpc lists and updates candidate status", async () => 
     expect(listRes.ok).toBe(true);
     expect(listRes.payload.items.length).toBe(2);
 
+    const consumedUpdate = memoryManager.markExperienceCandidatesSynthesisConsumed({
+      candidateIds: [methodCandidate!.candidate.id],
+      consumedByCandidateId: "exp_synth_demo",
+      consumedAt: now,
+      consumedRunId: "synth_demo_run",
+    });
+    expect(consumedUpdate).toHaveLength(1);
+
     ws.send(JSON.stringify({
       type: "req",
       id: "candidate-list-offset",
@@ -2046,6 +2255,30 @@ test("experience candidate rpc lists and updates candidate status", async () => 
     expect(offsetListRes.ok).toBe(true);
     expect(offsetListRes.payload.items.length).toBe(1);
     expect(offsetListRes.payload.offset).toBe(1);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "candidate-list-unconsumed",
+      method: "experience.candidate.list",
+      params: { limit: 10, filter: { status: "draft", synthesisConsumed: false } },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "candidate-list-unconsumed"));
+    const unconsumedRes = frames.find((f) => f.type === "res" && f.id === "candidate-list-unconsumed");
+    expect(unconsumedRes.ok).toBe(true);
+    expect(unconsumedRes.payload.items).toHaveLength(1);
+    expect(unconsumedRes.payload.items[0]?.id).toBe(skillCandidate!.candidate.id);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "candidate-list-consumed",
+      method: "experience.candidate.list",
+      params: { limit: 10, filter: { synthesisConsumed: true, consumedByCandidateId: "exp_synth_demo" } },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "candidate-list-consumed"));
+    const consumedRes = frames.find((f) => f.type === "res" && f.id === "candidate-list-consumed");
+    expect(consumedRes.ok).toBe(true);
+    expect(consumedRes.payload.items).toHaveLength(1);
+    expect(consumedRes.payload.items[0]?.id).toBe(methodCandidate!.candidate.id);
 
     ws.send(JSON.stringify({
       type: "req",

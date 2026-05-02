@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "实现了方法与技能的草稿合成"
+git commit -m "实现了方法与技能的草稿合成，UI显示与功能测试通过"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

@@ -58,6 +58,7 @@ function createHarness(options = {}) {
       <select id="experienceWorkbenchTypeFilter"></select>
       <select id="experienceWorkbenchStatusFilter"></select>
       <button id="experienceWorkbenchResetFilters"></button>
+      <button id="experienceWorkbenchCleanupConsumedBtn" class="hidden"></button>
       <input id="experienceGenerateTaskId" />
       <button id="experienceGenerateMethodBtn"></button>
       <button id="experienceGenerateSkillBtn"></button>
@@ -68,6 +69,10 @@ function createHarness(options = {}) {
       <div id="experienceSynthesisModalTitle"></div>
       <div id="experienceSynthesisModalSummary"></div>
       <div id="experienceSynthesisModalStatus" class="hidden"></div>
+      <label>
+        <input id="experienceSynthesisModalConsumeSources" type="checkbox" checked />
+        <span id="experienceSynthesisModalConsumeSourcesLabel"></span>
+      </label>
       <div id="experienceSynthesisModalList"></div>
       <button id="experienceSynthesisModalClose"></button>
       <button id="experienceSynthesisModalCancel"></button>
@@ -91,6 +96,7 @@ function createHarness(options = {}) {
     experienceWorkbenchTypeFilterEl: document.getElementById("experienceWorkbenchTypeFilter"),
     experienceWorkbenchStatusFilterEl: document.getElementById("experienceWorkbenchStatusFilter"),
     experienceWorkbenchResetFiltersBtn: document.getElementById("experienceWorkbenchResetFilters"),
+    experienceWorkbenchCleanupConsumedBtn: document.getElementById("experienceWorkbenchCleanupConsumedBtn"),
     experienceGenerateTaskIdEl: document.getElementById("experienceGenerateTaskId"),
     experienceGenerateMethodBtn: document.getElementById("experienceGenerateMethodBtn"),
     experienceGenerateSkillBtn: document.getElementById("experienceGenerateSkillBtn"),
@@ -100,6 +106,8 @@ function createHarness(options = {}) {
     experienceSynthesisModalTitleEl: document.getElementById("experienceSynthesisModalTitle"),
     experienceSynthesisModalSummaryEl: document.getElementById("experienceSynthesisModalSummary"),
     experienceSynthesisModalStatusEl: document.getElementById("experienceSynthesisModalStatus"),
+    experienceSynthesisModalConsumeSourcesEl: document.getElementById("experienceSynthesisModalConsumeSources"),
+    experienceSynthesisModalConsumeSourcesLabelEl: document.getElementById("experienceSynthesisModalConsumeSourcesLabel"),
     experienceSynthesisModalListEl: document.getElementById("experienceSynthesisModalList"),
     experienceSynthesisModalCloseBtn: document.getElementById("experienceSynthesisModalClose"),
     experienceSynthesisModalCancelBtn: document.getElementById("experienceSynthesisModalCancel"),
@@ -130,6 +138,7 @@ function createHarness(options = {}) {
       error: "",
       seedCandidateId: "",
       preview: null,
+      markSourcesConsumed: true,
     },
   };
   const memoryViewerState = {
@@ -206,6 +215,12 @@ function createHarness(options = {}) {
     }
     if (typeValues.length) {
       filtered = filtered.filter((item) => typeValues.includes(String(item?.type ?? "").trim().toLowerCase()));
+    }
+    if (typeof safeFilter.synthesisConsumed === "boolean") {
+      filtered = filtered.filter((item) => {
+        const consumed = item?.metadata?.synthesisConsumed?.consumed === true;
+        return safeFilter.synthesisConsumed ? consumed : !consumed;
+      });
     }
     return filtered;
   };
@@ -318,6 +333,29 @@ function createHarness(options = {}) {
         },
       };
     }
+    if (req.method === "experience.candidate.cleanup_consumed") {
+      const consumedDraftIds = candidates
+        .filter((candidate) => (
+          candidate.status === "draft"
+          && candidate?.metadata?.synthesisConsumed?.consumed === true
+        ))
+        .map((candidate) => candidate.id);
+      for (let index = candidates.length - 1; index >= 0; index -= 1) {
+        if (consumedDraftIds.includes(candidates[index]?.id)) {
+          candidates.splice(index, 1);
+        }
+      }
+      return {
+        ok: true,
+        payload: {
+          count: consumedDraftIds.length,
+          filter: {
+            status: "draft",
+            synthesisConsumed: true,
+          },
+        },
+      };
+    }
     if (req.method === "experience.candidate.synthesize.preview") {
       const payload = buildSynthesisPreviewPayload(req.params?.candidateId);
       if (!payload) {
@@ -333,6 +371,7 @@ function createHarness(options = {}) {
       const sourceCandidateIds = Array.isArray(req.params?.sourceCandidateIds)
         ? req.params.sourceCandidateIds.map((item) => String(item)).filter(Boolean)
         : [seedCandidate.id];
+      const markSourcesConsumed = req.params?.markSourcesConsumed !== false;
       const sourceCandidates = sourceCandidateIds
         .map((id) => candidates.find((item) => item.id === id) || null)
         .filter(Boolean);
@@ -365,6 +404,20 @@ function createHarness(options = {}) {
           },
         },
       };
+      if (markSourcesConsumed) {
+        sourceCandidates.forEach((candidate) => {
+          if (!candidate || candidate.id === synthesizedCandidate.id) return;
+          candidate.metadata = {
+            ...(candidate.metadata || {}),
+            synthesisConsumed: {
+              consumed: true,
+              consumedByCandidateId: synthesizedCandidate.id,
+              consumedAt: "2026-04-21T09:01:00.000Z",
+              consumedRunId: "synth-demo",
+            },
+          };
+        });
+      }
       candidates.unshift(synthesizedCandidate);
       return {
         ok: true,
@@ -373,6 +426,9 @@ function createHarness(options = {}) {
           created: true,
           sourceCount: sourceCandidates.length,
           sourceCandidateIds,
+          consumedSourceCount: markSourcesConsumed ? sourceCandidates.length : 0,
+          consumedSourceCandidateIds: markSourcesConsumed ? sourceCandidateIds : [],
+          markSourcesConsumed,
           templateInfo: {
             id: `${seedCandidate.type}-synthesis`,
             path: `docs/experience-templates/${seedCandidate.type === "skill" ? "skill-synthesis.md" : "method-synthesis.md"}`,
@@ -709,13 +765,15 @@ describe("experience workbench capability acquisition", () => {
     await feature.openExperienceWorkbench({ tab: "capability-acquisition", preferFirst: false });
 
     expect(getCapabilityLaneDraftCounts(refs.experienceWorkbenchCapabilityOverviewEl)).toEqual(["Draft 60", "Draft 60"]);
-    expect(sendReq).toHaveBeenCalledWith(expect.objectContaining({
-      method: "experience.candidate.list",
-      params: expect.objectContaining({
-        filter: { status: "draft" },
-        offset: 100,
-      }),
-    }));
+    const pagedDraftListCalls = sendReq.mock.calls
+      .map(([req]) => req)
+      .filter((req) => (
+        req.method === "experience.candidate.list"
+        && req.params?.offset === 100
+        && req.params?.filter?.status === "draft"
+        && req.params?.filter?.synthesisConsumed === false
+      ));
+    expect(pagedDraftListCalls).toHaveLength(1);
 
     refs.experienceWorkbenchCapabilityOverviewEl
       .querySelector("[data-capability-review-candidate-id='method-draft-0'][data-capability-review-candidate-action='reject']")
@@ -833,18 +891,122 @@ describe("experience workbench capability acquisition", () => {
       params: expect.objectContaining({
         candidateId: "draft-method-1",
         sourceCandidateIds: ["draft-method-1", "draft-method-2"],
+        markSourcesConsumed: true,
       }),
     }));
     expect(refs.experienceSynthesisModalEl.classList.contains("hidden")).toBe(true);
     expect(refs.experienceWorkbenchCapabilityOverviewEl.innerHTML).toContain("Method Draft One Synthesized");
     expect(refs.experienceWorkbenchCapabilityOverviewEl.textContent).toContain("ID · draft-method-1-synthesized");
+    expect(refs.experienceWorkbenchCapabilityOverviewEl.innerHTML).not.toContain("Method Draft One</div>");
+    expect(refs.experienceWorkbenchCapabilityOverviewEl.innerHTML).not.toContain("Method Draft Two</div>");
     expect(refs.experienceWorkbenchCapabilityOverviewEl.querySelector(".experience-synthesized-badge")).toBeTruthy();
     expect(refs.experienceWorkbenchCapabilityOverviewEl.querySelector(".experience-candidate-synthesized")).toBeTruthy();
     expect(showNotice).toHaveBeenCalledWith(
       "合成草稿已创建",
-      expect.stringContaining("2"),
+      expect.stringContaining("已标记为已消化"),
       "success",
       2800,
     );
+  });
+
+  it("shows synthesis consumed info in candidate detail", async () => {
+    const candidates = [
+      {
+        id: "draft-method-consumed",
+        taskId: "task-method-consumed",
+        type: "method",
+        status: "draft",
+        title: "Consumed Draft",
+        slug: "consumed-draft",
+        summary: "consumed summary",
+        content: "# Consumed Draft",
+        createdAt: "2026-04-20T09:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+        sourceTaskSnapshot: {},
+        metadata: {
+          synthesisConsumed: {
+            consumed: true,
+            consumedByCandidateId: "draft-method-1-synthesized",
+            consumedAt: "2026-04-21T09:01:00.000Z",
+            consumedRunId: "synth-demo",
+          },
+        },
+      },
+    ];
+    const { refs, feature } = createHarness({ candidates, listCandidateIds: ["draft-method-consumed"] });
+
+    await feature.openExperienceWorkbench({ tab: "candidates", candidateId: "draft-method-consumed", preferFirst: false });
+
+    expect(refs.experienceWorkbenchDetailEl.textContent).toContain("已被合成稿 draft-method-1-synthesized 消化");
+    expect(refs.experienceWorkbenchDetailEl.querySelector("[data-open-candidate-id='draft-method-1-synthesized']")).toBeTruthy();
+  });
+
+  it("shows cleanup consumed button in candidates tab and removes consumed drafts after confirmation", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      const candidates = [
+        {
+          id: "draft-method-consumed",
+          taskId: "task-method-consumed",
+          type: "method",
+          status: "draft",
+          title: "Consumed Draft",
+          slug: "consumed-draft",
+          summary: "consumed summary",
+          content: "# Consumed Draft",
+          createdAt: "2026-04-20T09:00:00.000Z",
+          updatedAt: "2026-04-20T10:00:00.000Z",
+          sourceTaskSnapshot: {},
+          metadata: {
+            synthesisConsumed: {
+              consumed: true,
+              consumedByCandidateId: "draft-method-1-synthesized",
+              consumedAt: "2026-04-21T09:01:00.000Z",
+              consumedRunId: "synth-demo",
+            },
+          },
+        },
+        {
+          id: "draft-method-active",
+          taskId: "task-method-active",
+          type: "method",
+          status: "draft",
+          title: "Active Draft",
+          slug: "active-draft",
+          summary: "active summary",
+          content: "# Active Draft",
+          createdAt: "2026-04-20T11:00:00.000Z",
+          updatedAt: "2026-04-20T12:00:00.000Z",
+          sourceTaskSnapshot: {},
+        },
+      ];
+      const { refs, feature, sendReq, showNotice } = createHarness({ candidates });
+
+      await feature.openExperienceWorkbench({ tab: "candidates", preferFirst: false });
+
+      expect(refs.experienceWorkbenchCleanupConsumedBtn.classList.contains("hidden")).toBe(false);
+
+      refs.experienceWorkbenchCleanupConsumedBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await flushAsyncWork(6);
+
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(sendReq).toHaveBeenCalledWith(expect.objectContaining({
+        method: "experience.candidate.cleanup_consumed",
+        params: expect.objectContaining({
+          agentId: "default",
+        }),
+      }));
+      expect(showNotice).toHaveBeenCalledWith(
+        "旧稿已清理",
+        "已清理 1 个已消化旧草稿。",
+        "success",
+        2600,
+      );
+      expect(refs.experienceWorkbenchCleanupConsumedBtn.classList.contains("hidden")).toBe(true);
+      expect(refs.experienceWorkbenchListEl.textContent).not.toContain("Consumed Draft");
+      expect(refs.experienceWorkbenchListEl.textContent).toContain("Active Draft");
+    } finally {
+      confirmSpy.mockRestore();
+    }
   });
 });

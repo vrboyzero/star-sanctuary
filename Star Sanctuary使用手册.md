@@ -276,6 +276,64 @@ BELLDANDY_BROWSER_RELAY_ENABLED=true
 - `MCP`：允许接外部 MCP 服务器
 - `BROWSER_RELAY`：允许浏览器自动化
 
+### 3.4.1 经验候选 / 合成相关增强配置
+
+如果你准备使用 `Method / Skill` 候选、经验合成和“清理旧稿”链路，建议同时关注下面这组配置：
+
+```env
+BELLDANDY_TASK_MEMORY_ENABLED=true
+
+BELLDANDY_EXPERIENCE_AUTO_PROMOTION_ENABLED=true
+BELLDANDY_EXPERIENCE_AUTO_METHOD_ENABLED=true
+BELLDANDY_EXPERIENCE_AUTO_SKILL_ENABLED=true
+
+# 可选：要求用户确认后再生成候选
+# BELLDANDY_METHOD_GENERATION_CONFIRM_REQUIRED=false
+# BELLDANDY_SKILL_GENERATION_CONFIRM_REQUIRED=false
+
+# 可选：要求用户确认后再发布
+# BELLDANDY_METHOD_PUBLISH_CONFIRM_REQUIRED=false
+# BELLDANDY_SKILL_PUBLISH_CONFIRM_REQUIRED=false
+
+# 可选：经验合成参数
+# BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SIMILAR_SOURCES=5
+# BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SOURCE_CONTENT_CHARS=1600
+# BELLDANDY_EXPERIENCE_SYNTHESIS_TOTAL_SOURCE_CONTENT_CHAR_BUDGET=10000
+```
+
+这组变量可以这样理解：
+
+- `BELLDANDY_TASK_MEMORY_ENABLED=true`
+  是经验候选沉淀的前提。不开 `TASK_MEMORY`，系统就没有稳定的 task 记录，自然也不会持续形成候选池。
+- `BELLDANDY_EXPERIENCE_AUTO_PROMOTION_ENABLED=true`
+  允许系统把合适的任务结果提炼进 experience candidate 层。
+- `BELLDANDY_EXPERIENCE_AUTO_METHOD_ENABLED=true`
+  允许自动生成 `method` 候选。
+- `BELLDANDY_EXPERIENCE_AUTO_SKILL_ENABLED=true`
+  允许自动生成 `skill` 候选。
+- `BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SIMILAR_SOURCES`
+  控制单次合成时，除了种子草稿之外，最多再带多少条相似来源。
+- `BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SOURCE_CONTENT_CHARS`
+  控制单个来源草稿最多摘取多少正文字符给主模型。
+- `BELLDANDY_EXPERIENCE_SYNTHESIS_TOTAL_SOURCE_CONTENT_CHAR_BUDGET`
+  控制单次合成所有来源正文摘录的总预算。
+
+实际经验建议：
+
+- 如果你只是想先稳定用起来，保持默认值通常就够了。
+- 如果合成经常很慢、容易超时、或主模型经常返回不完整 JSON，优先先减小：
+  - `BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SIMILAR_SOURCES`
+  - `BELLDANDY_EXPERIENCE_SYNTHESIS_MAX_SOURCE_CONTENT_CHARS`
+  - `BELLDANDY_EXPERIENCE_SYNTHESIS_TOTAL_SOURCE_CONTENT_CHAR_BUDGET`
+- 如果你更关心候选池规模而不是覆盖面，可以先只开 `method`，关闭 `skill`：
+
+```env
+BELLDANDY_TASK_MEMORY_ENABLED=true
+BELLDANDY_EXPERIENCE_AUTO_PROMOTION_ENABLED=true
+BELLDANDY_EXPERIENCE_AUTO_METHOD_ENABLED=true
+BELLDANDY_EXPERIENCE_AUTO_SKILL_ENABLED=false
+```
+
 ### 3.5 某些模型需要 `responses` 线路
 
 当前默认线路是：
@@ -998,7 +1056,116 @@ WebChat 的 `🧠 记忆查看` 当前适合做这些事：
 - `Resume Context` 负责给你看“现在应该从哪继续”
 - `来源解释` 负责回答“这条结论是怎么来的”
 
-### 7.2.1 Dream（梦境）怎么用
+### 7.2.1 经验候选、能力获取与合成
+
+当前 `🧠 记忆查看` 中和经验能力最相关的页签，普通用户主要会用到两块：
+
+- `内容管理 -> 经验能力 -> 能力获取`
+- `内容管理 -> 经验能力 -> 经验候选`
+
+可以把它们理解为：
+
+- `能力获取`
+  更像“待处理草稿池”，默认只看还没被消化的 `draft` method / skill 候选。
+- `经验候选`
+  更像“完整候选库”，会保留已合成稿、已消化旧稿、已接受 / 已拒绝候选，适合做追溯和治理。
+
+当前已经落地的合成链路是：
+
+1. 在 `经验候选` 或相关卡片中找到某个 `draft` 候选。
+2. 点击 `合成`。
+3. 系统先做一次 preview，检索同类或近似草稿。
+4. 确认后调用主模型，生成一个新的合成 draft。
+5. 如果勾选了“合成成功后，将本次参与的旧草稿标记为已消化”，旧稿会被写入 `synthesisConsumed` 元信息。
+6. 这些已消化旧稿会默认从 `能力获取` 页隐藏。
+7. 如果你确认这些旧稿已经没必要保留，可以在 `经验候选` 页点击 `清理旧稿`，删除这些 `draft + synthesisConsumed=true` 的旧候选。
+
+这里有三个很实用的认知点：
+
+- `标记已消化` 不等于立刻物理删除。
+  默认先做软治理，也就是保留候选关系和来源追踪，只是从默认待处理视图里隐藏。
+- `清理旧稿` 才是手动删除动作。
+  它不会动未消化草稿，也不会动已接受 / 已拒绝候选。
+- 合成结果默认仍然只是新的 `draft`。
+  你后面仍然要按现有流程继续审核、接受或发布。
+
+如果你在真实使用中想判断这条链路是不是工作正常，最直接的终端日志信号是：
+
+- `Experience synthesis preview prepared`
+- `Experience synthesis draft created`
+- `Experience consumed draft cleanup completed`
+
+如果只想判断模型有没有正常完成合成，额外看：
+
+- `Primary model returned experience synthesis output`
+  里的 `finishReason`
+
+通常：
+
+- `finishReason="stop"`
+  表示模型正常收尾。
+- 如果不是 `stop`，或者经常出现输出不完整、JSON 解析失败，优先考虑减小合成来源规模，或者换一个结构化输出更稳定的主模型。
+
+### 7.2.1.1 方法 / 技能合成参考模板放在哪里
+
+当前经验合成不是把 prompt 完全硬编码在程序里，而是支持从模板文件读取“方法合成模板”和“技能合成模板”。
+
+固定文件名要求如下：
+
+- 方法模板：`method-synthesis.md`
+- 技能模板：`skill-synthesis.md`
+
+读取顺序如下：
+
+1. 先读状态目录：
+   - `<stateDir>/experience-templates/method-synthesis.md`
+   - `<stateDir>/experience-templates/skill-synthesis.md`
+2. 如果状态目录下没有可用模板，再回退到项目目录：
+   - `docs/experience-templates/method-synthesis.md`
+   - `docs/experience-templates/skill-synthesis.md`
+
+可以这样理解：
+
+- `stateDir` 下的模板是“当前实例自己的覆盖模板”
+- 项目目录 `docs/experience-templates/` 下的模板是“仓库内置兜底模板”
+
+这意味着：
+
+- 如果你只是正常使用，不改模板，系统会直接用仓库自带模板。
+- 如果你想让当前这台实例有自己偏好的写法、章节要求或输出风格，推荐把模板写到 `stateDir/experience-templates/` 下。
+- 只要文件名不对，或者文件内容是空的，系统就会继续尝试下一个兜底路径。
+
+对 Windows 用户，常见 `stateDir` 通常在你用户目录下的 `.star_sanctuary` 文件夹，因此常见路径会像：
+
+- `C:\Users\你的用户名\.star_sanctuary\experience-templates\method-synthesis.md`
+- `C:\Users\你的用户名\.star_sanctuary\experience-templates\skill-synthesis.md`
+
+如果你用的是源码运行，仓库内置兜底模板通常就是：
+
+- [docs/experience-templates/method-synthesis.md](/E:/project/star-sanctuary/docs/experience-templates/method-synthesis.md)
+- [docs/experience-templates/skill-synthesis.md](/E:/project/star-sanctuary/docs/experience-templates/skill-synthesis.md)
+
+模板内容建议：
+
+- 明确要求模型最终只输出一个 JSON 对象
+- 明确 `title`、`summary`、`content` 三个字段
+- 明确 `content` 的 Markdown 章节结构
+- 明确禁止模型输出解释、前后缀、额外 prose
+
+如果你准备让 AI 或 Agent 自己编写 / 改写这两个模板，最稳妥的做法是：
+
+1. 先复制仓库里的兜底模板到 `stateDir/experience-templates/`
+2. 只在此基础上做局部改写
+3. 保持文件名不变
+4. 改完后实际跑一轮 `preview -> create` 手测
+
+这样做的好处是：
+
+- 不会污染仓库默认模板
+- 不同实例可以保留各自偏好的方法 / 技能写法
+- 出现问题时，删掉 `stateDir` 下覆盖模板即可退回项目兜底模板
+
+### 7.2.2 Dream（梦境）怎么用
 
 当前 `dream` 不是另一套独立记忆系统，而是建立在现有摘要、`Work Recap`、`Resume Context`、长期记忆增量之上的“后台整理层”。
 

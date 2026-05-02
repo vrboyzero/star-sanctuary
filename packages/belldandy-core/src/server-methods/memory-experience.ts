@@ -602,7 +602,18 @@ export async function handleMemoryExperienceMethod(
       const limit = clampListLimit(params.limit, 50);
       const offset = readOptionalNonNegativeInteger(params, "offset") ?? 0;
       const filter = isObjectRecord(params.filter) ? params.filter : undefined;
-      const items = manager.listExperienceCandidates(limit, filter as any, offset);
+      const normalizedFilter = filter
+        ? {
+          ...filter,
+          ...(typeof filter.synthesisConsumed === "boolean"
+            ? { synthesisConsumed: filter.synthesisConsumed }
+            : {}),
+          ...(readOptionalString(filter, "consumedByCandidateId")
+            ? { consumedByCandidateId: readOptionalString(filter, "consumedByCandidateId") }
+            : {}),
+        }
+        : undefined;
+      const items = manager.listExperienceCandidates(limit, normalizedFilter as any, offset);
       const skillFreshnessSnapshot = await buildScopedSkillFreshnessSnapshot(ctx.stateDir, manager);
       return ok(req.id, {
         items: items.map((item) => attachSkillFreshnessToCandidatePayload(
@@ -719,6 +730,32 @@ export async function handleMemoryExperienceMethod(
       });
     }
 
+    case "experience.candidate.cleanup_consumed": {
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
+      if (!manager) return notAvailable(req.id);
+
+      const count = manager.deleteExperienceCandidates({
+        status: "draft",
+        synthesisConsumed: true,
+      });
+      logDebug("Experience consumed draft cleanup completed", {
+        count,
+        filter: {
+          status: "draft",
+          synthesisConsumed: true,
+        },
+      });
+      return ok(req.id, {
+        count,
+        filter: {
+          status: "draft",
+          synthesisConsumed: true,
+        },
+        queryView: buildResidentMemoryQueryView(residentPolicy),
+      });
+    }
+
     case "experience.candidate.synthesize.preview": {
       const manager = resolveScopedMemoryManager(params);
       const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
@@ -825,6 +862,7 @@ export async function handleMemoryExperienceMethod(
         return notFound(req.id, "Experience candidate not found.");
       }
       const requestedSourceCandidateIds = readOptionalStringArray(params, "sourceCandidateIds");
+      const markSourcesConsumed = readOptionalBoolean(params, "markSourcesConsumed") === true;
       const requestedPreviewItems = requestedSourceCandidateIds.length > 0
         ? filterExperienceSynthesisPreviewItemsByCandidateIds(preview.items, requestedSourceCandidateIds)
         : preview.items;
@@ -916,7 +954,7 @@ export async function handleMemoryExperienceMethod(
           systemPromptLength: systemPrompt.length,
           userPromptLength: userPrompt.length,
         });
-        const rawModelOutput = await callPrimaryModelForExperienceSynthesis({
+        const modelResult = await callPrimaryModelForExperienceSynthesis({
           ctx,
           system: systemPrompt,
           user: userPrompt,
@@ -924,9 +962,12 @@ export async function handleMemoryExperienceMethod(
         logDebug("Primary model returned experience synthesis output", {
           candidateId: seedCandidate.id,
           candidateType: seedCandidate.type,
-          outputLength: rawModelOutput.length,
+          outputLength: modelResult.content.length,
+          finishReason: modelResult.finishReason || "unknown",
         });
-        const parsed = parseExperienceSynthesisModelOutput(rawModelOutput);
+        const parsed = parseExperienceSynthesisModelOutput(modelResult.content, {
+          finishReason: modelResult.finishReason,
+        });
         const title = normalizeText(parsed.title) || readFirstMarkdownTitle(parsed.content) || seedCandidate.title;
         const summary = normalizeText(parsed.summary) || readExperienceSynthesisSummary(seedCandidate.type, parsed.content) || seedCandidate.summary;
         const slug = buildExperienceCandidateSlug(seedCandidate.type, {
@@ -970,12 +1011,20 @@ export async function handleMemoryExperienceMethod(
             },
           },
         });
+        const consumedSourceCandidates = markSourcesConsumed
+          ? manager.markExperienceCandidatesSynthesisConsumed({
+            candidateIds: sourceCandidates.map((item) => item.id),
+            consumedByCandidateId: createdCandidate.id,
+          })
+          : [];
         logDebug("Experience synthesis draft created", {
           candidateId: seedCandidate.id,
           createdCandidateId: createdCandidate.id,
           candidateType: seedCandidate.type,
           sourceCount: sourceCandidates.length,
           templateId: template.id,
+          consumedSourceCount: consumedSourceCandidates.length,
+          markSourcesConsumed,
         });
         const skillFreshnessSnapshot = await buildScopedSkillFreshnessSnapshot(ctx.stateDir, manager);
         return ok(req.id, {
@@ -987,6 +1036,9 @@ export async function handleMemoryExperienceMethod(
           created: true,
           sourceCount: sourceCandidates.length,
           sourceCandidateIds: sourceCandidates.map((item) => item.id),
+          consumedSourceCount: consumedSourceCandidates.length,
+          consumedSourceCandidateIds: consumedSourceCandidates.map((item) => item.id),
+          markSourcesConsumed,
           templateInfo: {
             id: template.id,
             path: template.path,
@@ -1672,9 +1724,9 @@ async function callPrimaryModelForExperienceSynthesis(input: {
   ctx: MemoryExperienceMethodContext;
   system: string;
   user: string;
-}): Promise<string> {
+}): Promise<{ content: string; finishReason: string }> {
   if (typeof input.ctx.callPrimaryModel === "function") {
-    return await input.ctx.callPrimaryModel({
+    const content = await input.ctx.callPrimaryModel({
       system: input.system,
       user: input.user,
       maxTokens: 8_000,
@@ -1682,6 +1734,10 @@ async function callPrimaryModelForExperienceSynthesis(input: {
       thinking: input.ctx.primaryModelConfig?.thinking,
       reasoningEffort: input.ctx.primaryModelConfig?.reasoningEffort,
     });
+    return {
+      content,
+      finishReason: "",
+    };
   }
 
   const config = input.ctx.primaryModelConfig;
@@ -1744,14 +1800,17 @@ async function callPrimaryModelForExperienceSynthesis(input: {
   };
   const choice = data.choices?.[0];
   const content = extractExperienceSynthesisResponseText(choice?.message?.content);
+  const finishReason = normalizeText(choice?.finish_reason);
   if (!content) {
     const reasoningContent = normalizeText(choice?.message?.reasoning_content);
-    const finishReason = normalizeText(choice?.finish_reason);
     throw new Error(
       `Experience synthesis model returned empty content. finish_reason=${finishReason || "unknown"}, reasoning_content=${reasoningContent ? `present(${reasoningContent.length})` : "absent"}.`,
     );
   }
-  return content;
+  return {
+    content,
+    finishReason,
+  };
 }
 
 function extractExperienceSynthesisResponseText(
@@ -1773,8 +1832,11 @@ function extractExperienceSynthesisResponseText(
   return normalizeText(chunks.join("\n"));
 }
 
-function parseExperienceSynthesisModelOutput(raw: string): { title: string; summary: string; slug: string; content: string } {
-  const extracted = normalizeJsonCandidate(raw);
+function parseExperienceSynthesisModelOutput(
+  raw: string,
+  options: { finishReason?: string | null } = {},
+): { title: string; summary: string; slug: string; content: string } {
+  const extracted = normalizeJsonCandidate(raw, options);
   const parsed = JSON.parse(extracted) as Record<string, unknown>;
   const title = normalizeText(parsed.title);
   const summary = normalizeText(parsed.summary);
@@ -1804,7 +1866,7 @@ function summarizeExperienceSynthesisError(error: unknown): Record<string, unkno
   };
 }
 
-function normalizeJsonCandidate(raw: string): string {
+function normalizeJsonCandidate(raw: string, options: { finishReason?: string | null } = {}): string {
   const direct = stripMarkdownFence(stripReasoningArtifacts(raw));
   if (direct.startsWith("{") && direct.endsWith("}")) {
     return direct;
@@ -1814,7 +1876,20 @@ function normalizeJsonCandidate(raw: string): string {
   if (extracted) {
     return extracted;
   }
-  throw new Error(`Model did not return a valid JSON object. Preview: ${truncateText(raw, 160)}`);
+
+  const repaired = repairIncompleteJsonObjectCandidate(direct);
+  if (repaired) {
+    return repaired;
+  }
+
+  const finishReason = normalizeText(options.finishReason);
+  const likelyTruncated = isLikelyTruncatedJsonCandidate(direct);
+  const diagnostics = [
+    finishReason ? `finish_reason=${finishReason}` : "",
+    likelyTruncated ? "likely_truncated=true" : "",
+  ].filter(Boolean).join(", ");
+  const suffix = diagnostics ? ` (${diagnostics})` : "";
+  throw new Error(`Model did not return a valid JSON object${suffix}. Preview: ${truncateText(raw, 160)}`);
 }
 
 function stripMarkdownFence(value: string): string {
@@ -1878,6 +1953,90 @@ function extractFirstJsonObject(value: string): string | null {
   }
 
   return null;
+}
+
+function repairIncompleteJsonObjectCandidate(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{")) {
+    return null;
+  }
+  const repairPlan = analyzeJsonClosure(trimmed);
+  if (repairPlan.depth <= 0 && !repairPlan.inString) {
+    return null;
+  }
+  const repaired = `${trimmed}${"\"".repeat(repairPlan.inString ? 1 : 0)}${"]".repeat(repairPlan.bracketDepth)}${"}".repeat(repairPlan.braceDepth)}`;
+  try {
+    JSON.parse(repaired);
+    return repaired;
+  } catch {
+    return null;
+  }
+}
+
+function isLikelyTruncatedJsonCandidate(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{")) {
+    return false;
+  }
+  const repairPlan = analyzeJsonClosure(trimmed);
+  return repairPlan.inString || repairPlan.depth > 0;
+}
+
+function analyzeJsonClosure(value: string): {
+  depth: number;
+  braceDepth: number;
+  bracketDepth: number;
+  inString: boolean;
+} {
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      braceDepth += 1;
+      continue;
+    }
+    if (char === "}") {
+      braceDepth = Math.max(0, braceDepth - 1);
+      continue;
+    }
+    if (char === "[") {
+      bracketDepth += 1;
+      continue;
+    }
+    if (char === "]") {
+      bracketDepth = Math.max(0, bracketDepth - 1);
+    }
+  }
+
+  return {
+    depth: braceDepth + bracketDepth,
+    braceDepth,
+    bracketDepth,
+    inString,
+  };
 }
 
 function readExperienceSynthesisSummary(type: ExperienceCandidateType, content: string): string {
