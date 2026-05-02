@@ -14,6 +14,7 @@ describe("task dedup policy", () => {
   it("classifies tools into graded dedup modes", () => {
     expect(resolveToolDedupMode("service_restart")).toBe("hard-block");
     expect(resolveToolDedupMode("switch_facet")).toBe("hard-block");
+    expect(resolveToolDedupMode("switch_faqi")).toBe("hard-block");
     expect(resolveToolDedupMode("method_create")).toBe("hard-block");
     expect(resolveToolDedupMode("run_command")).toBe("warn-only");
     expect(resolveToolDedupMode("file_write")).toBe("warn-only");
@@ -23,6 +24,7 @@ describe("task dedup policy", () => {
 
   it("builds stable action keys for high-risk and warn-only tools", () => {
     expect(buildToolActionKey("service_restart", {})).toBe("service_restart:gateway");
+    expect(buildToolActionKey("switch_faqi", { faqi_name: "safe-dev" })).toBe("switch_faqi:safe-dev");
     expect(buildToolActionKey("run_command", { command: "pnpm   build;" })).toBe("command:pnpm build");
     expect(buildToolActionKey("file_write", { path: "src\\app.ts" })).toBe("file_write:path:src/app.ts");
     expect(buildToolActionKey("method_create", { filename: "deploy.md" })).toBe("method_create:file:deploy.md");

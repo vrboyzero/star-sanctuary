@@ -4,6 +4,7 @@ export type ToolDedupGlobalMode = "off" | "graded" | "strict";
 const DEFAULT_GRADED_POLICY: Record<string, ToolDedupMode> = {
   service_restart: "hard-block",
   switch_facet: "hard-block",
+  switch_faqi: "hard-block",
   method_create: "hard-block",
   run_command: "warn-only",
   file_write: "warn-only",
@@ -122,6 +123,10 @@ export function buildToolActionKey(toolName: string, params: Record<string, unkn
     case "switch_facet": {
       const facet = firstString(params.facet, params.name);
       return facet ? `switch_facet:${normalizeCommandFingerprint(facet)}` : undefined;
+    }
+    case "switch_faqi": {
+      const faqi = firstString(params.faqi_name, params.name);
+      return faqi ? `switch_faqi:${normalizeCommandFingerprint(faqi)}` : undefined;
     }
     default: {
       const marker = firstString(

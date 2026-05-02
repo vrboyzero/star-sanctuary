@@ -211,6 +211,8 @@ import {
   createCronTool,
   createServiceRestartTool,
   switchFacetTool,
+  listFaqisTool,
+  switchFaqiTool,
   sessionsSpawnTool,
   sessionsHistoryTool,
   delegateTaskTool,
@@ -242,6 +244,14 @@ import {
   tokenCounterStartTool,
   tokenCounterStopTool,
   listToolContractsV2,
+  ensureFaqiDir,
+  getCurrentFaqiForAgent,
+  indexFaqiDefinitions,
+  loadFaqiDefinitions,
+  readFaqiState,
+  resolveToolWhitelistFromFaqi,
+  LIST_FAQIS_TOOL_NAME,
+  SWITCH_FAQI_TOOL_NAME,
 } from "@belldandy/skills";
 import { listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager, listGlobalMemoryManagers, type MemoryCategory } from "@belldandy/memory";
 import {
@@ -680,6 +690,15 @@ if (!fs.existsSync(facetsDir)) {
   }
 }
 
+const faqisDir = path.join(stateDir, "faqis");
+if (!fs.existsSync(faqisDir)) {
+  try {
+    fs.mkdirSync(faqisDir, { recursive: true });
+  } catch {
+    // ignore
+  }
+}
+
 // 1.6 Ensure agents dir exists
 const agentsDir = path.join(stateDir, "agents");
 if (!fs.existsSync(agentsDir)) {
@@ -763,6 +782,13 @@ const toolsConfigManager = new ToolsConfigManager(stateDir, {
   warn: (m) => logger.warn("tools-config", m),
 });
 await toolsConfigManager.load();
+await ensureFaqiDir(stateDir);
+const faqiState = await readFaqiState(stateDir);
+const { definitions: faqiDefinitions, issues: faqiLoadIssues } = await loadFaqiDefinitions(stateDir);
+const faqiDefinitionsByName = indexFaqiDefinitions(faqiDefinitions);
+for (const issue of faqiLoadIssues) {
+  logger.warn("faqi", `Ignored invalid FAQI "${issue.name}" (${issue.filePath}): ${issue.message}`);
+}
 const toolControlConfirmationStore = new ToolControlConfirmationStore();
 const externalOutboundConfirmationStore = new ExternalOutboundConfirmationStore();
 const emailOutboundConfirmationStore = new EmailOutboundConfirmationStore();
@@ -936,6 +962,8 @@ const gatewayToolPoolAssembler = new ToolPoolAssembler([
         },
       }),
       createServiceRestartTool((msg) => serverBroadcast?.(msg)),
+      listFaqisTool,
+      switchFaqiTool,
       switchFacetTool,
     ],
   },
@@ -1038,6 +1066,8 @@ const gatewayExecutorContractAccessPolicy: ToolContractAccessPolicy = {
 const CORE_TOOL_NAMES = new Set<string>([
   TOOL_SETTINGS_CONTROL_NAME,
   TOOL_SEARCH_NAME,
+  LIST_FAQIS_TOOL_NAME,
+  SWITCH_FAQI_TOOL_NAME,
   applyPatchTool.definition.name,
   fileReadTool.definition.name,
   listFilesTool.definition.name,
@@ -1050,6 +1080,12 @@ const deferredToolNames = runtimeToolsToRegister
 
 let agentRegistry: AgentRegistry | undefined;
 const autoTaskReportFlags = getAutoTaskReportFlags();
+const AGENT_META_ALWAYS_ALLOWED_TOOLS = new Set<string>([
+  TOOL_SETTINGS_CONTROL_NAME,
+  TOOL_SEARCH_NAME,
+  LIST_FAQIS_TOOL_NAME,
+  SWITCH_FAQI_TOOL_NAME,
+]);
 
 const toolExecutor = new ToolExecutor({
   tools: runtimeToolsToRegister,
@@ -1063,6 +1099,9 @@ const toolExecutor = new ToolExecutor({
   allowedConversationKinds,
   isToolDisabled: (name) => toolsConfigManager.isToolDisabled(name),
   isToolAllowedForAgent: (toolName, agentId) => {
+    if (AGENT_META_ALWAYS_ALLOWED_TOOLS.has(toolName)) {
+      return true;
+    }
     const resolvedAgentId = typeof agentId === "string" && agentId.trim()
       ? agentId.trim()
       : "default";
@@ -1887,16 +1926,48 @@ agentRegistry = agentProvider === "openai"
 
 // Register agent profiles
 if (agentRegistry) {
+  const buildRegisteredProfile = (profile: AgentProfile): AgentProfile => {
+    const resolution = resolveToolWhitelistFromFaqi({
+      agentId: profile.id,
+      state: faqiState,
+      definitions: faqiDefinitionsByName,
+      fallbackToolWhitelist: profile.toolWhitelist,
+    });
+    const configuredFaqi = getCurrentFaqiForAgent(faqiState, profile.id);
+
+    if (resolution.source === "faqi" && resolution.activeFaqi) {
+      logger.info(
+        "faqi",
+        `Agent "${profile.id}" using FAQI "${resolution.activeFaqi.name}" (${resolution.activeFaqi.toolNames.length} tools)`,
+      );
+      return {
+        ...profile,
+        toolWhitelist: [...resolution.activeFaqi.toolNames],
+      };
+    }
+
+    if (configuredFaqi) {
+      logger.warn(
+        "faqi",
+        `Agent "${profile.id}" references missing/invalid currentFaqi "${configuredFaqi}", falling back to toolWhitelist`,
+      );
+    }
+
+    return profile.toolWhitelist
+      ? { ...profile, toolWhitelist: [...profile.toolWhitelist] }
+      : profile;
+  };
+
   // Always register the default profile
   const defaultProfile = buildDefaultProfile();
   // Check if agents.json has a custom "default" override
   const customDefault = agentProfiles.find(p => p.id === "default");
-  agentRegistry.register(customDefault ?? defaultProfile);
+  agentRegistry.register(buildRegisteredProfile(customDefault ?? defaultProfile));
 
   // Register additional profiles from agents.json
   for (const profile of agentProfiles) {
     if (profile.id !== "default") {
-      agentRegistry.register(profile);
+      agentRegistry.register(buildRegisteredProfile(profile));
     }
   }
 

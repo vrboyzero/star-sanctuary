@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -104,11 +105,17 @@ export type RemoveCameraDeviceAliasMemoryEntryResult = {
 
 const SNAPSHOT_VERSION = 2 as const;
 const MAX_LABEL_HISTORY = 8;
+const RENAME_RETRIES = 3;
+const RENAME_RETRY_DELAY_MS = 50;
 const CAMERA_PROVIDER_IDS: CameraProviderId[] = [
   "browser_loopback",
   "native_desktop",
   "node_device",
 ];
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function normalizeString(value: unknown): string | undefined {
   const normalized = typeof value === "string" ? value.trim() : "";
@@ -323,9 +330,31 @@ function allocateAlias(
 
 async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
-  await fs.writeFile(tempPath, JSON.stringify(value, null, 2), "utf-8");
-  await fs.rename(tempPath, filePath);
+  const tempPath = `${filePath}.${crypto.randomUUID()}.tmp`;
+  const content = JSON.stringify(value, null, 2);
+  await fs.writeFile(tempPath, content, "utf-8");
+
+  let lastErr: NodeJS.ErrnoException | null = null;
+  for (let attempt = 0; attempt < RENAME_RETRIES; attempt += 1) {
+    try {
+      await fs.rename(tempPath, filePath);
+      return;
+    } catch (error) {
+      lastErr = error as NodeJS.ErrnoException;
+      if (attempt < RENAME_RETRIES - 1) {
+        await delay(RENAME_RETRY_DELAY_MS);
+      }
+    }
+  }
+
+  if (process.platform === "win32" && lastErr && (lastErr.code === "EPERM" || lastErr.code === "EBUSY")) {
+    await fs.writeFile(filePath, content, "utf-8");
+    await fs.unlink(tempPath).catch(() => {});
+    return;
+  }
+
+  await fs.unlink(tempPath).catch(() => {});
+  throw lastErr;
 }
 
 async function loadCameraDeviceAliasSnapshotState(

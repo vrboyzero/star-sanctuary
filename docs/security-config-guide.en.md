@@ -156,6 +156,22 @@ Typical shape:
 - explicit browser domain allow/deny lists
 - explicit tools policy file
 
+### Maximum Capability
+
+Use when:
+
+- you explicitly want the widest tool surface for a trusted local operator setup
+- you accept `run_command`, binary writes, dotfile writes, and unrestricted public-domain fetches
+- you still want a policy file, but you do not want domain or extension allowlists to be the default boundary
+
+Typical shape:
+
+- localhost binding still recommended
+- token auth still required
+- `BELLDANDY_DANGEROUS_TOOLS_ENABLED=true`
+- `BELLDANDY_TOOLS_POLICY_FILE=.../tools-policy.max.json`
+- formatter executables are blocked explicitly by command name instead of by semantic classification
+
 ## Related Files
 
 Built-in policy examples:
@@ -163,6 +179,7 @@ Built-in policy examples:
 - [`../config/tools-policy.strict.json`](/E:/project/star-sanctuary/config/tools-policy.strict.json)
 - [`../config/tools-policy.balanced.json`](/E:/project/star-sanctuary/config/tools-policy.balanced.json)
 - [`../config/tools-policy.open.json`](/E:/project/star-sanctuary/config/tools-policy.open.json)
+- [`../config/tools-policy.max.json`](/E:/project/star-sanctuary/config/tools-policy.max.json)
 
 Full Chinese guide:
 

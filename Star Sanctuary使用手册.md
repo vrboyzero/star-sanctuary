@@ -1,6 +1,6 @@
 # Star Sanctuary 使用手册
 
-最后更新时间：2026-04-20  
+最后更新时间：2026-05-02  
 适用版本：当前仓库主干，workspace version `0.2.4`
 
 Star Sanctuary 是一个 **本地优先的个人 AI 助手与 Agent 工作台**。  
@@ -3715,6 +3715,120 @@ BELLDANDY_TEAM_SHARED_MEMORY_ENABLED=true
 - `toolWhitelist`
   - 按工具名进一步收缩
 
+#### FAQI（法器）：把一套 `toolWhitelist` 做成可切换模组
+
+FAQI 可以把 Agent 的工具边界从“固定一套白名单”变成“多套可切换白名单”。
+
+- FAQI 是工具集合模组
+- 一个 FAQI = 一套可生效的工具名单
+- FAQI 生效时，会优先覆盖该 Agent 原本的 `toolWhitelist`
+- FAQI 不生效时，会回退到 `agents.json` 里的 `toolWhitelist`
+
+它和 `agents.json` 的关系可以这样理解：
+
+- `toolsEnabled`
+  - 决定这个 Agent 能不能使用工具
+- `toolWhitelist`
+  - 旧的静态兜底白名单
+- `faqis-state.json -> currentFaqi`
+  - 当前正在使用哪一个 FAQI
+- `faqis/*.md`
+  - FAQI 的定义文件
+
+FAQI 文件统一放在：
+
+- `~/.star_sanctuary/faqis/`
+
+当前选择状态统一放在：
+
+- `~/.star_sanctuary/faqis-state.json`
+
+一个最小 FAQI 文件示例：
+
+```md
+# 【FAQI | 法器 | safe-dev】
+
+用途：安全开发模式
+
+## tools
+
+- file_read
+- list_files
+- apply_patch
+- log_read
+```
+
+编写规则要点：
+
+- 文件名就是 FAQI 名称，例如 `safe-dev.md`
+- 切换时使用 `safe-dev`，不要带 `.md`
+- 必须包含 `## tools`
+- 工具名按 `- tool_name` 逐行列出
+- FAQI 名称不能包含 `/`、`\` 或 `..`
+
+`faqis-state.json` 的最常见写法如下。
+
+让 Agent 使用 FAQI：
+
+```json
+{
+  "agents": {
+    "coder": {
+      "currentFaqi": "safe-dev"
+    }
+  }
+}
+```
+
+让多个 Agent 分别使用不同 FAQI：
+
+```json
+{
+  "agents": {
+    "default": {
+      "currentFaqi": "full-dev"
+    },
+    "coder": {
+      "currentFaqi": "safe-dev"
+    },
+    "researcher": {
+      "currentFaqi": "research-docs"
+    }
+  }
+}
+```
+
+让 Agent 不使用 FAQI，回退到旧 `toolWhitelist`：
+
+```json
+{
+  "agents": {
+    "coder": {}
+  }
+}
+```
+
+也可以直接不写这个 Agent，或者直接删除整个 `faqis-state.json`。当前实现里，“不使用法器”不是写 `"none"` 或 `"disabled"`，而是让 `currentFaqi` 处于缺失或空状态。
+
+日常使用 FAQI，最常走这条路径：
+
+1. 先准备好 `faqis/<name>.md`
+2. 重启 Gateway，确保它能加载到新的 FAQI 文件
+3. 在聊天中让当前 Agent 调用 `list_faqis`
+4. 确认可用列表后，再调用 `switch_faqi`
+5. 再次重启 Gateway，使新的工具边界完全生效
+
+需要注意：
+
+- `switch_faqi` 只能切换当前 Agent 自己的 `currentFaqi`
+- `switch_faqi` 会写入 `faqis-state.json`
+- FAQI 文件写错、FAQI 不存在，或 `currentFaqi` 无效时，系统会自动回退到旧 `toolWhitelist`
+- `list_faqis` 里如果看到 `Current FAQI: (none)`，就表示当前 Agent 没在使用 FAQI
+
+更细的实现说明见：
+
+- [docs/Agent FAQI（法器）切换实现方案.md](E:\project\star-sanctuary\docs\Agent FAQI（法器）切换实现方案.md)
+
 Agent 专属工作区推荐结构：
 
 ```text
@@ -3767,7 +3881,7 @@ BELLDANDY_TOOLS_ENABLED=true
 2. 工具已经注册
 3. 工具没有被运行时 Tool Settings 禁掉
 4. 当前 Agent 的 `toolsEnabled` 允许
-5. 如果配置了 `toolWhitelist`，工具名必须在白名单里
+5. 如果当前 Agent 在 `faqis-state.json` 里绑定了有效 `currentFaqi`，优先按该 FAQI 的工具列表判断；否则按 `toolWhitelist` 判断
 6. 当前 Agent / 当前 run 的权限模式、工具族和风险级别允许
 
 可以把它理解成：

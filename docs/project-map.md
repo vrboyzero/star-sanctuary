@@ -166,9 +166,12 @@ star-sanctuary/
 ### Tools / Skills / Plugins / MCP
 - `packages/belldandy-skills/src/executor.ts`: ToolExecutor
 - `packages/belldandy-skills/src/failure-kind.ts`: 工具失败分类 taxonomy、normalization、fallback inference
+- `packages/belldandy-skills/src/faqi.ts`: FAQI（法器）定义解析、状态文件读写、currentFaqi -> toolWhitelist 解析
 - `packages/belldandy-skills/src/tool-contract-v2.ts`: 工具治理契约与 V2 聚合
 - `packages/belldandy-skills/src/tool-contract-render.ts`: 工具治理 prompt 摘要渲染
 - `packages/belldandy-skills/src/builtin/`: 内置工具集合
+- `packages/belldandy-skills/src/builtin/list-faqis.ts`: 列出全局 FAQI 法器库、标记当前 Agent 的 currentFaqi
+- `packages/belldandy-skills/src/builtin/switch-faqi.ts`: 当前 Agent 自助切换 currentFaqi，并提示重启生效
 - `packages/belldandy-skills/src/builtin/multimedia/`: 图片生成、图片识别、视频识别、TTS/STT、摄像头与屏幕截图工具
 - `packages/belldandy-skills/src/skill-registry.ts`: skills 汇总与 eligibility
 - `packages/belldandy-plugins/src/registry.ts`: plugin 加载和 hooks 聚合

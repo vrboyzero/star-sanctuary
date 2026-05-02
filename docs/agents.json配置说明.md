@@ -141,6 +141,13 @@
 - 配置为空数组
   - 当前实现同样按“不限制”处理，以保持兼容。
 
+如果你启用了 FAQI（法器）切换机制，还需要注意：
+
+- `toolWhitelist` 仍然是 Agent 的静态兜底白名单。
+- 当某个 Agent 在 `faqis-state.json` 中存在有效的 `currentFaqi` 时，当前实现会优先使用该 FAQI 文件中的工具集合。
+- 当 `currentFaqi` 不存在、为空、指向不存在的 FAQI，或目标 FAQI 解析失败时，系统会回退到这里配置的 `toolWhitelist`。
+- FAQI 文件统一位于 `~/.star_sanctuary/faqis/`，当前选择状态位于 `~/.star_sanctuary/faqis-state.json`。
+
 例如：
 
 - `default`

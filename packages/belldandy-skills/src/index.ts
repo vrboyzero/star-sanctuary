@@ -292,6 +292,31 @@ export { createCronTool, type CronToolDeps } from "./builtin/cron-tool.js";
 
 // FACET 模组切换工具
 export { switchFacetTool } from "./builtin/switch-facet.js";
+export { listFaqisTool, LIST_FAQIS_TOOL_NAME } from "./builtin/list-faqis.js";
+export { switchFaqiTool, SWITCH_FAQI_TOOL_NAME } from "./builtin/switch-faqi.js";
+export {
+  FAQI_DIRNAME,
+  FAQI_STATE_FILENAME,
+  ensureFaqiDir,
+  getCurrentFaqiForAgent,
+  indexFaqiDefinitions,
+  loadFaqiDefinitionByName,
+  loadFaqiDefinitions,
+  normalizeFaqiName,
+  parseFaqiMarkdown,
+  readFaqiState,
+  resolveFaqiAgentId,
+  resolveFaqiDir,
+  resolveFaqiFilePath,
+  resolveFaqiStatePath,
+  resolveToolWhitelistFromFaqi,
+  setCurrentFaqiForAgent,
+  writeFaqiState,
+  type FaqiDefinition,
+  type FaqiLoadIssue,
+  type FaqiResolution,
+  type FaqiState,
+} from "./faqi.js";
 
 // 服务重启工具
 export { createServiceRestartTool, type BroadcastFn } from "./builtin/service-restart.js";

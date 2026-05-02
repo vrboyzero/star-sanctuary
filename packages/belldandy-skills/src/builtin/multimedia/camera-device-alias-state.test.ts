@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   listCameraDeviceAliasMemoryEntries,
@@ -11,6 +11,10 @@ import {
   removeCameraDeviceAliasMemoryEntry,
   upsertCameraDeviceAliasMemoryEntry,
 } from "./camera-device-alias-state.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("camera device alias state", () => {
   it("remembers the first stable alias across later label changes", async () => {
@@ -236,6 +240,49 @@ describe("camera device alias state", () => {
 
       const listed = await listCameraDeviceAliasMemoryEntries(stateDir);
       expect(listed.entries).toEqual([]);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("retries transient rename locks when persisting alias snapshots", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "camera-device-alias-retry-"));
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, "rename");
+    let attempts = 0;
+
+    renameSpy.mockImplementation(async (sourcePath, destinationPath) => {
+      attempts += 1;
+      if (attempts === 1) {
+        const error = new Error("file is temporarily locked") as NodeJS.ErrnoException;
+        error.code = "EPERM";
+        throw error;
+      }
+      return originalRename(sourcePath, destinationPath);
+    });
+
+    try {
+      const result = await upsertCameraDeviceAliasMemoryEntry(stateDir, {
+        deviceRef: "native_desktop:device:usb-retry",
+        stableKey: "usb-retry",
+        label: "Retry Cam",
+      }, {
+        now: "2026-04-17T12:30:00.000Z",
+      });
+
+      expect(attempts).toBe(2);
+      expect(result.entry).toMatchObject({
+        alias: "Retry Cam",
+        aliasSource: "learned",
+      });
+
+      const snapshot = await readCameraDeviceAliasSnapshot(stateDir);
+      expect(snapshot?.entries).toEqual([
+        expect.objectContaining({
+          identityKey: "native_desktop:stable:usb-retry",
+          alias: "Retry Cam",
+        }),
+      ]);
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
     }
