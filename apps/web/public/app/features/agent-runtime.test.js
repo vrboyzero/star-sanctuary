@@ -23,6 +23,7 @@ function createFeatureHarness() {
   const agentCatalog = new Map();
   const noopAsync = vi.fn(async () => {});
   const openConversationSession = vi.fn();
+  const openAgentConfigEditor = vi.fn();
   const sessionCacheFeature = {
     bindAgentConversation: vi.fn(),
     getAgentConversation: vi.fn(() => ""),
@@ -62,6 +63,7 @@ function createFeatureHarness() {
     loadMemoryViewer: noopAsync,
     openTaskFromAudit: noopAsync,
     openConversationSession,
+    openAgentConfigEditor,
     appendMessage: vi.fn(),
     getChatUiFeature: () => ({ refreshAvatar: vi.fn() }),
     onAgentIdentityChanged: vi.fn(),
@@ -70,7 +72,7 @@ function createFeatureHarness() {
     localeController: { t: (_key, _params, fallback) => fallback ?? "" },
   });
 
-  return { feature, refs, openConversationSession };
+  return { feature, refs, openConversationSession, openAgentConfigEditor };
 }
 
 describe("agent runtime panel", () => {
@@ -128,5 +130,31 @@ describe("agent runtime panel", () => {
       "conv-42",
       expect.stringContaining("conv-42"),
     );
+  });
+
+  it("renders an edit button and opens agents.json at the matching agent id", () => {
+    const { feature, refs, openAgentConfigEditor } = createFeatureHarness();
+
+    feature.syncAgentCatalog([
+      {
+        id: "coder",
+        displayName: "代码专家",
+        name: "代码专家",
+        avatar: "",
+        model: "gpt-5",
+        status: "idle",
+      },
+    ], "coder");
+
+    const actionButtons = refs.agentRightPanelEl.querySelectorAll(".agent-card-actions .agent-card-detail-btn");
+    expect(actionButtons).toHaveLength(2);
+    expect(actionButtons[0].textContent).toBe("编辑");
+    expect(actionButtons[1].textContent).toBe("详情 ▸");
+
+    actionButtons[0].click();
+
+    expect(openAgentConfigEditor).toHaveBeenCalledWith("agents.json", {
+      findPattern: "\"id\"\\s*:\\s*\"coder\"",
+    });
   });
 });

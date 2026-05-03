@@ -1825,6 +1825,7 @@ agentRuntimeFeature = createAgentRuntimeFeature({
   loadMemoryViewer: (forceSelectFirst = false) => loadMemoryViewer(forceSelectFirst),
   openTaskFromAudit: (taskId) => openTaskFromAudit(taskId),
   openConversationSession: (conversationId, hintText, options = {}) => openConversationSession(conversationId, hintText, options),
+  openAgentConfigEditor: (filePath, options = {}) => openFile(filePath, options),
   appendMessage,
   getChatUiFeature: () => chatUiFeature,
   onAgentIdentityChanged: () => {
@@ -3051,8 +3052,8 @@ function loadFileTree(folderPath = "") {
   return workspaceFeature?.loadFileTree(folderPath);
 }
 
-function openFile(filePath) {
-  return workspaceFeature?.openFile(filePath);
+function openFile(filePath, options = {}) {
+  return workspaceFeature?.openFile(filePath, options);
 }
 
 function openSourcePath(sourcePath, options = {}) {

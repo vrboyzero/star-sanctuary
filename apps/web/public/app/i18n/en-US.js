@@ -301,6 +301,7 @@ export const enUS = {
     workSummaryAttentionTask: "Task {title} · {status}",
     workSummaryAttentionSubtask: "Subtask {summary} · {status}",
     workSummaryTargetEmpty: "No jump target",
+    editConfig: "Edit",
     showDetail: "Details ▸",
   },
   toolSettings: {

@@ -301,6 +301,7 @@ export const zhCN = {
     workSummaryAttentionTask: "长任务 {title} · {status}",
     workSummaryAttentionSubtask: "子任务 {summary} · {status}",
     workSummaryTargetEmpty: "当前没有可跳转目标",
+    editConfig: "编辑",
     showDetail: "详情 ▸",
   },
   toolSettings: {

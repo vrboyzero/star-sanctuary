@@ -56,6 +56,74 @@ function buildWorkspaceEditorLabel(filePath, content) {
   return `${filePath} · ${summary.totalJobs} jobs · ${summary.enabledJobs} enabled · main ${summary.mainSessionJobs} / isolated ${summary.isolatedSessionJobs} · stagger ${summary.staggeredJobs}`;
 }
 
+function findLineNumberByMatch(content, options = {}) {
+  if (typeof content !== "string" || !content) {
+    return null;
+  }
+  const { findText, findPattern } = options;
+  if (typeof findText !== "string" && !(findPattern instanceof RegExp) && typeof findPattern !== "string") {
+    return null;
+  }
+
+  const lines = content.split("\n");
+  const matcher = findPattern instanceof RegExp
+    ? findPattern
+    : typeof findPattern === "string" && findPattern
+      ? new RegExp(findPattern)
+      : null;
+
+  const matchedIndex = lines.findIndex((line) => {
+    if (typeof findText === "string" && findText && line.includes(findText)) {
+      return true;
+    }
+    if (matcher) {
+      matcher.lastIndex = 0;
+      return matcher.test(line);
+    }
+    return false;
+  });
+
+  return matchedIndex >= 0 ? matchedIndex + 1 : null;
+}
+
+function findSelectionRange(content, options = {}) {
+  if (typeof content !== "string" || !content) {
+    return null;
+  }
+  const { findText, findPattern } = options;
+  if (typeof findText === "string" && findText) {
+    const start = content.indexOf(findText);
+    if (start >= 0) {
+      return {
+        start,
+        end: start + findText.length,
+      };
+    }
+  }
+  if (findPattern instanceof RegExp) {
+    findPattern.lastIndex = 0;
+    const match = findPattern.exec(content);
+    if (match && typeof match.index === "number") {
+      return {
+        start: match.index,
+        end: match.index + match[0].length,
+      };
+    }
+    return null;
+  }
+  if (typeof findPattern === "string" && findPattern) {
+    const matcher = new RegExp(findPattern);
+    const match = matcher.exec(content);
+    if (match && typeof match.index === "number") {
+      return {
+        start: match.index,
+        end: match.index + match[0].length,
+      };
+    }
+  }
+  return null;
+}
+
 export function createWorkspaceFeature({
   refs,
   keys,
@@ -208,7 +276,7 @@ export function createWorkspaceFeature({
     }
   }
 
-  function applyEditorSession({ path, content, readOnly = false, label, startLine }) {
+  function applyEditorSession({ path, content, readOnly = false, label, startLine, selectionStart, selectionEnd }) {
     currentEditPath = path;
     originalContent = content;
     currentEditReadOnly = readOnly;
@@ -233,6 +301,21 @@ export function createWorkspaceFeature({
     }
 
     switchMode("editor");
+    if (
+      editorTextareaEl
+      && typeof selectionStart === "number"
+      && selectionStart >= 0
+      && typeof selectionEnd === "number"
+      && selectionEnd >= selectionStart
+    ) {
+      editorTextareaEl.focus();
+      editorTextareaEl.setSelectionRange(selectionStart, selectionEnd);
+      const lineHeight = parseFloat(getComputedStyle(editorTextareaEl).lineHeight || "22");
+      const prefix = editorTextareaEl.value.slice(0, selectionStart);
+      const lineNumber = prefix.split("\n").length;
+      editorTextareaEl.scrollTop = Math.max(0, (lineNumber - 3) * lineHeight);
+      return;
+    }
     if (typeof startLine === "number" && startLine > 0) {
       focusEditorLine(startLine);
     }
@@ -435,7 +518,7 @@ export function createWorkspaceFeature({
     containerEl.appendChild(fragment);
   }
 
-  async function openFile(filePath) {
+  async function openFile(filePath, options = {}) {
     if (!isConnected()) {
       showNotice(t("editor.openFileFailedTitle", {}, "Unable to open file"), t("editor.notConnected", {}, "Not connected to the server."), "error");
       return;
@@ -448,17 +531,26 @@ export function createWorkspaceFeature({
       return;
     }
 
+    const content = typeof res.payload?.content === "string" ? res.payload.content : "";
+    const startLine = typeof options.startLine === "number" && options.startLine > 0
+      ? options.startLine
+      : findLineNumberByMatch(content, options);
+    const selection = findSelectionRange(content, options);
+
     applyEditorSession({
       path: filePath,
-      content: typeof res.payload?.content === "string" ? res.payload.content : "",
+      content,
       readOnly: false,
       label: buildWorkspaceEditorLabel(
         filePath,
-        typeof res.payload?.content === "string" ? res.payload.content : "",
+        content,
       ),
+      startLine,
+      selectionStart: selection?.start,
+      selectionEnd: selection?.end,
     });
     if (filePath === "cron-jobs.json") {
-      const summary = summarizeCronWorkspaceContent(typeof res.payload?.content === "string" ? res.payload.content : "");
+      const summary = summarizeCronWorkspaceContent(content);
       if (summary) {
         showNotice(
           t("editor.cronSummaryTitle", {}, "Cron Summary"),

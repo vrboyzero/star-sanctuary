@@ -7,6 +7,10 @@ function getElementsByDataValue(root, attribute, expectedValue) {
     .filter((node) => node.getAttribute(attribute) === expectedValue);
 }
 
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export function createAgentRuntimeFeature({
   refs,
   agentCatalog,
@@ -38,6 +42,7 @@ export function createAgentRuntimeFeature({
   loadMemoryViewer,
   openTaskFromAudit,
   openConversationSession,
+  openAgentConfigEditor,
   appendMessage,
   getChatUiFeature,
   onAgentIdentityChanged,
@@ -270,6 +275,14 @@ export function createAgentRuntimeFeature({
     if (!agentId || agentPanelUploadBusyAgentId) return;
     agentPanelUploadTargetAgentId = agentId;
     ensureAgentPanelAvatarUploadInput().click();
+  }
+
+  function openAgentConfigFile(agentId) {
+    const normalizedAgentId = typeof agentId === "string" ? agentId.trim() : "";
+    if (!normalizedAgentId || typeof openAgentConfigEditor !== "function") return;
+    void openAgentConfigEditor("agents.json", {
+      findPattern: `"id"\\s*:\\s*"${escapeRegExp(normalizedAgentId)}"`,
+    });
   }
 
   async function uploadAgentPanelAvatar(agentId, file) {
@@ -803,6 +816,19 @@ export function createAgentRuntimeFeature({
         workSummaryBtn.appendChild(workSummaryLines);
         summaryWrap.appendChild(workSummaryBtn);
 
+        const actionsRow = document.createElement("div");
+        actionsRow.className = "agent-card-actions";
+
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "agent-card-detail-btn";
+        editBtn.textContent = t("agentPanel.editConfig", {}, "编辑");
+        editBtn.addEventListener("click", (event) => {
+          event.stopPropagation();
+          openAgentConfigFile(agent.id);
+        });
+        actionsRow.appendChild(editBtn);
+
         const detailBtn = document.createElement("button");
         detailBtn.type = "button";
         detailBtn.className = "agent-card-detail-btn";
@@ -811,7 +837,9 @@ export function createAgentRuntimeFeature({
           event.stopPropagation();
           openAgentObservabilityModal(agent, observability);
         });
-        summaryWrap.appendChild(detailBtn);
+        actionsRow.appendChild(detailBtn);
+
+        summaryWrap.appendChild(actionsRow);
         card.appendChild(summaryWrap);
       }
       fragment.appendChild(card);
