@@ -2214,6 +2214,9 @@ describe("OpenAI-compatible reasoning config", () => {
           budget_tokens: 2048,
         },
         reasoningEffort: "max",
+        options: {
+          num_ctx: 32768,
+        },
       }],
     });
 
@@ -2232,6 +2235,9 @@ describe("OpenAI-compatible reasoning config", () => {
         budget_tokens: 2048,
       },
       reasoning_effort: "max",
+      options: {
+        num_ctx: 32768,
+      },
     });
   });
 
@@ -2257,6 +2263,9 @@ describe("OpenAI-compatible reasoning config", () => {
         type: "enabled",
       },
       reasoningEffort: "high",
+      options: {
+        num_ctx: 16384,
+      },
       toolExecutor: createToolExecutor(),
     });
 
@@ -2272,6 +2281,9 @@ describe("OpenAI-compatible reasoning config", () => {
         type: "enabled",
       },
       reasoning_effort: "high",
+      options: {
+        num_ctx: 16384,
+      },
     });
   });
 });

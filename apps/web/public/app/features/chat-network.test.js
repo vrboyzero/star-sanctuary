@@ -5,6 +5,7 @@ import {
   buildModelCatalogGroups,
   formatModelOptionLabel,
   formatModelProviderGroupLabel,
+  PENDING_AGENT_SELECTION_KEY,
   modelMatchesCatalogFilter,
   normalizeRequestFrame,
   parseManualModelValue,
@@ -22,6 +23,10 @@ describe("chat network agent selection", () => {
 
   it("keeps the current selection when the roster order changes", () => {
     expect(resolvePreferredAgentSelection(agents, "default", "")).toBe("default");
+  });
+
+  it("prefers the pending created agent after restart when it appears in the roster", () => {
+    expect(resolvePreferredAgentSelection(agents, "default", "researcher", "coder")).toBe("coder");
   });
 
   it("falls back to the saved selection when current selection is unavailable", () => {
@@ -75,6 +80,12 @@ describe("chat network agent selection", () => {
     expect(selectEl.options).toHaveLength(1);
     expect(selectEl.options[0].value).toBe("coder");
     expect(selectEl.value).toBe("coder");
+  });
+});
+
+describe("chat network pending agent selection key", () => {
+  it("uses a stable sessionStorage key for post-restart roster recovery", () => {
+    expect(PENDING_AGENT_SELECTION_KEY).toBe("pending-agent-selection-id");
   });
 });
 

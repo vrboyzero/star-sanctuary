@@ -12,6 +12,7 @@ import {
   formatRestartCooldownMessage,
 } from "@belldandy/skills";
 import { buildAgentLaunchExplainability } from "../agent-launch-explainability.js";
+import { createAgent, CreateAgentError } from "../agent-create.js";
 import { resolveResidentStateBindingViewForAgent } from "../resident-state-binding.js";
 
 type AgentsSystemMethodContext = {
@@ -24,6 +25,11 @@ type AgentsSystemMethodContext = {
   residentMemoryManagers?: ScopedMemoryManagerRecord[];
   conversationStore: ConversationStore;
   subTaskRuntimeStore?: SubTaskRuntimeStore;
+  writeTextFileAtomic?: (
+    filePath: string,
+    content: string,
+    options?: { ensureParent?: boolean; mode?: number },
+  ) => Promise<void>;
   inspectAgentPrompt?: (input: {
     agentId?: string;
     conversationId?: string;
@@ -138,6 +144,50 @@ export async function handleAgentsSystemMethod(
           ok: false,
           error: {
             code: "invalid_agent",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+    }
+
+    case "agent.create": {
+      if (!ctx.writeTextFileAtomic) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "not_available", message: "Agent creation is not available." },
+        };
+      }
+      const params = asRecord(req.params);
+      try {
+        const payload = await createAgent({
+          stateDir: ctx.stateDir,
+          writeTextFileAtomic: ctx.writeTextFileAtomic,
+          id: typeof params.id === "string" ? params.id : undefined,
+          displayName: typeof params.displayName === "string" ? params.displayName : undefined,
+          model: typeof params.model === "string" ? params.model : undefined,
+          systemPromptOverride: typeof params.systemPromptOverride === "string" ? params.systemPromptOverride : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload };
+      } catch (error) {
+        if (error instanceof CreateAgentError) {
+          return {
+            type: "res",
+            id: req.id,
+            ok: false,
+            error: {
+              code: error.code,
+              message: error.message,
+            },
+          };
+        }
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: {
+            code: "agent_create_failed",
             message: error instanceof Error ? error.message : String(error),
           },
         };

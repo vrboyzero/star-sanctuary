@@ -2608,6 +2608,39 @@
     </div>
   </div>
 
+  <div id="agentCreateModal" class="modal-overlay hidden">
+    <div class="modal agent-create-modal">
+      <div class="modal-header" style="display: flex; align-items: center;">
+        <span id="agentCreateModalTitle" data-i18n="agentPanel.createTitle">新建 Agent</span>
+        <button id="agentCreateModalClose" class="settings-btn" data-i18n-title="common.close" title="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-help" data-i18n="agentPanel.createHelp">填写基础信息后，系统会自动补齐默认配置。创建成功后需重启 Gateway 才会生效。</div>
+        <div class="form-group">
+          <label class="form-label" for="agentCreateId" data-i18n="agentPanel.createIdLabel">唯一标识（id）</label>
+          <input id="agentCreateId" class="input" data-i18n-placeholder="agentPanel.createIdPlaceholder" placeholder="例如：coder-lite" />
+          <div class="form-help" data-i18n="agentPanel.createIdHelp">仅允许小写字母、数字和中划线。</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="agentCreateDisplayName" data-i18n="agentPanel.createDisplayNameLabel">显示名称（displayName）</label>
+          <input id="agentCreateDisplayName" class="input" data-i18n-placeholder="agentPanel.createDisplayNamePlaceholder" placeholder="例如：代码助手" />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="agentCreateModel" data-i18n="agentPanel.createModelLabel">模型（model）</label>
+          <select id="agentCreateModel" class="input"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="agentCreateSystemPrompt" data-i18n="agentPanel.createPromptLabel">角色描述（systemPromptOverride）</label>
+          <textarea id="agentCreateSystemPrompt" class="input" rows="6" data-i18n-placeholder="agentPanel.createPromptPlaceholder" placeholder="描述这个 Agent 的职责、能力、边界和风格"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="agentCreateCancel" class="button" data-i18n="common.cancel">取消</button>
+        <button id="agentCreateSubmit" class="button" data-i18n="common.create" style="background: var(--button-primary-bg); color: var(--button-primary-text);">创建</button>
+      </div>
+    </div>
+  </div>
+
   <div id="sessionDigestModal" class="modal-overlay hidden">
     <div class="modal session-digest-modal">
       <div class="modal-header" style="display: flex; align-items: center;">

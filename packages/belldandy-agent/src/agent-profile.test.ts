@@ -183,6 +183,7 @@ test("resolveModelConfig preserves primary and named reasoning config", () => {
       wireApi: "responses",
       thinking: { type: "enabled" },
       reasoningEffort: "high",
+      options: { num_ctx: 32768 },
     },
     [],
   );
@@ -194,6 +195,7 @@ test("resolveModelConfig preserves primary and named reasoning config", () => {
     wireApi: "responses",
     thinking: { type: "enabled" },
     reasoningEffort: "high",
+    options: { num_ctx: 32768 },
     source: "primary",
   });
 
@@ -212,6 +214,7 @@ test("resolveModelConfig preserves primary and named reasoning config", () => {
         model: "deepseek-v4-flash",
         thinking: { type: "enabled" },
         reasoningEffort: "max",
+        options: { num_ctx: 16384 },
       },
     ],
   );
@@ -222,6 +225,7 @@ test("resolveModelConfig preserves primary and named reasoning config", () => {
     model: "deepseek-v4-flash",
     thinking: { type: "enabled" },
     reasoningEffort: "max",
+    options: { num_ctx: 16384 },
     source: "named",
   });
 });

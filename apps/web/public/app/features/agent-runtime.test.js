@@ -3,8 +3,24 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createAgentRuntimeFeature } from "./agent-runtime.js";
+import { PENDING_AGENT_SELECTION_KEY } from "./chat-network.js";
+import { zhCN } from "../i18n/zh-CN.js";
+
+function translate(key, params = {}) {
+  const segments = String(key || "").split(".");
+  let value = zhCN;
+  for (const segment of segments) {
+    if (!value || typeof value !== "object" || !(segment in value)) {
+      return "";
+    }
+    value = value[segment];
+  }
+  if (typeof value !== "string") return "";
+  return value.replace(/\{(\w+)\}/g, (_match, name) => String(params?.[name] ?? ""));
+}
 
 function createFeatureHarness() {
+  sessionStorage.clear();
   document.body.innerHTML = `
     <select id="agentSelect">
       <option value="coder">代码专家</option>
@@ -12,6 +28,15 @@ function createFeatureHarness() {
     <aside id="agentRightPanel" class="hidden"></aside>
     <div id="goalsDetail"></div>
     <div id="messages"></div>
+    <div id="agentCreateModal" class="hidden">
+      <button id="agentCreateModalClose"></button>
+      <button id="agentCreateCancel"></button>
+      <button id="agentCreateSubmit"></button>
+      <input id="agentCreateId" />
+      <input id="agentCreateDisplayName" />
+      <select id="agentCreateModel"></select>
+      <textarea id="agentCreateSystemPrompt"></textarea>
+    </div>
   `;
 
   const refs = {
@@ -19,11 +44,27 @@ function createFeatureHarness() {
     agentRightPanelEl: document.getElementById("agentRightPanel"),
     goalsDetailEl: document.getElementById("goalsDetail"),
     messagesEl: document.getElementById("messages"),
+    agentCreateModalEl: document.getElementById("agentCreateModal"),
+    agentCreateModalCloseBtn: document.getElementById("agentCreateModalClose"),
+    agentCreateCancelBtn: document.getElementById("agentCreateCancel"),
+    agentCreateSubmitBtn: document.getElementById("agentCreateSubmit"),
+    agentCreateIdEl: document.getElementById("agentCreateId"),
+    agentCreateDisplayNameEl: document.getElementById("agentCreateDisplayName"),
+    agentCreateModelEl: document.getElementById("agentCreateModel"),
+    agentCreateSystemPromptEl: document.getElementById("agentCreateSystemPrompt"),
   };
   const agentCatalog = new Map();
   const noopAsync = vi.fn(async () => {});
   const openConversationSession = vi.fn();
   const openAgentConfigEditor = vi.fn();
+  const showNotice = vi.fn();
+  const sendReq = vi.fn(async () => null);
+  const requestModelCatalog = vi.fn(async () => ({
+    models: [{ id: "primary", displayName: "主模型", model: "gpt-5" }],
+    currentDefault: "primary",
+    preferredProviderIds: [],
+    manualEntrySupported: false,
+  }));
   const sessionCacheFeature = {
     bindAgentConversation: vi.fn(),
     getAgentConversation: vi.fn(() => ""),
@@ -39,8 +80,9 @@ function createFeatureHarness() {
     agentCatalog,
     residentAgentRosterEnabled: false,
     agentSessionCacheFeature: sessionCacheFeature,
-    sendReq: noopAsync,
+    sendReq,
     makeId: () => "req-1",
+    requestModelCatalog,
     getHttpAuthHeaders: () => ({}),
     getActiveConversationId: () => "",
     setActiveConversationId: vi.fn(),
@@ -68,11 +110,12 @@ function createFeatureHarness() {
     getChatUiFeature: () => ({ refreshAvatar: vi.fn() }),
     onAgentIdentityChanged: vi.fn(),
     onAgentCatalogChanged: vi.fn(),
-    showNotice: vi.fn(),
-    localeController: { t: (_key, _params, fallback) => fallback ?? "" },
+    showNotice,
+    localeController: { t: translate },
+    t: translate,
   });
 
-  return { feature, refs, openConversationSession, openAgentConfigEditor };
+  return { feature, refs, openConversationSession, openAgentConfigEditor, showNotice, sendReq, requestModelCatalog };
 }
 
 describe("agent runtime panel", () => {
@@ -156,5 +199,103 @@ describe("agent runtime panel", () => {
     expect(openAgentConfigEditor).toHaveBeenCalledWith("agents.json", {
       findPattern: "\"id\"\\s*:\\s*\"coder\"",
     });
+  });
+
+  it("renders a create button in the agent panel toolbar", () => {
+    const { feature, refs } = createFeatureHarness();
+
+    feature.syncAgentCatalog([
+      {
+        id: "coder",
+        displayName: "代码专家",
+        name: "代码专家",
+        avatar: "",
+        model: "gpt-5",
+        status: "idle",
+      },
+    ], "coder");
+
+    const createBtn = refs.agentRightPanelEl.querySelector(".agent-panel-create-btn");
+    expect(createBtn).not.toBeNull();
+    expect(createBtn.textContent).toContain("新建 Agent");
+  });
+
+  it("submits agent.create and shows restart notice after success", async () => {
+    const { feature, refs, showNotice, sendReq, openAgentConfigEditor } = createFeatureHarness();
+
+    sendReq.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        agentId: "coder-lite",
+        requiresRestart: true,
+      },
+    });
+
+    feature.syncAgentCatalog([
+      {
+        id: "coder",
+        displayName: "代码专家",
+        name: "代码专家",
+        avatar: "",
+        model: "gpt-5",
+        status: "idle",
+      },
+    ], "coder");
+
+    refs.agentCreateIdEl.value = "coder-lite";
+    refs.agentCreateDisplayNameEl.value = "代码助手";
+    refs.agentCreateModelEl.innerHTML = "<option value=\"primary\">主模型（primary）</option>";
+    refs.agentCreateModelEl.value = "primary";
+    refs.agentCreateSystemPromptEl.value = "你是一名严谨的代码助手。";
+
+    refs.agentCreateSubmitBtn.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(sendReq).toHaveBeenCalledWith(expect.objectContaining({
+      method: "agent.create",
+      params: {
+        id: "coder-lite",
+        displayName: "代码助手",
+        model: "primary",
+        systemPromptOverride: "你是一名严谨的代码助手。",
+      },
+    }));
+    expect(showNotice).toHaveBeenCalledWith(
+      "Agent 已创建",
+      expect.stringContaining("coder-lite"),
+      "success",
+      12000,
+      expect.objectContaining({
+        actionLabel: "立即重启",
+      }),
+    );
+    expect(openAgentConfigEditor).toHaveBeenCalledWith("agents.json", {
+      findPattern: "\"id\"\\s*:\\s*\"coder-lite\"",
+    });
+    expect(sessionStorage.getItem(PENDING_AGENT_SELECTION_KEY)).toBe("coder-lite");
+  });
+
+  it("does not close the create modal when clicking the backdrop", async () => {
+    const { feature, refs } = createFeatureHarness();
+
+    feature.syncAgentCatalog([
+      {
+        id: "coder",
+        displayName: "代码专家",
+        name: "代码专家",
+        avatar: "",
+        model: "gpt-5",
+        status: "idle",
+      },
+    ], "coder");
+
+    refs.agentRightPanelEl.querySelector(".agent-panel-create-btn").click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(refs.agentCreateModalEl.classList.contains("hidden")).toBe(false);
+
+    refs.agentCreateModalEl.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+
+    expect(refs.agentCreateModalEl.classList.contains("hidden")).toBe(false);
   });
 });

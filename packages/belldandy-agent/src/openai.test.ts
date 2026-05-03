@@ -187,6 +187,9 @@ describe("OpenAIChatAgent prompt snapshot", () => {
           budget_tokens: 2048,
         },
         reasoningEffort: "max",
+        options: {
+          num_ctx: 32768,
+        },
       }],
     });
 
@@ -205,6 +208,9 @@ describe("OpenAIChatAgent prompt snapshot", () => {
         budget_tokens: 2048,
       },
       reasoning_effort: "max",
+      options: {
+        num_ctx: 32768,
+      },
     });
   });
 
@@ -231,6 +237,9 @@ describe("OpenAIChatAgent prompt snapshot", () => {
         type: "enabled",
       },
       reasoningEffort: "high",
+      options: {
+        num_ctx: 16384,
+      },
     });
 
     const items = await collectItems(agent.run({
@@ -245,6 +254,9 @@ describe("OpenAIChatAgent prompt snapshot", () => {
         type: "enabled",
       },
       reasoning_effort: "high",
+      options: {
+        num_ctx: 16384,
+      },
     });
   });
 });

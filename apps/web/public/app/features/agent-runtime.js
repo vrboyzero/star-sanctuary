@@ -1,5 +1,6 @@
 import { buildResidentPanelSummary } from "./resident-observability-summary.js";
 import { buildAgentWorkSummary } from "./agent-work-summary.js";
+import { PENDING_AGENT_SELECTION_KEY } from "./chat-network.js";
 
 function getElementsByDataValue(root, attribute, expectedValue) {
   if (!root || !attribute || !expectedValue) return [];
@@ -20,6 +21,7 @@ export function createAgentRuntimeFeature({
   agentSessionCacheFeature,
   sendReq,
   makeId,
+  requestModelCatalog,
   getHttpAuthHeaders,
   getActiveConversationId,
   setActiveConversationId,
@@ -57,6 +59,15 @@ export function createAgentRuntimeFeature({
     agentRightPanelEl,
     goalsDetailEl,
     messagesEl,
+    agentCreateModalEl,
+    agentCreateModalTitleEl,
+    agentCreateModalCloseBtn,
+    agentCreateCancelBtn,
+    agentCreateSubmitBtn,
+    agentCreateIdEl,
+    agentCreateDisplayNameEl,
+    agentCreateModelEl,
+    agentCreateSystemPromptEl,
   } = refs;
 
   let residentAgentActivationSeq = 0;
@@ -67,6 +78,149 @@ export function createAgentRuntimeFeature({
   let currentAgentAvatar = initialIdentity.agentAvatar || "🤖";
   let defaultAgentName = initialIdentity.defaultAgentName || currentAgentName;
   let defaultAgentAvatar = initialIdentity.defaultAgentAvatar || currentAgentAvatar;
+  let agentCreateBusy = false;
+
+  function closeAgentCreateModal(options = {}) {
+    if (!agentCreateModalEl) return;
+    if (agentCreateBusy && !options.force) return;
+    agentCreateModalEl.classList.add("hidden");
+  }
+
+  function resetAgentCreateForm() {
+    if (agentCreateIdEl) agentCreateIdEl.value = "";
+    if (agentCreateDisplayNameEl) agentCreateDisplayNameEl.value = "";
+    if (agentCreateSystemPromptEl) agentCreateSystemPromptEl.value = "";
+  }
+
+  function renderAgentCreateModelOptions(modelCatalog) {
+    if (!agentCreateModelEl) return;
+    agentCreateModelEl.innerHTML = "";
+    const addOption = (value, label) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      agentCreateModelEl.appendChild(option);
+    };
+    addOption("primary", t("agentPanel.createModelPrimary"));
+    const models = Array.isArray(modelCatalog?.models) ? modelCatalog.models : [];
+    const seen = new Set(["primary"]);
+    for (const model of models) {
+      const modelId = typeof model?.id === "string" ? model.id.trim() : "";
+      if (!modelId || seen.has(modelId)) continue;
+      seen.add(modelId);
+      const label = model.displayName || model.model || modelId;
+      addOption(modelId, `${label} (${modelId})`);
+    }
+    agentCreateModelEl.value = "primary";
+  }
+
+  async function openAgentCreateModal() {
+    if (!agentCreateModalEl) return;
+    resetAgentCreateForm();
+    renderAgentCreateModelOptions(null);
+    agentCreateModalEl.classList.remove("hidden");
+    agentCreateIdEl?.focus();
+
+    try {
+      const modelCatalog = await requestModelCatalog?.();
+      renderAgentCreateModelOptions(modelCatalog);
+    } catch {
+      renderAgentCreateModelOptions(null);
+    }
+  }
+
+  async function triggerSystemRestart(reason) {
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "system.restart",
+      params: typeof reason === "string" && reason.trim() ? { reason: reason.trim() } : {},
+    });
+    if (!res?.ok) {
+      throw new Error(res?.error?.message || t("agentPanel.restartFailedMessage"));
+    }
+  }
+
+  async function submitAgentCreate() {
+    if (agentCreateBusy) return;
+    const id = String(agentCreateIdEl?.value || "").trim();
+    const displayName = String(agentCreateDisplayNameEl?.value || "").trim();
+    const model = String(agentCreateModelEl?.value || "").trim() || "primary";
+    const systemPromptOverride = String(agentCreateSystemPromptEl?.value || "").trim();
+
+    if (!id || !displayName || !systemPromptOverride) {
+      showNotice(
+        t("agentPanel.createFailedTitle"),
+        t("agentPanel.createValidationMessage"),
+        "error",
+        0,
+      );
+      return;
+    }
+
+    agentCreateBusy = true;
+    if (agentCreateSubmitBtn) {
+      agentCreateSubmitBtn.disabled = true;
+    }
+
+    try {
+      const res = await sendReq({
+        type: "req",
+        id: makeId(),
+        method: "agent.create",
+        params: {
+          id,
+          displayName,
+          model,
+          systemPromptOverride,
+        },
+      });
+      if (!res?.ok) {
+        showNotice(
+          t("agentPanel.createFailedTitle"),
+          res?.error?.message || t("agentPanel.createUnknownError"),
+          "error",
+          0,
+        );
+        return;
+      }
+
+      sessionStorage.setItem(PENDING_AGENT_SELECTION_KEY, id);
+      closeAgentCreateModal({ force: true });
+      showNotice(
+        t("agentPanel.createSuccessTitle"),
+        t("agentPanel.createSuccessMessage", { agentId: id }),
+        "success",
+        12000,
+        {
+          actionLabel: t("agentPanel.restartNowAction"),
+          onAction: () => {
+            void triggerSystemRestart(`Activate newly created agent "${id}"`).catch((error) => {
+              showNotice(
+                t("agentPanel.restartFailedTitle"),
+                error instanceof Error ? error.message : String(error),
+                "error",
+                0,
+              );
+            });
+          },
+        },
+      );
+      openAgentConfigFile(id);
+    } catch (error) {
+      showNotice(
+        t("agentPanel.createFailedTitle"),
+        error instanceof Error ? error.message : String(error),
+        "error",
+        0,
+      );
+    } finally {
+      agentCreateBusy = false;
+      if (agentCreateSubmitBtn) {
+        agentCreateSubmitBtn.disabled = false;
+      }
+    }
+  }
 
   function syncAgentIdentityUi() {
     getChatUiFeature?.()?.refreshAvatar("bot", currentAgentAvatar);
@@ -306,9 +460,9 @@ export function createAgentRuntimeFeature({
       });
       const payload = await res.json().catch(() => null);
       if (!res.ok || !payload?.ok) {
-        const message = payload?.error?.message || t("agentPanel.avatarUploadFailedMessage", {}, "头像上传失败。");
+        const message = payload?.error?.message || t("agentPanel.avatarUploadFailedMessage");
         showNotice(
-          t("agentPanel.avatarUploadFailedTitle", {}, "头像上传失败"),
+          t("agentPanel.avatarUploadFailedTitle"),
           message,
           "error",
           3800,
@@ -319,8 +473,8 @@ export function createAgentRuntimeFeature({
       const avatarPath = typeof payload.avatarPath === "string" ? payload.avatarPath : "";
       if (!avatarPath) {
         showNotice(
-          t("agentPanel.avatarUploadFailedTitle", {}, "头像上传失败"),
-          t("agentPanel.avatarMissingPathMessage", {}, "服务端未返回头像路径。"),
+          t("agentPanel.avatarUploadFailedTitle"),
+          t("agentPanel.avatarMissingPathMessage"),
           "error",
           3800,
         );
@@ -330,18 +484,14 @@ export function createAgentRuntimeFeature({
       applyUploadedAgentAvatarChange({ agentId, avatarPath });
       const agentLabel = agentCatalog.get(agentId)?.displayName || agentCatalog.get(agentId)?.name || agentId;
       showNotice(
-        t("agentPanel.avatarUpdatedTitle", {}, "头像已更新"),
-        t(
-          "agentPanel.avatarUpdatedMessage",
-          { agentName: agentLabel },
-          `${agentLabel} 的头像已写入对应的 IDENTITY.md。`,
-        ),
+        t("agentPanel.avatarUpdatedTitle"),
+        t("agentPanel.avatarUpdatedMessage", { agentName: agentLabel }),
         "success",
         2200,
       );
     } catch (error) {
       showNotice(
-        t("agentPanel.avatarUploadFailedTitle", {}, "头像上传失败"),
+        t("agentPanel.avatarUploadFailedTitle"),
         error instanceof Error ? error.message : String(error),
         "error",
         3800,
@@ -566,11 +716,7 @@ export function createAgentRuntimeFeature({
         if (action.conversationId) {
           openConversationSession(
             action.conversationId,
-            t(
-              "agentPanel.openContinuationConversationHint",
-              { conversationId: action.conversationId },
-              `Switched to continuation conversation: ${action.conversationId}`,
-            ),
+            t("agentPanel.openContinuationConversationHint", { conversationId: action.conversationId }),
           );
           return;
         }
@@ -710,6 +856,19 @@ export function createAgentRuntimeFeature({
     const fragment = document.createDocumentFragment();
     const activeAgentId = getCurrentAgentSelection();
     const uploadBusy = Boolean(agentPanelUploadBusyAgentId);
+
+    const toolbar = document.createElement("div");
+    toolbar.className = "agent-panel-toolbar";
+    const createBtn = document.createElement("button");
+    createBtn.type = "button";
+    createBtn.className = "button agent-panel-create-btn";
+    createBtn.textContent = t("agentPanel.createButton");
+    createBtn.addEventListener("click", () => {
+      void openAgentCreateModal();
+    });
+    toolbar.appendChild(createBtn);
+    fragment.appendChild(toolbar);
+
     for (const agent of agents) {
       const card = document.createElement("div");
       card.className = "agent-card";
@@ -725,14 +884,10 @@ export function createAgentRuntimeFeature({
 
       const avatar = document.createElement("div");
       avatar.className = "agent-card-avatar avatar-clickable";
-      avatar.title = t(
-        "agentPanel.changeAvatarTitle",
-        { agentName: agent.displayName || agent.id },
-        `为 ${agent.displayName || agent.id} 更换头像`,
-      );
+      avatar.title = t("agentPanel.changeAvatarTitle", { agentName: agent.displayName || agent.id });
       if (uploadBusy && agentPanelUploadBusyAgentId === agent.id) {
         avatar.style.opacity = "0.5";
-        avatar.title = t("agentPanel.uploadingAvatar", {}, "上传中...");
+        avatar.title = t("agentPanel.uploadingAvatar");
       }
       avatar.addEventListener("click", (event) => {
         event.stopPropagation();
@@ -822,7 +977,7 @@ export function createAgentRuntimeFeature({
         const editBtn = document.createElement("button");
         editBtn.type = "button";
         editBtn.className = "agent-card-detail-btn";
-        editBtn.textContent = t("agentPanel.editConfig", {}, "编辑");
+        editBtn.textContent = t("agentPanel.editConfig");
         editBtn.addEventListener("click", (event) => {
           event.stopPropagation();
           openAgentConfigFile(agent.id);
@@ -832,7 +987,7 @@ export function createAgentRuntimeFeature({
         const detailBtn = document.createElement("button");
         detailBtn.type = "button";
         detailBtn.className = "agent-card-detail-btn";
-        detailBtn.textContent = t("agentPanel.showDetail", {}, "详情 ▸");
+        detailBtn.textContent = t("agentPanel.showDetail");
         detailBtn.addEventListener("click", (event) => {
           event.stopPropagation();
           openAgentObservabilityModal(agent, observability);
@@ -973,6 +1128,12 @@ export function createAgentRuntimeFeature({
       void handleAgentSelectionChange();
     });
   }
+
+  agentCreateModalCloseBtn?.addEventListener("click", () => closeAgentCreateModal());
+  agentCreateCancelBtn?.addEventListener("click", () => closeAgentCreateModal());
+  agentCreateSubmitBtn?.addEventListener("click", () => {
+    void submitAgentCreate();
+  });
 
   return {
     getAgentProfile,

@@ -108,6 +108,8 @@ export type ToolEnabledAgentOptions = {
   thinking?: Record<string, unknown>;
   /** OpenAI-compatible 推理强度（primary profile） */
   reasoningEffort?: string;
+  /** OpenAI-compatible / provider-specific options（primary profile） */
+  options?: Record<string, unknown>;
   /** 启动阶段预置冷却（毫秒） */
   bootstrapProfileCooldowns?: Record<string, number>;
   /** ReAct 循环内压缩配置（可选） */
@@ -507,6 +509,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
         proxyUrl: opts.proxyUrl,
         thinking: opts.thinking,
         reasoningEffort: opts.reasoningEffort,
+        options: opts.options,
       },
       fallbacks: opts.fallbacks,
       logger: opts.failoverLogger,

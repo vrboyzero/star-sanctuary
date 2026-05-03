@@ -1,7 +1,7 @@
 # Star Sanctuary 使用手册
 
-最后更新时间：2026-05-02  
-适用版本：当前仓库主干，workspace version `0.2.4`
+最后更新时间：2026-05-03  
+适用版本：当前仓库主干，workspace version `0.5.1`
 
 Star Sanctuary 是一个 **本地优先的个人 AI 助手与 Agent 工作台**。  
 它不是单纯的聊天网页，而是一套把 `Gateway`、`WebChat`、`CLI`、`工具系统`、`长期记忆`、`长期任务`、`多 Agent`、`渠道接入`、`浏览器自动化`、`Webhook` 和 `MCP` 统一到一起的本地运行时。
@@ -769,6 +769,97 @@ corepack pnpm bdd start
 | 看系统状态 | `Doctor` / 顶部摘要 |
 | 做可视化拆解 | `Canvas` |
 
+### 5.2.1 在 WebChat 中快捷新建 Agent
+
+当前 WebChat 已支持直接在右侧 Agent 面板里新建 Agent，不再要求你先手改 `agents.json`。
+
+入口位置：
+
+1. 打开右侧 `代理信息` 面板
+2. 在顶部点击 `新建 Agent`
+
+弹窗里当前需要填写 4 个字段：
+
+1. `id`
+2. `displayName`
+3. `model`
+4. `systemPromptOverride`
+
+字段含义可以直接这样理解：
+
+- `id`
+  - Agent 的唯一标识
+  - 只允许小写字母、数字和中划线
+  - 例如：`coder-lite`
+- `displayName`
+  - WebChat 里显示的名字
+  - 例如：`代码助手`
+- `model`
+  - 这个 Agent 默认使用的模型
+  - 可选项来自当前 `models.list`
+  - 如果读取模型列表失败，界面会保底给你一个 `primary`
+- `systemPromptOverride`
+  - 这个 Agent 的职责、边界、风格说明
+  - 首版里这是最重要的个性化输入
+
+创建成功后，系统当前会做这些事：
+
+1. 往 `~/.star_sanctuary/agents.json` 追加一条 profile
+2. 创建 `~/.star_sanctuary/agents/<id>/`
+3. 创建 `~/.star_sanctuary/agents/<id>/facets/`
+4. 写入最小文件：
+   - `IDENTITY.md`
+   - `SOUL.md`
+
+当前这条创建链路有一个必须知道的边界：
+
+- 创建成功不等于当前运行态立刻可用
+- 新 Agent 仍然需要重启 Gateway 后才会真正进入运行中的 Agent roster
+
+因此成功提示里会明确告诉你：
+
+1. 配置已写入
+2. 需要重启 Gateway 后生效
+
+当前界面还提供两个辅助动作：
+
+1. `立即重启`
+2. 直接打开 `agents.json` 对应条目
+
+如果你创建后在当前列表里还没看到它，这不是异常；先重启 Gateway 再看。
+
+如果你希望“新建 Agent”生成出来的 `IDENTITY.md` / `SOUL.md` 不是默认样子，而是你自己的模板，当前可以直接在状态目录里放模板覆盖文件。
+
+优先级顺序是：
+
+1. `stateDir/experience-templates/`
+2. 仓库内默认模板 `packages/belldandy-agent/src/templates/`
+3. 代码内兜底模板
+
+你可以在自己的状态目录里放这两个文件：
+
+1. `~/.star_sanctuary/experience-templates/agent-identity.md`
+2. `~/.star_sanctuary/experience-templates/agent-soul.md`
+
+Windows 常见路径例如：
+
+1. `C:\Users\你的用户名\.star_sanctuary\experience-templates\agent-identity.md`
+2. `C:\Users\你的用户名\.star_sanctuary\experience-templates\agent-soul.md`
+
+模板中当前支持这些占位符：
+
+- `{{agentId}}`
+- `{{displayName}}`
+- `{{model}}`
+- `{{systemPromptOverride}}`
+
+如果你不写占位符，系统也会尽量按现有字段名去填：
+
+- `IDENTITY.md` 里优先识别 `名字`、`职责`
+- `SOUL.md` 里优先识别 `名称`、`角色定位`
+
+如果模板里既没有占位符，也没有这些可识别字段，系统还会在文件里补一段“快捷创建补充”，避免你在弹窗里填写的角色描述丢失。
+
 ### 5.3 Tool Settings 是什么
 
 当前 Tool Settings 是 **运行时策略层**，不是卸载工具。
@@ -1407,6 +1498,7 @@ BELLDANDY_MODEL_CONFIG_FILE=C:\Users\你的用户名\.star_sanctuary\models.json
 
 - fallback 模型队列
 - 给不同 Agent / 手动切换使用不同模型条目
+- 给 OpenAI-compatible 请求透传模型级 `options`
 
 最小示例：
 
@@ -1428,12 +1520,39 @@ BELLDANDY_MODEL_CONFIG_FILE=C:\Users\你的用户名\.star_sanctuary\models.json
 }
 ```
 
+如果你在用 Ollama 或其他兼容服务，并且想显式指定上下文窗口，可以直接在模型条目里写 `options`。例如：
+
+```json
+{
+  "fallbacks": [
+    {
+      "id": "gemma4-e4b",
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "apiKey": "ollama",
+      "model": "gemma4:e4b",
+      "protocol": "openai",
+      "wireApi": "chat_completions",
+      "options": {
+        "num_ctx": 32768
+      }
+    }
+  ]
+}
+```
+
+当前行为可以这样理解：
+
+1. 如果某个模型条目里写了 `options`，系统会把它原样透传到对应请求体。
+2. 如果某个模型没写 `options.num_ctx`，就表示继续使用该模型 / 提供商自己的默认上下文长度。
+3. 这项能力当前不需要新增 `.env` 变量，直接写在 `models.json` 即可。
+
 ### 8.3 WebChat 中切换 Agent / 模型
 
 当前 WebChat 已支持：
 
 - 在会话中切换 Agent
 - 在会话中切换模型
+- 在右侧 Agent 面板中快捷新建 Agent
 
 前提：
 

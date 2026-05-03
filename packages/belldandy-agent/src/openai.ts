@@ -43,6 +43,8 @@ export type OpenAIChatAgentOptions = {
   thinking?: Record<string, unknown>;
   /** OpenAI-compatible 推理强度（primary profile） */
   reasoningEffort?: string;
+  /** OpenAI-compatible / provider-specific options（primary profile） */
+  options?: Record<string, unknown>;
   /** 启动阶段预置冷却（毫秒） */
   bootstrapProfileCooldowns?: Record<string, number>;
   /** 记录本次 run 实际发给模型的 prompt snapshot */
@@ -171,6 +173,7 @@ export class OpenAIChatAgent implements BelldandyAgent {
         proxyUrl: opts.proxyUrl,
         thinking: opts.thinking,
         reasoningEffort: opts.reasoningEffort,
+        options: opts.options,
       },
       fallbacks: opts.fallbacks,
       logger: opts.failoverLogger,
@@ -304,6 +307,7 @@ export class OpenAIChatAgent implements BelldandyAgent {
       wireApi?: string;
       thinking?: Record<string, unknown>;
       reasoningEffort?: string;
+      options?: Record<string, unknown>;
     },
     messages: Array<{ role: string; content: any }>
   ): { url: string; init: RequestInit } {

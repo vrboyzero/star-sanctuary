@@ -330,6 +330,48 @@ describe("FailoverClient", () => {
         maxRetries: undefined,
         retryBackoffMs: undefined,
         proxyUrl: undefined,
+        thinking: undefined,
+        reasoningEffort: undefined,
+        options: undefined,
+      },
+    ]);
+  });
+
+  it("loads provider-specific options from fallback config files", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-fallback-options-"));
+    const configPath = path.join(tempDir, "models.json");
+    await fs.writeFile(configPath, JSON.stringify({
+      fallbacks: [
+        {
+          id: "ollama-gemma",
+          baseUrl: "http://127.0.0.1:11434/v1",
+          apiKey: "ollama",
+          model: "gemma4:e4b",
+          options: {
+            num_ctx: 32768,
+          },
+        },
+      ],
+    }), "utf-8");
+
+    await expect(loadModelFallbacks(configPath)).resolves.toEqual([
+      {
+        id: "ollama-gemma",
+        displayName: undefined,
+        baseUrl: "http://127.0.0.1:11434/v1",
+        apiKey: "ollama",
+        model: "gemma4:e4b",
+        protocol: undefined,
+        wireApi: undefined,
+        requestTimeoutMs: undefined,
+        maxRetries: undefined,
+        retryBackoffMs: undefined,
+        proxyUrl: undefined,
+        thinking: undefined,
+        reasoningEffort: undefined,
+        options: {
+          num_ctx: 32768,
+        },
       },
     ]);
   });

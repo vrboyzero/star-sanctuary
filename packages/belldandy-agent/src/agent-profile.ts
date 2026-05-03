@@ -370,6 +370,7 @@ export function resolveModelConfig(
   proxyUrl?: string;
   thinking?: Record<string, unknown>;
   reasoningEffort?: string;
+  options?: Record<string, unknown>;
   source: "primary" | "named" | "manual";
 } {
   const normalizedModelRef = typeof modelRef === "string" ? modelRef.trim() : "";
@@ -403,6 +404,7 @@ export function resolveModelConfig(
       proxyUrl: found.proxyUrl,
       thinking: found.thinking,
       reasoningEffort: found.reasoningEffort,
+      options: found.options,
       source: "named",
     };
   }

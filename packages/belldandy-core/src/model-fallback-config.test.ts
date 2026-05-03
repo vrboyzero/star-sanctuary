@@ -25,6 +25,9 @@ describe("model fallback config", () => {
             budget_tokens: 2048,
           },
           reasoningEffort: " max ",
+          options: {
+            num_ctx: 32768,
+          },
         },
       ],
     }));
@@ -47,6 +50,9 @@ describe("model fallback config", () => {
           budget_tokens: 2048,
         },
         reasoningEffort: "max",
+        options: {
+          num_ctx: 32768,
+        },
       },
     ]);
 
@@ -55,6 +61,8 @@ describe("model fallback config", () => {
     expect(redacted).toContain(`"apiKey": "${REDACTED_MODEL_SECRET_PLACEHOLDER}"`);
     expect(redacted).toContain('"thinking"');
     expect(redacted).toContain('"reasoningEffort": "max"');
+    expect(redacted).toContain('"options"');
+    expect(redacted).toContain('"num_ctx": 32768');
     expect(redacted).not.toContain("sk-or-test");
   });
 

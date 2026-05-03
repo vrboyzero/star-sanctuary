@@ -23,18 +23,28 @@ function normalizeTokenValue(value) {
   return value;
 }
 
-export function resolvePreferredAgentSelection(agents, currentValue = "", savedValue = "") {
-  const items = Array.isArray(agents) ? agents : [];
-  const hasAgent = (candidate) => {
-    const normalized = typeof candidate === "string" ? candidate.trim() : "";
-    return Boolean(normalized) && items.some((agent) => agent?.id === normalized);
-  };
+export const PENDING_AGENT_SELECTION_KEY = "pending-agent-selection-id";
 
-  if (hasAgent(currentValue)) {
-    return currentValue.trim();
+function normalizeAgentCandidate(candidate) {
+  return typeof candidate === "string" ? candidate.trim() : "";
+}
+
+function hasAgentCandidate(agents, candidate) {
+  const normalized = normalizeAgentCandidate(candidate);
+  return Boolean(normalized) && agents.some((agent) => agent?.id === normalized);
+}
+
+export function resolvePreferredAgentSelection(agents, currentValue = "", savedValue = "", pendingValue = "") {
+  const items = Array.isArray(agents) ? agents : [];
+
+  if (hasAgentCandidate(items, pendingValue)) {
+    return normalizeAgentCandidate(pendingValue);
   }
-  if (hasAgent(savedValue)) {
-    return savedValue.trim();
+  if (hasAgentCandidate(items, currentValue)) {
+    return normalizeAgentCandidate(currentValue);
+  }
+  if (hasAgentCandidate(items, savedValue)) {
+    return normalizeAgentCandidate(savedValue);
   }
   return typeof items[0]?.id === "string" ? items[0].id : "";
 }
@@ -440,6 +450,9 @@ export function createChatNetworkFeature({
   async function loadAgentList() {
     if (!isConnected() || !agentSelectEl) return;
     const currentSelectedAgentId = typeof agentSelectEl.value === "string" ? agentSelectEl.value.trim() : "";
+    const pendingSelectedAgentId = typeof sessionStorage?.getItem === "function"
+      ? (sessionStorage.getItem(PENDING_AGENT_SELECTION_KEY) || "")
+      : "";
 
     let res = await sendReq({
       type: "req",
@@ -466,10 +479,14 @@ export function createChatNetworkFeature({
         agents,
         currentSelectedAgentId,
         localStorage.getItem(agentIdKey) || "",
+        pendingSelectedAgentId,
       );
       if (selectedAgentId) {
         agentSelectEl.value = selectedAgentId;
         localStorage.setItem(agentIdKey, selectedAgentId);
+        if (selectedAgentId === pendingSelectedAgentId) {
+          sessionStorage.removeItem(PENDING_AGENT_SELECTION_KEY);
+        }
       }
       onAgentListLoaded?.(agents, selectedAgentId || agentSelectEl.value || agents[0]?.id || "");
       return;
@@ -479,10 +496,14 @@ export function createChatNetworkFeature({
       agents,
       currentSelectedAgentId,
       localStorage.getItem(agentIdKey) || "",
+      pendingSelectedAgentId,
     );
     if (selectedAgentId) {
       agentSelectEl.value = selectedAgentId;
       localStorage.setItem(agentIdKey, selectedAgentId);
+      if (selectedAgentId === pendingSelectedAgentId) {
+        sessionStorage.removeItem(PENDING_AGENT_SELECTION_KEY);
+      }
     }
 
     // agentSelect dropdown stays hidden — right-side Agent panel is used instead
@@ -492,6 +513,19 @@ export function createChatNetworkFeature({
 
   async function loadModelList() {
     if (!isConnected() || !modelSelectEl) return;
+    const modelCatalog = await requestModelCatalog();
+    if (!modelCatalog) return;
+    lastModelListState = modelCatalog;
+    renderModelOptions(
+      modelCatalog.models,
+      modelCatalog.currentDefault,
+      modelCatalog.preferredProviderIds,
+      modelCatalog.manualEntrySupported,
+    );
+  }
+
+  async function requestModelCatalog() {
+    if (!isConnected()) return null;
 
     const res = await sendReq({
       type: "req",
@@ -499,19 +533,18 @@ export function createChatNetworkFeature({
       method: "models.list",
     });
 
-    if (!res || !res.ok || !Array.isArray(res.payload?.models)) return;
+    if (!res || !res.ok || !Array.isArray(res.payload?.models)) return null;
 
-    const models = Array.isArray(res.payload.models) ? res.payload.models : [];
-    const currentDefault = typeof res.payload.currentDefault === "string" && res.payload.currentDefault.trim()
-      ? res.payload.currentDefault.trim()
-      : "primary";
-    const preferredProviderIds = Array.isArray(res.payload?.preferredProviderIds)
-      ? res.payload.preferredProviderIds
-      : [];
-    const manualEntrySupported = res.payload?.manualEntrySupported !== false;
-
-    lastModelListState = { models, currentDefault, preferredProviderIds, manualEntrySupported };
-    renderModelOptions(models, currentDefault, preferredProviderIds, manualEntrySupported);
+    return {
+      models: Array.isArray(res.payload.models) ? res.payload.models : [],
+      currentDefault: typeof res.payload.currentDefault === "string" && res.payload.currentDefault.trim()
+        ? res.payload.currentDefault.trim()
+        : "primary",
+      preferredProviderIds: Array.isArray(res.payload?.preferredProviderIds)
+        ? res.payload.preferredProviderIds
+        : [],
+      manualEntrySupported: res.payload?.manualEntrySupported !== false,
+    };
   }
 
   function renderModelOptions(models, currentDefault, preferredProviderIds = [], manualEntrySupported = false) {
@@ -705,6 +738,7 @@ export function createChatNetworkFeature({
     isConnected,
     loadAgentList,
     loadModelList,
+    requestModelCatalog,
     refreshLocale() {
       applyLocalizedStatus();
       const statusHintMessage = getStatusHintMessage(currentStatus.key);

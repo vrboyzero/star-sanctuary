@@ -56,6 +56,7 @@ export function createAppShellFeature({
     const stack = ensureNoticeStack();
     const item = document.createElement("div");
     item.className = `notice-item notice-${tone}`;
+    item.setAttribute("role", "alert");
     const remove = () => {
       if (item.parentElement) item.parentElement.removeChild(item);
     };
@@ -67,6 +68,15 @@ export function createAppShellFeature({
     messageEl.textContent = String(message ?? "");
     item.appendChild(titleEl);
     item.appendChild(messageEl);
+    if (options?.dismissible !== false) {
+      const closeBtn = document.createElement("button");
+      closeBtn.type = "button";
+      closeBtn.className = "notice-close-btn";
+      closeBtn.setAttribute("aria-label", "Close notice");
+      closeBtn.textContent = "×";
+      closeBtn.addEventListener("click", remove);
+      item.appendChild(closeBtn);
+    }
     const actionLabel = typeof options?.actionLabel === "string" ? options.actionLabel.trim() : "";
     if (actionLabel) {
       const actionsEl = document.createElement("div");
@@ -83,7 +93,9 @@ export function createAppShellFeature({
       item.appendChild(actionsEl);
     }
     stack.appendChild(item);
-    setTimeout(remove, durationMs);
+    if (Number.isFinite(durationMs) && durationMs > 0) {
+      setTimeout(remove, durationMs);
+    }
   }
 
   function switchMode(mode) {

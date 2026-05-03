@@ -117,6 +117,7 @@ const DEFAULT_METHODS = [
   "agent.contracts.get",
   "delegation.inspect.get",
   "agents.prompt.inspect",
+  "agent.create",
   "agents.list",
   "agents.roster.get",
   "agent.session.ensure",

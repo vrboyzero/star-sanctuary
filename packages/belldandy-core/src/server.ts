@@ -183,6 +183,7 @@ export type GatewayServerOptions = {
     wireApi?: string;
     thinking?: Record<string, unknown>;
     reasoningEffort?: string;
+    options?: Record<string, unknown>;
   };
   /** 备用模型配置（来自 models.json） */
   modelFallbacks?: ModelProfile[];
@@ -1737,6 +1738,7 @@ async function handleReq(
     residentMemoryManagers: ctx.residentMemoryManagers,
     conversationStore: ctx.conversationStore,
     subTaskRuntimeStore: ctx.subTaskRuntimeStore,
+    writeTextFileAtomic,
     inspectAgentPrompt: ctx.inspectAgentPrompt,
   } as const;
 
@@ -1864,6 +1866,7 @@ async function handleReq(
     }
 
     case "system.restart":
+    case "agent.create":
     case "agents.list":
     case "agents.roster.get":
     case "agent.session.ensure":

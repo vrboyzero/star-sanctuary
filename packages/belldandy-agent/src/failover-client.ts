@@ -35,6 +35,8 @@ export type ModelProfile = {
     thinking?: Record<string, unknown>;
     /** OpenAI-compatible 推理强度（透传为 reasoning_effort） */
     reasoningEffort?: string;
+    /** OpenAI-compatible / provider-specific options（按 provider 原样透传） */
+    options?: Record<string, unknown>;
 };
 
 /** 容灾错误原因分类 */
@@ -993,6 +995,7 @@ export type ModelConfigFile = {
         proxyUrl?: string;
         thinking?: Record<string, unknown>;
         reasoningEffort?: string;
+        options?: Record<string, unknown>;
     }>;
 };
 
@@ -1028,6 +1031,7 @@ export async function loadModelFallbacks(filePath: string): Promise<ModelProfile
                 proxyUrl: typeof f.proxyUrl === "string" ? f.proxyUrl : undefined,
                 thinking: isThinkingConfig(f.thinking) ? { ...f.thinking, type: normalizeThinkingType(f.thinking.type)! } : undefined,
                 reasoningEffort: typeof f.reasoningEffort === "string" ? normalizeOptionalString(f.reasoningEffort) : undefined,
+                options: isOptionsConfig(f.options) ? { ...f.options } : undefined,
             }));
     } catch {
         // 文件不存在或解析失败，静默返回空
@@ -1044,4 +1048,10 @@ function isThinkingConfig(value: unknown): value is Record<string, unknown> {
         && typeof value === "object"
         && !Array.isArray(value)
         && Boolean(normalizeThinkingType((value as Record<string, unknown>).type));
+}
+
+function isOptionsConfig(value: unknown): value is Record<string, unknown> {
+    return Boolean(value)
+        && typeof value === "object"
+        && !Array.isArray(value);
 }
