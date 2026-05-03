@@ -65,6 +65,7 @@ import { initPromptController } from "./app/features/prompt.js";
 import { createPanelVisibilityFeature } from "./app/features/panel-visibility.js";
 import { createThemeController } from "./app/features/theme.js";
 import { createVoiceFeature } from "./app/features/voice.js";
+import { GOVERNANCE_DETAIL_MODE_CHANGED_EVENT } from "./app/features/governance-detail-mode.js";
 import { applyWebConfigLinks } from "./app/features/web-config-links.js";
 import { createWorkspaceFeature } from "./app/features/workspace.js";
 import { LOCALE_DICTIONARIES, LOCALE_META } from "./app/i18n/index.js";
@@ -2594,6 +2595,18 @@ settingsRuntimeFeature = createSettingsRuntimeFeature({
 function toggleSettings(show) {
   settingsRuntimeFeature?.toggleSettings(show);
 }
+
+window.addEventListener(GOVERNANCE_DETAIL_MODE_CHANGED_EVENT, () => {
+  if (memoryViewerSection && !memoryViewerSection.classList.contains("hidden")) {
+    void loadMemoryViewer(false);
+  }
+  if (experienceWorkbenchSection && !experienceWorkbenchSection.classList.contains("hidden")) {
+    void loadExperienceWorkbench(false);
+  }
+  if (goalsSection && !goalsSection.classList.contains("hidden")) {
+    void loadGoals(false);
+  }
+});
 
 chatEventsFeature = createChatEventsFeature({
   appendMessage,

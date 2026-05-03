@@ -44,6 +44,7 @@ type GatewayHttpRuntimeContextInput = {
     | "webhookIdempotency"
     | "onChannelSecurityApprovalRequired"
   >;
+  getGovernanceDetailMode?: () => "compact" | "full";
   getConversationStore: () => ConversationStore;
   getQueryRuntimeTraceStore: () => QueryRuntimeTraceStore;
   writeBinaryFileAtomic: RegisterGatewayHttpRoutesContext["writeBinaryFileAtomic"];
@@ -55,6 +56,8 @@ type GatewayHttpRuntimeSettings = Pick<
   RegisterGatewayHttpRoutesContext,
   | "communityApiEnabled"
   | "communityApiToken"
+  | "webConfig"
+  | "getWebConfig"
   | "webhookEnabled"
   | "webhookPreAuthMaxBytes"
   | "webhookPreAuthTimeoutMs"
@@ -65,11 +68,13 @@ type GatewayHttpRuntimeSettings = Pick<
   | "webhookInFlightLimiter"
 >;
 
+type GatewayWebConfig = NonNullable<RegisterGatewayHttpRoutesContext["webConfig"]>;
+
 export function buildGatewayHttpRoutesContext(
   input: GatewayHttpRuntimeContextInput,
 ): RegisterGatewayHttpRoutesContext {
   const avatarDir = path.join(input.stateDir, "avatar");
-  const runtimeSettings = readGatewayHttpRuntimeSettings(input.options);
+  const runtimeSettings = readGatewayHttpRuntimeSettings(input);
 
   return {
     app: input.app,
@@ -110,13 +115,13 @@ export function buildGatewayHttpRoutesContext(
 }
 
 function readGatewayHttpRuntimeSettings(
-  options: GatewayHttpRuntimeContextInput["options"],
+  input: Pick<GatewayHttpRuntimeContextInput, "options" | "getGovernanceDetailMode">,
 ): GatewayHttpRuntimeSettings {
   const communityApiEnabled = String(process.env.BELLDANDY_COMMUNITY_API_ENABLED ?? "false").toLowerCase() === "true";
   const communityApiToken =
     process.env.BELLDANDY_COMMUNITY_API_TOKEN
     ?? process.env.BELLDANDY_AUTH_TOKEN
-    ?? (options.auth.mode === "token" ? options.auth.token : undefined);
+    ?? (input.options.auth.mode === "token" ? input.options.auth.token : undefined);
   const webhookPreAuthMaxBytes = parsePositiveIntEnv(
     "BELLDANDY_WEBHOOK_PREAUTH_MAX_BYTES",
     WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes,
@@ -145,11 +150,18 @@ function readGatewayHttpRuntimeSettings(
     "BELLDANDY_WEBHOOK_MAX_IN_FLIGHT_TRACKED_KEYS",
     WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
   );
+  const governanceDetailMode = input.getGovernanceDetailMode?.() ?? readGovernanceDetailModeEnv();
 
   return {
     communityApiEnabled,
     communityApiToken,
-    webhookEnabled: Boolean(options.webhookConfig && options.webhookConfig.webhooks.length > 0),
+    webConfig: {
+      governanceDetailMode,
+    },
+    getWebConfig: () => ({
+      governanceDetailMode: input.getGovernanceDetailMode?.() ?? readGovernanceDetailModeEnv(),
+    }),
+    webhookEnabled: Boolean(input.options.webhookConfig && input.options.webhookConfig.webhooks.length > 0),
     webhookPreAuthMaxBytes,
     webhookPreAuthTimeoutMs,
     webhookRateLimitWindowMs,
@@ -165,6 +177,14 @@ function readGatewayHttpRuntimeSettings(
       maxTrackedKeys: webhookMaxInFlightTrackedKeys,
     }),
   };
+}
+
+function readGovernanceDetailModeEnv(): GatewayWebConfig["governanceDetailMode"] {
+  const normalized = String(process.env.BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE ?? "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "full") return "full";
+  return "compact";
 }
 
 function parsePositiveIntEnv(varName: string, fallback: number): number {

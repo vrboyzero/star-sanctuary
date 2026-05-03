@@ -1,3 +1,5 @@
+import { isCompactGovernanceDetailMode } from "./governance-detail-mode.js";
+
 export function createGoalsDetailFeature({
   refs,
   getActiveConversationId,
@@ -147,6 +149,7 @@ export function createGoalsDetailFeature({
       lastNodeId,
       isCurrentConversation,
     });
+    const compactGovernanceDetailMode = isCompactGovernanceDetailMode();
 
     goalsDetailEl.innerHTML = `
       <div class="memory-detail-shell">
@@ -165,11 +168,11 @@ export function createGoalsDetailFeature({
         ${runtimeSummaryCard}
         ${recoveryCard}
 
-        <div class="memory-detail-card goal-handoff-card">
+        ${compactGovernanceDetailMode ? "" : `<div class="memory-detail-card goal-handoff-card">
           <div id="goalHandoffPanel">
             <div class="memory-viewer-empty">${escapeHtml(t("goals.detailHandoffLoading", {}, "Loading handoff.md ..."))}</div>
           </div>
-        </div>
+        </div>`}
 
         <div class="memory-detail-card goal-governance-card">
           <div id="goalGovernancePanel">
@@ -178,15 +181,15 @@ export function createGoalsDetailFeature({
         </div>
 
         <div class="memory-detail-grid">
-          <div class="memory-detail-card"><span class="memory-detail-label">长期任务 ID</span><div class="memory-detail-text">${escapeHtml(goal.id)}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("goals.detailUpdatedAt", {}, "Updated At"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(goal.updatedAt || goal.createdAt))}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("goals.detailCreatedAt", {}, "Created At"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(goal.createdAt))}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("goals.detailPathSource", {}, "Path Source"))}</span><div class="memory-detail-text">${escapeHtml(formatGoalPathSource(goal.pathSource))}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("goals.detailActiveNode", {}, "Current Active Node"))}</span><div class="memory-detail-text">${escapeHtml(activeNodeId || "-")}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("goals.detailLastNode", {}, "Last Active Node"))}</span><div class="memory-detail-text">${escapeHtml(lastNodeId || "-")}</div></div>
-          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("goals.detailLastRunId", {}, "Last Run ID"))}</span><div class="memory-detail-text">${lastRunId ? `<button class="memory-path-link" data-open-task-id="${escapeHtml(lastRunId)}">${escapeHtml(lastRunId)}</button>` : "-"}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("goals.detailLastActiveAt", {}, "Last Active At"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(goal.lastActiveAt))}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("goals.detailLastPausedAt", {}, "Last Paused At"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(goal.pausedAt))}</div></div>
+          ${compactGovernanceDetailMode ? "" : `<div class="memory-detail-card"><span class="memory-detail-label">长期任务 ID</span><div class="memory-detail-text">${escapeHtml(goal.id)}</div></div>`}
+          ${compactGovernanceDetailMode ? "" : `<div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("goals.detailLastRunId", {}, "Last Run ID"))}</span><div class="memory-detail-text">${lastRunId ? `<button class="memory-path-link" data-open-task-id="${escapeHtml(lastRunId)}">${escapeHtml(lastRunId)}</button>` : "-"}</div></div>`}
         </div>
 
         <div class="memory-detail-card">
@@ -194,7 +197,7 @@ export function createGoalsDetailFeature({
           <div class="memory-detail-pre">${escapeHtml(goal.activeConversationId || goalBaseConversationId(goal.id))}</div>
         </div>
 
-        <div class="memory-detail-card">
+        ${compactGovernanceDetailMode ? "" : `<div class="memory-detail-card">
           <span class="memory-detail-label">${escapeHtml(t("goals.detailKeyPaths", {}, "Key Paths"))}</span>
           <div class="goal-path-list">
             <button class="button goal-path-button" data-open-source="${escapeHtml(goalDocFilePath(goal, "00-goal.md"))}">${escapeHtml(t("goals.detailOpenGoalDoc", {}, "Open 00-goal"))}</button>
@@ -207,13 +210,13 @@ export function createGoalsDetailFeature({
             <button class="button goal-path-button" data-open-source="${escapeHtml(goalRuntimeFilePath(goal, "state.json"))}">${escapeHtml(t("goals.detailOpenState", {}, "Open state.json"))}</button>
             <button class="button goal-path-button" data-open-source="${escapeHtml(goalRuntimeFilePath(goal, "runtime.json"))}">${escapeHtml(t("goals.detailOpenRuntime", {}, "Open runtime.json"))}</button>
           </div>
-        </div>
+        </div>`}
 
-        <div class="memory-detail-grid">
+        ${compactGovernanceDetailMode ? "" : `<div class="memory-detail-grid">
           <div class="memory-detail-card"><span class="memory-detail-label">任务根目录</span><div class="memory-detail-pre">${escapeHtml(goal.goalRoot || "-")}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">文档根目录</span><div class="memory-detail-pre">${escapeHtml(goal.docRoot || "-")}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">运行态根目录</span><div class="memory-detail-pre">${escapeHtml(goal.runtimeRoot || "-")}</div></div>
-        </div>
+        </div>`}
 
         <div class="goal-detail-actions">
           <button class="button" data-open-goal-tasks="${escapeHtml(goal.id)}">${escapeHtml(t("goals.detailOpenTasks", {}, "View Related Tasks"))}</button>
@@ -222,11 +225,11 @@ export function createGoalsDetailFeature({
           <button class="button goal-inline-action-secondary" data-goal-pause-detail="${escapeHtml(goal.id)}">${escapeHtml(t("goals.pause", {}, "Pause"))}</button>
         </div>
 
-        <div class="memory-detail-card goal-canvas-card">
+        ${compactGovernanceDetailMode ? "" : `<div class="memory-detail-card goal-canvas-card">
           <div id="goalCanvasPanel">
             <div class="memory-viewer-empty">${escapeHtml(t("goals.detailBoardLoading", {}, "Loading board-ref.json ..."))}</div>
           </div>
-        </div>
+        </div>`}
 
         <div class="memory-detail-card goal-tracking-card">
           <div class="goal-summary-header">
@@ -240,7 +243,7 @@ export function createGoalsDetailFeature({
           </div>
         </div>
 
-        <div class="memory-detail-card goal-capability-card">
+        ${compactGovernanceDetailMode ? "" : `<div class="memory-detail-card goal-capability-card">
           <div class="goal-summary-header">
             <div>
               <div class="goal-summary-title">${escapeHtml(t("goals.detailCapabilityTitle", {}, "Capability Plan"))}</div>
@@ -250,9 +253,9 @@ export function createGoalsDetailFeature({
           <div id="goalCapabilityPanel">
             <div class="memory-viewer-empty">${escapeHtml(t("goals.detailCapabilityLoading", {}, "Loading capability-plans.json ..."))}</div>
           </div>
-        </div>
+        </div>`}
 
-        <div class="memory-detail-card goal-progress-card">
+        ${compactGovernanceDetailMode ? "" : `<div class="memory-detail-card goal-progress-card">
           <div class="goal-summary-header">
             <div>
               <div class="goal-summary-title">${escapeHtml(t("goals.detailProgressTitle", {}, "Execution Timeline"))}</div>
@@ -262,7 +265,7 @@ export function createGoalsDetailFeature({
           <div id="goalProgressPanel">
             <div class="memory-viewer-empty">${escapeHtml(t("goals.detailProgressLoading", {}, "Loading progress.md ..."))}</div>
           </div>
-        </div>
+        </div>`}
       </div>
     `;
 

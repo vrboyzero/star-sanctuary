@@ -94,6 +94,8 @@ export type GatewayWebSocketRequestContext = {
   emailFollowUpReminderStore?: EmailFollowUpReminderStore;
   getAgentToolControlMode?: () => "disabled" | "confirm" | "auto";
   getAgentToolControlConfirmPassword?: () => string | undefined;
+  getGovernanceDetailMode?: () => "compact" | "full";
+  setGovernanceDetailMode?: (value: string | undefined) => void;
   sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
   pluginRegistry?: PluginRegistry;
   extensionHost?: Pick<ExtensionHostState, "extensionRuntime" | "lifecycle">;
@@ -185,6 +187,8 @@ export function buildGatewayWebSocketRequestContext(
     emailFollowUpReminderStore: options.emailFollowUpReminderStore,
     getAgentToolControlMode: options.getAgentToolControlMode,
     getAgentToolControlConfirmPassword: options.getAgentToolControlConfirmPassword,
+    getGovernanceDetailMode: options.getGovernanceDetailMode,
+    setGovernanceDetailMode: options.setGovernanceDetailMode,
     sttTranscribe: options.sttTranscribe,
     pluginRegistry: options.pluginRegistry,
     extensionHost: options.extensionHost,

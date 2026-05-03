@@ -1,4 +1,5 @@
 import { renderDoctorObservabilityCards } from "./doctor-observability.js";
+import { setGovernanceDetailMode } from "./governance-detail-mode.js";
 import {
   ASSISTANT_MODE_PRESET_CUSTOM,
   applyAssistantModePreset,
@@ -325,6 +326,7 @@ export function createSettingsController({
     cfgWorkspaceDir,
     cfgExtraWorkspaceRoots,
     cfgWebRoot,
+    cfgGovernanceDetailMode,
     cfgLogLevel,
     cfgLogConsole,
     cfgLogFile,
@@ -368,7 +370,11 @@ export function createSettingsController({
     "BELLDANDY_IMAGE_UNDERSTAND_OPENAI_API_KEY",
     "BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY",
   ];
+  const FRONTEND_ONLY_SETTING_FIELDS = new Set([
+    "cfgGovernanceDetailMode",
+  ]);
   let lastLoadedConfig = null;
+  let lastLoadedFormState = null;
   let lastLoadedChannelSecurityContent = '{\n  "version": 1,\n  "channels": {}\n}\n';
   let lastLoadedChannelReplyChunkingContent = '{\n  "version": 1,\n  "channels": {}\n}\n';
   let doctorRequestVersion = 0;
@@ -650,6 +656,7 @@ export function createSettingsController({
           loadChannelSecuritySurface(),
           runDoctor(),
         ]);
+        lastLoadedFormState = captureSettingsFormState();
       }
       const { tabId, target } = resolveSettingsSectionRoute(options.section);
       activateSettingsTab(tabId);
@@ -948,6 +955,7 @@ export function createSettingsController({
     if (cfgWorkspaceDir) cfgWorkspaceDir.value = c["BELLDANDY_WORKSPACE_DIR"] || "";
     if (cfgExtraWorkspaceRoots) cfgExtraWorkspaceRoots.value = c["BELLDANDY_EXTRA_WORKSPACE_ROOTS"] || "";
     if (cfgWebRoot) cfgWebRoot.value = c["BELLDANDY_WEB_ROOT"] || "";
+    if (cfgGovernanceDetailMode) cfgGovernanceDetailMode.value = c["BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE"] === "full" ? "full" : "compact";
     if (cfgLogLevel) cfgLogLevel.value = c["BELLDANDY_LOG_LEVEL"] || "info";
     if (cfgLogConsole) cfgLogConsole.checked = c["BELLDANDY_LOG_CONSOLE"] !== "false";
     if (cfgLogFile) cfgLogFile.checked = c["BELLDANDY_LOG_FILE"] !== "false";
@@ -968,6 +976,22 @@ export function createSettingsController({
     if (cfgCommonsObsidianRootDir) cfgCommonsObsidianRootDir.value = c["BELLDANDY_COMMONS_OBSIDIAN_ROOT_DIR"] || "";
     if (cfgRoomInjectThreshold) cfgRoomInjectThreshold.value = c["BELLDANDY_ROOM_INJECT_THRESHOLD"] || "";
     if (cfgRoomMembersCacheTtl) cfgRoomMembersCacheTtl.value = c["BELLDANDY_ROOM_MEMBERS_CACHE_TTL"] || "";
+    lastLoadedFormState = captureSettingsFormState();
+  }
+
+  function captureSettingsFormState() {
+    const snapshot = {};
+    for (const [fieldName, ref] of Object.entries(refs || {})) {
+      if (!ref || typeof ref !== "object") continue;
+      if (typeof ref.value === "string") {
+        snapshot[fieldName] = `value:${ref.value}`;
+        continue;
+      }
+      if (typeof ref.checked === "boolean") {
+        snapshot[fieldName] = `checked:${ref.checked ? "true" : "false"}`;
+      }
+    }
+    return snapshot;
   }
 
   async function loadModelFallbackConfig() {
@@ -1725,6 +1749,7 @@ export function createSettingsController({
     if (cfgWorkspaceDir) updates["BELLDANDY_WORKSPACE_DIR"] = cfgWorkspaceDir.value.trim();
     if (cfgExtraWorkspaceRoots) updates["BELLDANDY_EXTRA_WORKSPACE_ROOTS"] = cfgExtraWorkspaceRoots.value.trim();
     if (cfgWebRoot) updates["BELLDANDY_WEB_ROOT"] = cfgWebRoot.value.trim();
+    if (cfgGovernanceDetailMode) updates["BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE"] = cfgGovernanceDetailMode.value === "full" ? "full" : "compact";
     if (cfgLogLevel) updates["BELLDANDY_LOG_LEVEL"] = cfgLogLevel.value.trim();
     if (cfgLogConsole) updates["BELLDANDY_LOG_CONSOLE"] = cfgLogConsole.checked ? "true" : "false";
     if (cfgLogFile) updates["BELLDANDY_LOG_FILE"] = cfgLogFile.checked ? "true" : "false";
@@ -1819,10 +1844,28 @@ export function createSettingsController({
     });
 
     if (res && res.ok) {
+      setGovernanceDetailMode(updates["BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE"]);
       invalidateServerConfigCache?.();
       await onModelCatalogChanged?.();
       if (saveSettingsBtn) {
         saveSettingsBtn.textContent = t("settings.saved", {}, "Saved");
+      }
+
+      const currentFormState = captureSettingsFormState();
+      const changedFieldNames = Object.keys(currentFormState)
+        .filter((fieldName) => currentFormState[fieldName] !== lastLoadedFormState?.[fieldName]);
+      lastLoadedFormState = currentFormState;
+      const shouldSkipAutoRestart = changedFieldNames.length > 0
+        && changedFieldNames.every((fieldName) => FRONTEND_ONLY_SETTING_FIELDS.has(fieldName));
+
+      if (shouldSkipAutoRestart) {
+        if (saveSettingsBtn) {
+          saveSettingsBtn.disabled = false;
+          setTimeout(() => {
+            saveSettingsBtn.textContent = t("settings.save", {}, "Save");
+          }, 1200);
+        }
+        return;
       }
 
       const restartResult = await restartServer({

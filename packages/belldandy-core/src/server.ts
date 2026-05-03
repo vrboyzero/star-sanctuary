@@ -120,6 +120,7 @@ import { handleCronRuntimeMethod } from "./server-methods/cron-runtime.js";
 import { handleModelsConfigMethod } from "./server-methods/models-config.js";
 import { handleQueryRuntimeDomainsMethod } from "./server-methods/query-runtime-domains.js";
 import { handleConfigChannelMethod } from "./server-methods/config-channel.js";
+import { suppressConfigFileRestart } from "./config-restart-guard.js";
 import { handleGoalMethod } from "./server-methods/goals.js";
 import { handleMemoryExperienceMethod } from "./server-methods/memory-experience.js";
 import { handleMessageSendMethod } from "./server-methods/message-send.js";
@@ -682,6 +683,14 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   const runtimePreferredProviderIds = Array.isArray(opts.preferredProviderIds)
     ? opts.preferredProviderIds
     : [];
+  const governanceDetailModeState: { value: "compact" | "full" } = {
+    value: String(process.env.BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE ?? "").trim().toLowerCase() === "full" ? "full" : "compact",
+  };
+  const getRuntimeGovernanceDetailMode = (): "compact" | "full" => governanceDetailModeState.value;
+  const setRuntimeGovernanceDetailMode = (value: string | undefined): void => {
+    governanceDetailModeState.value = value === "full" ? "full" : "compact";
+    process.env.BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE = governanceDetailModeState.value;
+  };
   const getConversationPromptSnapshot = opts.getConversationPromptSnapshot
     ?? (async ({ conversationId, runId }: { conversationId: string; runId?: string }) => {
       return loadConversationPromptSnapshotArtifact({
@@ -736,6 +745,8 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     },
     getConversationStore: () => conversationStore,
     getQueryRuntimeTraceStore: () => queryRuntimeTraceStore,
+    getGovernanceDetailMode: getRuntimeGovernanceDetailMode,
+    setGovernanceDetailMode: setRuntimeGovernanceDetailMode,
     writeBinaryFileAtomic,
     writeTextFileAtomic,
     emitAutoRunTaskTokenResult,
@@ -1222,6 +1233,8 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     getBackgroundContinuationRuntimeDoctorReport: opts.getBackgroundContinuationRuntimeDoctorReport,
     runCronJobNow: opts.runCronJobNow,
     runCronRecovery: opts.runCronRecovery,
+    getGovernanceDetailMode: getRuntimeGovernanceDetailMode,
+    setGovernanceDetailMode: setRuntimeGovernanceDetailMode,
     handleReq,
   });
   const websocketRuntime = createGatewayWebSocketRuntime({
@@ -1853,6 +1866,16 @@ async function handleReq(
         statIfExists,
         readEnvFileIntoConfig,
         updateEnvFile,
+        onConfigUpdating: (updates) => {
+          if (Object.keys(updates).length === 1 && Object.prototype.hasOwnProperty.call(updates, "BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE")) {
+            suppressConfigFileRestart(".env.local");
+          }
+        },
+        onConfigUpdated: (updates) => {
+          if (Object.keys(updates).length === 1 && Object.prototype.hasOwnProperty.call(updates, "BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE")) {
+            ctx.setGovernanceDetailMode?.(updates.BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE);
+          }
+        },
         writeTextFileAtomic,
       });
     }

@@ -7,6 +7,10 @@ import WebSocket from "ws";
 
 import { startGatewayServer } from "./server.js";
 import {
+  isConfigFileRestartSuppressed,
+  resetSuppressedConfigFileRestarts,
+} from "./config-restart-guard.js";
+import {
   cleanupGlobalMemoryManagersForTest,
   pairWebSocketClient,
   resolveWebRoot,
@@ -21,6 +25,7 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanupGlobalMemoryManagersForTest();
+  resetSuppressedConfigFileRestarts();
 });
 
 test("config.update persists tool control mode and redacts confirm password in config.read", async () => {
@@ -500,6 +505,7 @@ test("config.update accepts system governance env settings and keeps extra works
           BELLDANDY_WORKSPACE_DIR: "./workspace",
           BELLDANDY_EXTRA_WORKSPACE_ROOTS: "E:/tools,D:/projects",
           BELLDANDY_WEB_ROOT: "apps/web/public",
+          BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE: "full",
           BELLDANDY_LOG_LEVEL: "info",
           BELLDANDY_LOG_CONSOLE: "true",
           BELLDANDY_LOG_FILE: "true",
@@ -531,6 +537,7 @@ test("config.update accepts system governance env settings and keeps extra works
     expect(readRes.payload?.config?.BELLDANDY_TOKEN_USAGE_UPLOAD_APIKEY).toBe("[REDACTED]");
     expect(readRes.payload?.config?.BELLDANDY_AUTO_TASK_TOKEN_ENABLED).toBe("false");
     expect(readRes.payload?.config?.BELLDANDY_EXTRA_WORKSPACE_ROOTS).toBe("E:/tools,D:/projects");
+    expect(readRes.payload?.config?.BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE).toBe("full");
     expect(readRes.payload?.config?.BELLDANDY_LOG_DIR).toBe("~/.star_sanctuary/logs");
     expect(readRes.payload?.config?.BELLDANDY_DREAM_OBSIDIAN_ROOT_DIR).toBe("Dream");
     expect(readRes.payload?.config?.BELLDANDY_COMMONS_OBSIDIAN_ROOT_DIR).toBe("Commons");
@@ -540,6 +547,7 @@ test("config.update accepts system governance env settings and keeps extra works
     expect(envContent).toContain('BELLDANDY_EXTRA_WORKSPACE_ROOTS="E:/tools,D:/projects"');
     expect(envLocalContent).toContain('BELLDANDY_TOKEN_USAGE_UPLOAD_APIKEY="gro_secret_key"');
     expect(envLocalContent).toContain('BELLDANDY_STATE_DIR_WINDOWS="C:/Users/admin/.star_sanctuary"');
+    expect(envLocalContent).toContain('BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE="full"');
     expect(envLocalContent).toContain('BELLDANDY_COMMONS_OBSIDIAN_ROOT_DIR="Commons"');
   } finally {
     ws.close();
@@ -908,6 +916,73 @@ test("config.update persists assistant external delivery preference", async () =
 
     const envLocalContent = await fs.promises.readFile(path.join(envDir, ".env.local"), "utf-8");
     expect(envLocalContent).toContain('BELLDANDY_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE="community,discord"');
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(envDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("config.update treats unchanged fields as no-op and still applies governance-only runtime update for full-form submissions", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const envDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-env-"));
+  await fs.promises.writeFile(path.join(envDir, ".env"), "", "utf-8");
+  await fs.promises.writeFile(
+    path.join(envDir, ".env.local"),
+    [
+      'BELLDANDY_HOST="127.0.0.1"',
+      'BELLDANDY_PORT="28889"',
+      'BELLDANDY_GATEWAY_PORT="28889"',
+      'BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE="compact"',
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    envDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "config-update-governance-full-form",
+      method: "config.update",
+      params: {
+        updates: {
+          BELLDANDY_HOST: "127.0.0.1",
+          BELLDANDY_PORT: "28889",
+          BELLDANDY_GATEWAY_PORT: "28889",
+          BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE: "full",
+        },
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "config-update-governance-full-form"));
+    const updateRes = frames.find((f) => f.type === "res" && f.id === "config-update-governance-full-form");
+    expect(updateRes.ok).toBe(true);
+    expect(isConfigFileRestartSuppressed(".env.local")).toBe(true);
+
+    const configJsRes = await fetch(`http://127.0.0.1:${server.port}/config.js`);
+    expect(configJsRes.ok).toBe(true);
+    const configJs = await configJsRes.text();
+    expect(configJs).toContain('"governanceDetailMode": "full"');
+
+    const envLocalContent = await fs.promises.readFile(path.join(envDir, ".env.local"), "utf-8");
+    expect(envLocalContent).toContain('BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE="full"');
+    expect(envLocalContent).toContain('BELLDANDY_HOST="127.0.0.1"');
   } finally {
     ws.close();
     await closeP;

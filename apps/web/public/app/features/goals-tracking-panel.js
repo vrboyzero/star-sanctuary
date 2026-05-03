@@ -4,6 +4,7 @@ import {
   formatBridgeCloseReason,
   formatBridgeRuntimeState,
 } from "./subtasks-overview.js";
+import { isCompactGovernanceDetailMode } from "./governance-detail-mode.js";
 
 export function getGoalTrackingNodeActionTargets(node) {
   const taskId = typeof node?.lastRunId === "string" && node.lastRunId.trim()
@@ -162,6 +163,7 @@ export function createGoalsTrackingPanelFeature({
   function renderGoalTrackingPanel(goal, payload) {
     const panel = goalsDetailEl?.querySelector("#goalTrackingPanel");
     if (!panel) return;
+    const compactGovernanceDetailMode = isCompactGovernanceDetailMode();
     const nodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
     const checkpoints = Array.isArray(payload?.checkpoints) ? payload.checkpoints : [];
     const capabilityPlansByNodeId = buildGoalTrackingCapabilityPlanIndex(payload?.capabilityPlans);
@@ -233,16 +235,17 @@ export function createGoalsTrackingPanelFeature({
                     ${node.phase ? `<span>${escapeHtml(node.phase)}</span>` : ""}
                     ${node.owner ? `<span>${escapeHtml(node.owner)}</span>` : ""}
                   </div>
-                  ${renderGoalTrackingNodeBridgeGovernance(node, escapeHtml, summarizeSourcePath, t)}
+                  ${compactGovernanceDetailMode ? "" : renderGoalTrackingNodeBridgeGovernance(node, escapeHtml, summarizeSourcePath, t)}
                   ${(() => {
                     const targets = getGoalTrackingNodeActionTargets(node);
+                    if (compactGovernanceDetailMode && !targets.taskId) return "";
                     if (!targets.taskId && !targets.artifactPaths.length && !targets.bridgeArtifactPath && !targets.bridgeTranscriptPath) return "";
                     return `
                       <div class="goal-detail-actions goal-checkpoint-actions">
                         ${targets.taskId ? `<button class="button goal-inline-action-secondary" data-open-task-id="${escapeHtml(targets.taskId)}">打开运行任务</button>` : ""}
-                        ${targets.artifactPaths.map((artifactPath) => `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(artifactPath)}">${escapeHtml(summarizeSourcePath(artifactPath))}</button>`).join("")}
-                        ${targets.bridgeArtifactPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(targets.bridgeArtifactPath)}">${escapeHtml(t("goals.trackingOpenBridgeArtifact", {}, "Open bridge artifact"))}</button>` : ""}
-                        ${targets.bridgeTranscriptPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(targets.bridgeTranscriptPath)}">${escapeHtml(t("goals.trackingOpenBridgeTranscript", {}, "Open bridge transcript"))}</button>` : ""}
+                        ${compactGovernanceDetailMode ? "" : targets.artifactPaths.map((artifactPath) => `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(artifactPath)}">${escapeHtml(summarizeSourcePath(artifactPath))}</button>`).join("")}
+                        ${compactGovernanceDetailMode ? "" : targets.bridgeArtifactPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(targets.bridgeArtifactPath)}">${escapeHtml(t("goals.trackingOpenBridgeArtifact", {}, "Open bridge artifact"))}</button>` : ""}
+                        ${compactGovernanceDetailMode ? "" : targets.bridgeTranscriptPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(targets.bridgeTranscriptPath)}">${escapeHtml(t("goals.trackingOpenBridgeTranscript", {}, "Open bridge transcript"))}</button>` : ""}
                       </div>
                     `;
                   })()}
@@ -272,10 +275,11 @@ export function createGoalsTrackingPanelFeature({
                     ${item.reviewer ? `<span class="memory-badge">评审人 ${escapeHtml(item.reviewer)}</span>` : ""}
                     ${item.reviewerRole ? `<span class="memory-badge">${escapeHtml(item.reviewerRole)}</span>` : ""}
                     ${item.requestedBy ? `<span class="memory-badge">发起 ${escapeHtml(item.requestedBy)}</span>` : ""}
-                    ${item.decidedBy ? `<span class="memory-badge">审批 ${escapeHtml(item.decidedBy)}</span>` : ""}
+                    ${compactGovernanceDetailMode ? "" : item.decidedBy ? `<span class="memory-badge">审批 ${escapeHtml(item.decidedBy)}</span>` : ""}
                     ${getGoalCheckpointSlaBadge(item)}
                   </div>
                   ${(() => {
+                    if (compactGovernanceDetailMode) return "";
                     const explainabilityLines = getGoalTrackingCheckpointExplainabilityLines(item, capabilityPlansByNodeId, t);
                     if (!explainabilityLines.length) return "";
                     return `
@@ -295,7 +299,7 @@ export function createGoalsTrackingPanelFeature({
                       <button class="button goal-inline-action" data-goal-checkpoint-action="reopen" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">重新打开</button>
                     ` : ""}
                   </div>
-                  ${item.history.length ? `
+                  ${!compactGovernanceDetailMode && item.history.length ? `
                     <div class="goal-checkpoint-history">
                       ${item.history.slice().reverse().slice(0, 4).map((history) => `
                         <div class="goal-checkpoint-history-item">

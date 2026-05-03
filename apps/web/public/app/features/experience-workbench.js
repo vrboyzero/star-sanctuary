@@ -1,4 +1,5 @@
 import { extractCandidateContextTargets } from "./memory-viewer.js";
+import { isCompactGovernanceDetailMode } from "./governance-detail-mode.js";
 
 const EXPERIENCE_CANDIDATE_PAGE_SIZE = 100;
 const EXPERIENCE_CANDIDATE_MAX_PAGES = 50;
@@ -1509,6 +1510,7 @@ export function createExperienceWorkbenchFeature({
 
   function renderExperienceAggregatePanel(candidate) {
     if (!candidate || typeof candidate !== "object") return "";
+    const compactGovernanceDetailMode = isCompactGovernanceDetailMode();
     const snapshot = candidate.sourceTaskSnapshot && typeof candidate.sourceTaskSnapshot === "object"
       ? candidate.sourceTaskSnapshot
       : {};
@@ -1562,10 +1564,10 @@ export function createExperienceWorkbenchFeature({
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateArtifactsLabel", {}, "来源产物"))}</span><div class="memory-detail-text">${escapeHtml(String(artifactPaths.length || contextTargets.artifactCount || 0))}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateToolCallsLabel", {}, "工具调用"))}</span><div class="memory-detail-text">${escapeHtml(String(toolCallCount))}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateLearningLabel", {}, "Learning / Review"))}</span><div class="memory-detail-text">${escapeHtml(learningHeadline)}</div></div>
-          ${synthesized ? `<div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateSynthesizedLabel", {}, "草稿来源"))}</span><div class="memory-detail-text">${escapeHtml(t("experience.synthesizedBadge", { count: String(synthesisSourceCount || 0) }, synthesisSourceCount > 0 ? `合成稿 · ${synthesisSourceCount}` : "合成稿"))}</div></div>` : ""}
-          ${synthesized ? `<div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateSynthesisSourcesLabel", {}, "合成来源数"))}</span><div class="memory-detail-text">${escapeHtml(String(synthesisSourceCount || 0))}</div></div>` : ""}
-          ${synthesisConsumedInfo ? `<div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateConsumedLabel", {}, "已消化状态"))}</span><div class="memory-detail-text">${synthesisConsumedInfo.consumedByCandidateId ? `<button class="memory-path-link" data-open-candidate-id="${escapeHtml(synthesisConsumedInfo.consumedByCandidateId)}">${escapeHtml(t("experience.aggregateConsumedValue", { id: synthesisConsumedInfo.consumedByCandidateId }, `已被合成稿 ${synthesisConsumedInfo.consumedByCandidateId} 消化`))}</button>` : escapeHtml(t("experience.aggregateConsumedFallback", {}, "已被后续合成消化"))}</div></div>` : ""}
-          ${synthesisConsumedInfo ? `<div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateConsumedAtLabel", {}, "消化时间"))}</span><div class="memory-detail-text">${escapeHtml(synthesisConsumedInfo.consumedAt ? formatDateTime(synthesisConsumedInfo.consumedAt) : "-")}</div></div>` : ""}
+          ${compactGovernanceDetailMode ? "" : synthesized ? `<div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateSynthesizedLabel", {}, "草稿来源"))}</span><div class="memory-detail-text">${escapeHtml(t("experience.synthesizedBadge", { count: String(synthesisSourceCount || 0) }, synthesisSourceCount > 0 ? `合成稿 · ${synthesisSourceCount}` : "合成稿"))}</div></div>` : ""}
+          ${compactGovernanceDetailMode ? "" : synthesized ? `<div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateSynthesisSourcesLabel", {}, "合成来源数"))}</span><div class="memory-detail-text">${escapeHtml(String(synthesisSourceCount || 0))}</div></div>` : ""}
+          ${compactGovernanceDetailMode ? "" : synthesisConsumedInfo ? `<div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateConsumedLabel", {}, "已消化状态"))}</span><div class="memory-detail-text">${synthesisConsumedInfo.consumedByCandidateId ? `<button class="memory-path-link" data-open-candidate-id="${escapeHtml(synthesisConsumedInfo.consumedByCandidateId)}">${escapeHtml(t("experience.aggregateConsumedValue", { id: synthesisConsumedInfo.consumedByCandidateId }, `已被合成稿 ${synthesisConsumedInfo.consumedByCandidateId} 消化`))}</button>` : escapeHtml(t("experience.aggregateConsumedFallback", {}, "已被后续合成消化"))}</div></div>` : ""}
+          ${compactGovernanceDetailMode ? "" : synthesisConsumedInfo ? `<div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("experience.aggregateConsumedAtLabel", {}, "消化时间"))}</span><div class="memory-detail-text">${escapeHtml(synthesisConsumedInfo.consumedAt ? formatDateTime(synthesisConsumedInfo.consumedAt) : "-")}</div></div>` : ""}
         </div>
         <div class="goal-detail-actions">
           ${contextTargets.sourceTaskId ? `<button class="button goal-inline-action-secondary" data-open-task-id="${escapeHtml(contextTargets.sourceTaskId)}">${escapeHtml(t("memory.contextOpenSourceTask", {}, "打开来源任务"))}</button>` : ""}

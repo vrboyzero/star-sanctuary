@@ -9,6 +9,7 @@ import {
   getSkillFreshnessBadgeClass,
   renderSkillFreshnessDetail,
 } from "./skill-freshness-view.js";
+import { isCompactGovernanceDetailMode, renderGovernanceFullOnly } from "./governance-detail-mode.js";
 
 export function buildTaskSourceExplanationItems(
   explanation,
@@ -567,10 +568,11 @@ export function createMemoryDetailRenderFeature({
       : "";
     const generateMethodBusy = pendingActionKey === `generate:method:${task.id}`;
     const generateSkillBusy = pendingActionKey === `generate:skill:${task.id}`;
+    const compactGovernanceDetailMode = isCompactGovernanceDetailMode();
 
     memoryViewerDetailEl.innerHTML = `
       <div class="memory-detail-shell">
-        ${candidatePanel}
+        ${renderGovernanceFullOnly(candidatePanel)}
         <div class="memory-detail-header">
           <div>
             <div class="memory-detail-title">${escapeHtml(title)}</div>
@@ -655,7 +657,7 @@ export function createMemoryDetailRenderFeature({
         ${task.objective ? `<div class="memory-detail-card"><span class="memory-detail-label">目标说明</span><div class="memory-detail-text">${escapeHtml(task.objective)}</div></div>` : ""}
         ${task.summary ? `<div class="memory-detail-card"><span class="memory-detail-label">摘要</span><div class="memory-detail-text">${escapeHtml(task.summary)}</div></div>` : ""}
         ${task.outcome ? `<div class="memory-detail-card"><span class="memory-detail-label">结果</span><div class="memory-detail-text">${escapeHtml(task.outcome)}</div></div>` : ""}
-        ${workRecap ? `
+        ${!compactGovernanceDetailMode && workRecap ? `
           <div class="memory-detail-card">
             <span class="memory-detail-label">Work Recap</span>
             <div class="memory-detail-text">${escapeHtml(workRecap.headline || "-")}</div>
@@ -690,7 +692,7 @@ export function createMemoryDetailRenderFeature({
             ` : ""}
           </div>
         ` : ""}
-        ${resumeContext ? `
+        ${!compactGovernanceDetailMode && resumeContext ? `
           <div class="memory-detail-card">
             <span class="memory-detail-label">Resume Context</span>
             ${resumeContext.currentStopPoint ? `<div class="memory-detail-text">${escapeHtml(`当前停点：${resumeContext.currentStopPoint}`)}</div>` : ""}
@@ -706,6 +708,7 @@ export function createMemoryDetailRenderFeature({
             ` : ""}
           </div>
         ` : ""}
+        ${renderGovernanceFullOnly(`
         <div class="memory-detail-card">
           <div class="goal-summary-header">
             <div>
@@ -755,8 +758,10 @@ export function createMemoryDetailRenderFeature({
                 : t("memory.taskSourceExplanationEmptyIdle", {}, "需要时再点击查看来源解释。"))}</div>
           `}
         </div>
-        ${task.reflection ? `<div class="memory-detail-card"><span class="memory-detail-label">复盘</span><div class="memory-detail-text">${escapeHtml(task.reflection)}</div></div>` : ""}
+        `)}
+        ${!compactGovernanceDetailMode && task.reflection ? `<div class="memory-detail-card"><span class="memory-detail-label">复盘</span><div class="memory-detail-text">${escapeHtml(task.reflection)}</div></div>` : ""}
 
+        ${renderGovernanceFullOnly(`
         <div class="memory-detail-card">
           <span class="memory-detail-label">Activity / Worklog (${activities.length})</span>
           ${activities.length ? `
@@ -791,17 +796,23 @@ export function createMemoryDetailRenderFeature({
             </div>
           ` : `<div class="memory-detail-text">No activity records.</div>`}
         </div>
+        `)}
 
+        ${renderGovernanceFullOnly(`
         <div class="memory-detail-card">
           <span class="memory-detail-label">${escapeHtml(t("memory.methodUsageTitle", {}, "Method Usage"))} (${usedMethods.length})</span>
           ${renderTaskUsageItems(usedMethods, "method")}
         </div>
+        `)}
 
+        ${renderGovernanceFullOnly(`
         <div class="memory-detail-card">
           <span class="memory-detail-label">${escapeHtml(t("memory.skillUsageTitle", {}, "Skill Usage"))} (${usedSkills.length})</span>
           ${renderTaskUsageItems(usedSkills, "skill")}
         </div>
+        `)}
 
+        ${renderGovernanceFullOnly(`
         <div class="memory-detail-card">
           <span class="memory-detail-label">工具调用（${toolCalls.length}）</span>
           ${toolCalls.length ? `
@@ -819,7 +830,9 @@ export function createMemoryDetailRenderFeature({
             </div>
           ` : `<div class="memory-detail-text">${escapeHtml(t("memory.noToolCalls", {}, "No tool call records."))}</div>`}
         </div>
+        `)}
 
+        ${renderGovernanceFullOnly(`
         <div class="memory-detail-card">
           <span class="memory-detail-label">${escapeHtml(t("memory.linkedMemoriesTitle", {}, "Linked Memories"))} (${memoryLinks.length})</span>
           ${memoryLinks.length ? `
@@ -839,7 +852,9 @@ export function createMemoryDetailRenderFeature({
             </div>
           ` : `<div class="memory-detail-text">${escapeHtml(t("memory.noLinkedMemories", {}, "No linked memories."))}</div>`}
         </div>
+        `)}
 
+        ${renderGovernanceFullOnly(`
         <div class="memory-detail-card">
           <span class="memory-detail-label">${escapeHtml(t("memory.artifactsTitle", {}, "Artifacts"))} (${artifactPaths.length})</span>
           ${artifactPaths.length ? `
@@ -852,6 +867,7 @@ export function createMemoryDetailRenderFeature({
             </div>
           ` : `<div class="memory-detail-text">${escapeHtml(t("memory.noArtifacts", {}, "No artifact paths."))}</div>`}
         </div>
+        `)}
       </div>
     `;
     bindMemoryPathLinks();

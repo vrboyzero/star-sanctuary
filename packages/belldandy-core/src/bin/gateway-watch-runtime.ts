@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { BelldandyLogger } from "../logger/index.js";
+import { isConfigFileRestartSuppressed } from "../config-restart-guard.js";
 
 export function startGatewayConfigWatcher(input: {
   envDir: string;
@@ -19,6 +20,9 @@ export function startGatewayConfigWatcher(input: {
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
 
   const triggerRestart = (fileName: string) => {
+    if (isConfigFileRestartSuppressed(fileName)) {
+      return;
+    }
     if (restartTimer) clearTimeout(restartTimer);
     restartTimer = setTimeout(() => {
       input.onRestartRequired(fileName);

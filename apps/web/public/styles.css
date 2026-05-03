@@ -3629,10 +3629,29 @@ body.control-panel-hidden .main-content {
   align-items: flex-start;
 }
 
+.memory-detail-header-main {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.memory-detail-header-side {
+  flex: 0 1 360px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
 .memory-detail-title {
   font-size: 22px;
   font-weight: 700;
   line-height: 1.3;
+}
+
+.memory-detail-header-memory-entry .memory-detail-title {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 @media (max-width: 960px) {
@@ -3684,6 +3703,32 @@ body.control-panel-hidden .main-content {
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 12px;
+}
+
+.memory-detail-badges-memory-entry {
+  justify-content: flex-end;
+}
+
+.memory-detail-actions-memory-entry {
+  margin-top: 0;
+  justify-content: flex-end;
+}
+
+@media (max-width: 1200px) {
+  .memory-detail-header-memory-entry {
+    flex-direction: column;
+  }
+
+  .memory-detail-header-memory-entry .memory-detail-header-side {
+    flex-basis: auto;
+    width: 100%;
+    align-items: flex-start;
+  }
+
+  .memory-detail-header-memory-entry .memory-detail-badges-memory-entry,
+  .memory-detail-header-memory-entry .memory-detail-actions-memory-entry {
+    justify-content: flex-start;
+  }
 }
 
 .memory-badge {

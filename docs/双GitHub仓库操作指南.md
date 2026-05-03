@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "Agent快速创建重启提示小调整，实施治理审阅信息状态增强前备份"
+git commit -m "治理审阅信息状态增强完成与测试通过"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

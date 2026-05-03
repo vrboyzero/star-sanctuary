@@ -27,6 +27,12 @@ export type RegisterGatewayHttpRoutesContext = {
   avatarDir: string;
   webRoot: string;
   generatedDir?: string;
+  webConfig?: {
+    governanceDetailMode?: "compact" | "full";
+  };
+  getWebConfig?: () => {
+    governanceDetailMode?: "compact" | "full";
+  };
   auth: GatewayServerOptions["auth"];
   agentFactory?: () => BelldandyAgent;
   agentRegistry?: AgentRegistry;
@@ -94,6 +100,11 @@ export async function registerGatewayHttpRoutes(ctx: RegisterGatewayHttpRoutesCo
 
   ctx.app.use("/avatar", express.static(ctx.avatarDir));
   ctx.log.info("gateway", `Static: serving /avatar -> ${ctx.avatarDir}`);
+  ctx.app.get("/config.js", (_req, res) => {
+    res.type("application/javascript; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    res.send(buildGatewayWebConfigScript(ctx.getWebConfig?.() ?? ctx.webConfig));
+  });
   ctx.app.use(express.static(ctx.webRoot));
 
   ctx.app.get("/", (_req, res) => {
@@ -335,4 +346,21 @@ export async function registerGatewayHttpRoutes(ctx: RegisterGatewayHttpRoutesCo
       `Ingress guard enabled (preAuthMaxBytes=${ctx.webhookPreAuthMaxBytes}, preAuthTimeoutMs=${ctx.webhookPreAuthTimeoutMs}, rateLimit=${ctx.webhookRateLimitMaxRequests}/${ctx.webhookRateLimitWindowMs}ms, maxInFlightPerKey=${ctx.webhookMaxInFlightPerKey})`,
     );
   }
+}
+
+function buildGatewayWebConfigScript(
+  webConfig: RegisterGatewayHttpRoutesContext["webConfig"],
+): string {
+  const configObject = {
+    governanceDetailMode: webConfig?.governanceDetailMode === "full" ? "full" : "compact",
+  };
+  const serialized = JSON.stringify(configObject, null, 2);
+  return [
+    "// Generated at runtime by Gateway.",
+    "window.BELLDANDY_WEB_CONFIG = {",
+    "  ...(window.BELLDANDY_WEB_CONFIG || {}),",
+    `  ...${serialized}`,
+    "};",
+    "",
+  ].join("\n");
 }

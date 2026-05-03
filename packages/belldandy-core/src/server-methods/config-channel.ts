@@ -26,6 +26,8 @@ type ConfigChannelMethodContext = Pick<
   statIfExists: (targetPath: string) => Promise<{ isFile: () => boolean } | null>;
   readEnvFileIntoConfig: (filePath: string, config: Record<string, string>) => Promise<void>;
   updateEnvFile: (filePath: string, changes: Record<string, string>) => Promise<boolean>;
+  onConfigUpdating?: (updates: Record<string, string>) => void;
+  onConfigUpdated?: (updates: Record<string, string>) => void;
   writeTextFileAtomic: (
     filePath: string,
     content: string,
@@ -206,7 +208,7 @@ const SAFE_UPDATE_KEYS = new Set([
   "BELLDANDY_WEBHOOK_MAX_IN_FLIGHT_TRACKED_KEYS",
   "BELLDANDY_WEBHOOK_CONFIG_PATH", "BELLDANDY_WEBHOOK_IDEMPOTENCY_WINDOW_MS",
   "BELLDANDY_STATE_DIR", "BELLDANDY_STATE_DIR_WINDOWS", "BELLDANDY_STATE_DIR_WSL",
-  "BELLDANDY_WORKSPACE_DIR", "BELLDANDY_WEB_ROOT",
+  "BELLDANDY_WORKSPACE_DIR", "BELLDANDY_WEB_ROOT", "BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE",
   "BELLDANDY_LOG_LEVEL", "BELLDANDY_LOG_CONSOLE", "BELLDANDY_LOG_FILE",
   "BELLDANDY_LOG_DIR", "BELLDANDY_LOG_MAX_SIZE", "BELLDANDY_LOG_RETENTION_DAYS",
   "BELLDANDY_DREAM_AUTO_HEARTBEAT_ENABLED", "BELLDANDY_DREAM_AUTO_CRON_ENABLED",
@@ -217,6 +219,10 @@ const SAFE_UPDATE_KEYS = new Set([
   "BELLDANDY_COMMONS_OBSIDIAN_ENABLED", "BELLDANDY_COMMONS_OBSIDIAN_VAULT_PATH",
   "BELLDANDY_COMMONS_OBSIDIAN_ROOT_DIR",
 ]);
+
+function normalizeConfigValue(value: string | undefined): string {
+  return typeof value === "string" ? value : "";
+}
 
 export async function handleConfigChannelMethod(
   req: GatewayReqFrame,
@@ -253,7 +259,14 @@ export async function handleConfigChannelMethod(
       await ctx.readEnvFileIntoConfig(envPath, currentConfig);
       await ctx.readEnvFileIntoConfig(envLocalPath, currentConfig);
 
-      const mergedConfig = { ...currentConfig, ...updates };
+      const effectiveUpdates: Record<string, string> = {};
+      for (const [key, value] of Object.entries(updates)) {
+        if (normalizeConfigValue(currentConfig[key]) !== normalizeConfigValue(value)) {
+          effectiveUpdates[key] = value;
+        }
+      }
+
+      const mergedConfig = { ...currentConfig, ...effectiveUpdates };
       const effectiveAuthMode = String(
         mergedConfig.BELLDANDY_AUTH_MODE
         ?? (ctx.auth.mode === "token" ? "token" : ctx.auth.mode === "password" ? "password" : "none"),
@@ -273,24 +286,26 @@ export async function handleConfigChannelMethod(
 
       const envUpdates: Record<string, string> = {};
       const localUpdates: Record<string, string> = {};
-      for (const key of Object.keys(updates)) {
+      for (const key of Object.keys(effectiveUpdates)) {
         if (key === "BELLDANDY_EXTRA_WORKSPACE_ROOTS") {
-          envUpdates[key] = updates[key];
+          envUpdates[key] = effectiveUpdates[key];
         } else {
-          localUpdates[key] = updates[key];
+          localUpdates[key] = effectiveUpdates[key];
         }
       }
 
+      ctx.onConfigUpdating?.(effectiveUpdates);
       const envOk = await ctx.updateEnvFile(envPath, envUpdates);
       const localOk = await ctx.updateEnvFile(envLocalPath, localUpdates);
       if (!envOk || !localOk) {
         return { type: "res", id: req.id, ok: false, error: { code: "write_failed", message: "Failed to write config files" } };
       }
 
-      if (Object.prototype.hasOwnProperty.call(updates, "BELLDANDY_MODEL_PREFERRED_PROVIDERS")) {
-        const preferredProviderIds = normalizePreferredProviderIds(updates.BELLDANDY_MODEL_PREFERRED_PROVIDERS);
+      if (Object.prototype.hasOwnProperty.call(effectiveUpdates, "BELLDANDY_MODEL_PREFERRED_PROVIDERS")) {
+        const preferredProviderIds = normalizePreferredProviderIds(effectiveUpdates.BELLDANDY_MODEL_PREFERRED_PROVIDERS);
         ctx.preferredProviderIds.splice(0, ctx.preferredProviderIds.length, ...preferredProviderIds);
       }
+      ctx.onConfigUpdated?.(effectiveUpdates);
 
       return { type: "res", id: req.id, ok: true };
     }

@@ -459,6 +459,7 @@ function createSettingsRefs(overrides = {}) {
     cfgWorkspaceDir: overrides.cfgWorkspaceDir || createInput(""),
     cfgExtraWorkspaceRoots: overrides.cfgExtraWorkspaceRoots || createInput(""),
     cfgWebRoot: overrides.cfgWebRoot || createInput(""),
+    cfgGovernanceDetailMode: overrides.cfgGovernanceDetailMode || createInput("compact"),
     cfgLogLevel: overrides.cfgLogLevel || createInput(""),
     cfgLogConsole: overrides.cfgLogConsole || createCheckbox(false),
     cfgLogFile: overrides.cfgLogFile || createCheckbox(false),
@@ -1608,6 +1609,106 @@ describe("settings controller", () => {
     expect(refs.cfgQqSttFallbackProviders.value).toBe("openai,dashscope");
     expect(refs.cfgRoomInjectThreshold.value).toBe("10");
     expect(refs.cfgRoomMembersCacheTtl.value).toBe("300000");
+  });
+
+  it("updates runtime governance detail mode after saving system settings", async () => {
+    const refs = createSettingsRefs({
+      cfgGovernanceDetailMode: createInput("full"),
+    });
+    const sendReq = vi.fn(async (frame) => {
+      switch (frame.method) {
+        case "config.update":
+          return { ok: true, payload: {} };
+        case "models.config.update":
+          return { ok: true, payload: {} };
+        case "channel.security.get":
+        case "channel.reply_chunking.get":
+          return { ok: true, payload: { path: "ok.json", content: '{\n  "version": 1,\n  "channels": {}\n}\n' } };
+        case "channel.security.pending.list":
+          return { ok: true, payload: { pending: [] } };
+        case "system.restart":
+          return { ok: true, payload: {} };
+        default:
+          return { ok: true, payload: {} };
+      }
+    });
+    const eventSpy = vi.fn();
+    const originalConfig = globalThis.BELLDANDY_WEB_CONFIG;
+    const originalDispatchEvent = globalThis.dispatchEvent;
+    const originalCustomEvent = globalThis.CustomEvent;
+    globalThis.BELLDANDY_WEB_CONFIG = { governanceDetailMode: "compact" };
+    globalThis.dispatchEvent = eventSpy;
+    globalThis.CustomEvent = class CustomEventMock {
+      constructor(type, init = {}) {
+        this.type = type;
+        this.detail = init.detail;
+      }
+    };
+    const { controller } = createController({
+      refs,
+      sendReq,
+      loadServerConfig: vi.fn().mockResolvedValue({
+        BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE: "compact",
+      }),
+    });
+
+    try {
+      await controller.loadConfig();
+      refs.cfgGovernanceDetailMode.value = "full";
+      await controller.saveConfig();
+      expect(globalThis.BELLDANDY_WEB_CONFIG.governanceDetailMode).toBe("full");
+      expect(eventSpy).toHaveBeenCalledTimes(1);
+      expect(eventSpy.mock.calls[0]?.[0]?.type).toBe("belldandy:governance-detail-mode-changed");
+      expect(eventSpy.mock.calls[0]?.[0]?.detail?.governanceDetailMode).toBe("full");
+      const restartCall = sendReq.mock.calls.find(([frame]) => frame.method === "system.restart");
+      expect(restartCall).toBeUndefined();
+    } finally {
+      globalThis.BELLDANDY_WEB_CONFIG = originalConfig;
+      globalThis.dispatchEvent = originalDispatchEvent;
+      globalThis.CustomEvent = originalCustomEvent;
+    }
+  });
+
+  it("still auto restarts after saving non-frontend-only settings", async () => {
+    const refs = createSettingsRefs({
+      cfgHost: createInput("0.0.0.0"),
+      cfgGovernanceDetailMode: createInput("full"),
+    });
+    const sendReq = vi.fn(async (frame) => {
+      switch (frame.method) {
+        case "config.update":
+          return { ok: true, payload: {} };
+        case "models.config.update":
+          return { ok: true, payload: {} };
+        case "channel.security.get":
+        case "channel.reply_chunking.get":
+          return { ok: true, payload: { path: "ok.json", content: '{\n  "version": 1,\n  "channels": {}\n}\n' } };
+        case "channel.security.pending.list":
+          return { ok: true, payload: { pending: [] } };
+        case "system.restart":
+          return { ok: true, payload: {} };
+        default:
+          return { ok: true, payload: {} };
+      }
+    });
+    const { controller } = createController({
+      refs,
+      sendReq,
+      loadServerConfig: vi.fn().mockResolvedValue({
+        BELLDANDY_HOST: "127.0.0.1",
+        BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE: "compact",
+      }),
+    });
+
+    await controller.loadConfig();
+    refs.cfgHost.value = "0.0.0.0";
+    refs.cfgGovernanceDetailMode.value = "full";
+    await controller.saveConfig();
+
+    const restartCall = sendReq.mock.calls.find(([frame]) => frame.method === "system.restart");
+    expect(restartCall?.[0]?.params).toMatchObject({
+      reason: "settings updated",
+    });
   });
 
   it("saves final cleanup prompt and multimedia settings", async () => {
