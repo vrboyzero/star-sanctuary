@@ -191,7 +191,7 @@ export function createAgentRuntimeFeature({
         t("agentPanel.createSuccessTitle"),
         t("agentPanel.createSuccessMessage", { agentId: id }),
         "success",
-        12000,
+        0,
         {
           actionLabel: t("agentPanel.restartNowAction"),
           onAction: () => {

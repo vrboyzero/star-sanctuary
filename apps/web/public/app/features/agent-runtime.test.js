@@ -264,7 +264,7 @@ describe("agent runtime panel", () => {
       "Agent 已创建",
       expect.stringContaining("coder-lite"),
       "success",
-      12000,
+      0,
       expect.objectContaining({
         actionLabel: "立即重启",
       }),
