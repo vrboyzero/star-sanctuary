@@ -803,7 +803,8 @@ function createMessageSendStreamAdapter(input: {
   handlers: {
     onStatus: (item: { status: string }) => void;
     onToolCall: (item: { id: string; name: string; arguments?: unknown }) => void;
-      onToolResult: (item: { id: string; name: string; success: boolean; output?: unknown; error?: string; failureKind?: string; metadata?: unknown }) => void;
+    onToolResult: (item: { id: string; name: string; success: boolean; output?: unknown; error?: string; failureKind?: string; metadata?: unknown }) => void;
+    onToolEvent: (detail: Record<string, unknown>) => void;
     onDelta: (item: { delta: string }) => void;
     onUsage: (item: {
       systemPromptTokens: number;
@@ -882,6 +883,21 @@ function createMessageSendStreamAdapter(input: {
             ...(item.error ? { error: item.error } : {}),
             ...(item.failureKind ? { failureKind: item.failureKind } : {}),
             ...(isJsonObjectRecord(item.metadata) ? { metadata: item.metadata } : {}),
+          },
+        });
+      },
+      onToolEvent: (detail) => {
+        input.queryRuntime.mark("tool_event_emitted", {
+          conversationId: input.conversationId,
+          detail,
+        });
+        input.ctx.io.sendEvent(input.ctx.request.ws, {
+          type: "event",
+          event: "tool_event",
+          payload: {
+            conversationId: input.conversationId,
+            runId: input.runId,
+            ...(isJsonObjectRecord(detail) ? detail : {}),
           },
         });
       },
@@ -1339,12 +1355,7 @@ async function runAgentInBackground(input: MessageSendBackgroundInput): Promise<
       conversationId: input.conversationId,
       runInput,
       onStatus: streamAdapter.handlers.onStatus,
-      onToolEvent: (detail) => {
-        queryRuntime.mark("tool_event_emitted", {
-          conversationId: input.conversationId,
-          detail,
-        });
-      },
+      onToolEvent: streamAdapter.handlers.onToolEvent,
       onToolCall: streamAdapter.handlers.onToolCall,
       onToolResult: streamAdapter.handlers.onToolResult,
       onDelta: streamAdapter.handlers.onDelta,

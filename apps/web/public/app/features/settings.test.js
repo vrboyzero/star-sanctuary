@@ -460,6 +460,7 @@ function createSettingsRefs(overrides = {}) {
     cfgExtraWorkspaceRoots: overrides.cfgExtraWorkspaceRoots || createInput(""),
     cfgWebRoot: overrides.cfgWebRoot || createInput(""),
     cfgGovernanceDetailMode: overrides.cfgGovernanceDetailMode || createInput("compact"),
+    cfgExperienceDraftGenerateNoticeEnabled: overrides.cfgExperienceDraftGenerateNoticeEnabled || createCheckbox(true),
     cfgLogLevel: overrides.cfgLogLevel || createInput(""),
     cfgLogConsole: overrides.cfgLogConsole || createCheckbox(false),
     cfgLogFile: overrides.cfgLogFile || createCheckbox(false),
@@ -1660,6 +1661,67 @@ describe("settings controller", () => {
       expect(eventSpy).toHaveBeenCalledTimes(1);
       expect(eventSpy.mock.calls[0]?.[0]?.type).toBe("belldandy:governance-detail-mode-changed");
       expect(eventSpy.mock.calls[0]?.[0]?.detail?.governanceDetailMode).toBe("full");
+      const restartCall = sendReq.mock.calls.find(([frame]) => frame.method === "system.restart");
+      expect(restartCall).toBeUndefined();
+    } finally {
+      globalThis.BELLDANDY_WEB_CONFIG = originalConfig;
+      globalThis.dispatchEvent = originalDispatchEvent;
+      globalThis.CustomEvent = originalCustomEvent;
+    }
+  });
+
+  it("loads and updates runtime experience draft notice mode after saving system settings", async () => {
+    const refs = createSettingsRefs({
+      cfgExperienceDraftGenerateNoticeEnabled: createCheckbox(false),
+    });
+    const sendReq = vi.fn(async (frame) => {
+      switch (frame.method) {
+        case "config.update":
+          return { ok: true, payload: {} };
+        case "models.config.update":
+          return { ok: true, payload: {} };
+        case "channel.security.get":
+        case "channel.reply_chunking.get":
+          return { ok: true, payload: { path: "ok.json", content: '{\n  "version": 1,\n  "channels": {}\n}\n' } };
+        case "channel.security.pending.list":
+          return { ok: true, payload: { pending: [] } };
+        case "system.restart":
+          return { ok: true, payload: {} };
+        default:
+          return { ok: true, payload: {} };
+      }
+    });
+    const eventSpy = vi.fn();
+    const originalConfig = globalThis.BELLDANDY_WEB_CONFIG;
+    const originalDispatchEvent = globalThis.dispatchEvent;
+    const originalCustomEvent = globalThis.CustomEvent;
+    globalThis.BELLDANDY_WEB_CONFIG = { experienceDraftGenerateNoticeEnabled: false };
+    globalThis.dispatchEvent = eventSpy;
+    globalThis.CustomEvent = class CustomEventMock {
+      constructor(type, init = {}) {
+        this.type = type;
+        this.detail = init.detail;
+      }
+    };
+    const { controller } = createController({
+      refs,
+      sendReq,
+      loadServerConfig: vi.fn().mockResolvedValue({
+        BELLDANDY_WEB_EXPERIENCE_DRAFT_GENERATE_NOTICE_ENABLED: "false",
+      }),
+    });
+
+    try {
+      await controller.loadConfig();
+      expect(refs.cfgExperienceDraftGenerateNoticeEnabled.checked).toBe(false);
+      refs.cfgExperienceDraftGenerateNoticeEnabled.checked = true;
+      await controller.saveConfig();
+      expect(globalThis.BELLDANDY_WEB_CONFIG.experienceDraftGenerateNoticeEnabled).toBe(true);
+      expect(eventSpy).toHaveBeenCalledTimes(1);
+      expect(eventSpy.mock.calls[0]?.[0]?.type).toBe("belldandy:experience-draft-notice-mode-changed");
+      expect(eventSpy.mock.calls[0]?.[0]?.detail?.experienceDraftGenerateNoticeEnabled).toBe(true);
+      const updateCall = sendReq.mock.calls.find(([frame]) => frame.method === "config.update");
+      expect(updateCall?.[0]?.params?.updates?.BELLDANDY_WEB_EXPERIENCE_DRAFT_GENERATE_NOTICE_ENABLED).toBe("true");
       const restartCall = sendReq.mock.calls.find(([frame]) => frame.method === "system.restart");
       expect(restartCall).toBeUndefined();
     } finally {

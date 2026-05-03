@@ -38,6 +38,7 @@ export function setGovernanceDetailMode(value) {
   if (!runtimeRoot) {
     return mode;
   }
+  const previousMode = normalizeGovernanceDetailMode(runtimeRoot?.BELLDANDY_WEB_CONFIG?.governanceDetailMode);
   const currentConfig = runtimeRoot.BELLDANDY_WEB_CONFIG && typeof runtimeRoot.BELLDANDY_WEB_CONFIG === "object"
     ? runtimeRoot.BELLDANDY_WEB_CONFIG
     : {};
@@ -45,7 +46,11 @@ export function setGovernanceDetailMode(value) {
     ...currentConfig,
     governanceDetailMode: mode,
   };
-  if (typeof runtimeRoot.dispatchEvent === "function" && typeof CustomEvent === "function") {
+  if (
+    previousMode !== mode
+    && typeof runtimeRoot.dispatchEvent === "function"
+    && typeof CustomEvent === "function"
+  ) {
     runtimeRoot.dispatchEvent(new CustomEvent(GOVERNANCE_DETAIL_MODE_CHANGED_EVENT, {
       detail: {
         governanceDetailMode: mode,

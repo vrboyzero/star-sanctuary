@@ -398,7 +398,7 @@ export function createExperienceWorkbenchFeature({
   function getCapabilityDraftItemsByType() {
     const state = getExperienceWorkbenchState();
     const safeItems = Array.isArray(state.draftItems) ? [...state.draftItems] : [];
-    safeItems.sort(compareCandidateByUpdatedAtDesc);
+    safeItems.sort(compareCapabilityDraftCandidate);
     return {
       methods: safeItems.filter((item) => normalizeCandidateType(item?.type) === "method"),
       skills: safeItems.filter((item) => normalizeCandidateType(item?.type) === "skill"),
@@ -464,6 +464,15 @@ export function createExperienceWorkbenchFeature({
 
   function isSynthesizedCandidate(candidate) {
     return normalizeText(candidate?.metadata?.draftOrigin?.kind).toLowerCase() === "synthesized";
+  }
+
+  function compareCapabilityDraftCandidate(left, right) {
+    const leftSynthesized = isSynthesizedCandidate(left);
+    const rightSynthesized = isSynthesizedCandidate(right);
+    if (leftSynthesized !== rightSynthesized) {
+      return leftSynthesized ? -1 : 1;
+    }
+    return compareCandidateByUpdatedAtDesc(left, right);
   }
 
   function getSynthesisSourceCount(candidate) {

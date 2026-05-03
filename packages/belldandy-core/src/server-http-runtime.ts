@@ -151,15 +151,18 @@ function readGatewayHttpRuntimeSettings(
     WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
   );
   const governanceDetailMode = input.getGovernanceDetailMode?.() ?? readGovernanceDetailModeEnv();
+  const experienceDraftGenerateNoticeEnabled = readExperienceDraftGenerateNoticeEnabledEnv();
 
   return {
     communityApiEnabled,
     communityApiToken,
     webConfig: {
       governanceDetailMode,
+      experienceDraftGenerateNoticeEnabled,
     },
     getWebConfig: () => ({
       governanceDetailMode: input.getGovernanceDetailMode?.() ?? readGovernanceDetailModeEnv(),
+      experienceDraftGenerateNoticeEnabled: readExperienceDraftGenerateNoticeEnabledEnv(),
     }),
     webhookEnabled: Boolean(input.options.webhookConfig && input.options.webhookConfig.webhooks.length > 0),
     webhookPreAuthMaxBytes,
@@ -185,6 +188,16 @@ function readGovernanceDetailModeEnv(): GatewayWebConfig["governanceDetailMode"]
     .toLowerCase();
   if (normalized === "full") return "full";
   return "compact";
+}
+
+function readExperienceDraftGenerateNoticeEnabledEnv(): boolean {
+  const normalized = String(process.env.BELLDANDY_WEB_EXPERIENCE_DRAFT_GENERATE_NOTICE_ENABLED ?? "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "0" || normalized === "false" || normalized === "off" || normalized === "no") {
+    return false;
+  }
+  return true;
 }
 
 function parsePositiveIntEnv(varName: string, fallback: number): number {

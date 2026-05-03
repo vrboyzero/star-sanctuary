@@ -2610,6 +2610,7 @@ window.addEventListener(GOVERNANCE_DETAIL_MODE_CHANGED_EVENT, () => {
 
 chatEventsFeature = createChatEventsFeature({
   appendMessage,
+  showNotice,
   onPairingRequired: ({ target, code, clientId, message }) => {
     settingsRuntimeFeature?.handlePairingRequired?.({ code, clientId, message });
     renderPairingRequiredPrompt(target, { code, clientId, message });

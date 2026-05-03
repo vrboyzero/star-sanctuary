@@ -75,9 +75,11 @@ function createChatEventsHarness(feature, overrides = {}) {
   const onConversationDelta = overrides.onConversationDelta || vi.fn();
   const onConversationFinal = overrides.onConversationFinal || vi.fn();
   const getActiveConversationId = overrides.getActiveConversationId || (() => "");
+  const showNotice = overrides.showNotice || vi.fn();
 
   const chatEvents = createChatEventsFeature({
     appendMessage: feature.appendMessage,
+    showNotice,
     onPairingRequired: vi.fn(),
     showRestartCountdown: vi.fn(),
     setTokenUsageRunning: vi.fn(),
@@ -112,6 +114,7 @@ function createChatEventsHarness(feature, overrides = {}) {
     handleReactEvent,
     onConversationDelta,
     onConversationFinal,
+    showNotice,
   };
 }
 
@@ -501,6 +504,121 @@ describe("chat ui rich text rendering", () => {
 
     const wrappers = messagesEl.querySelectorAll(".msg-wrapper.bot");
     expect(wrappers).toHaveLength(1);
+  });
+
+  it("shows facet switch notice from successful tool results", () => {
+    installMarkedStub((text) => text);
+    const { feature } = createFeature();
+    const { chatEvents, showNotice } = createChatEventsHarness(feature);
+
+    chatEvents.handleEvent("tool_result", {
+      conversationId: "",
+      runId: "run-facet-1",
+      success: true,
+      name: "switch_facet",
+      output: "ok",
+      metadata: {
+        facetName: "coder",
+        targetLabel: "root",
+      },
+    });
+
+    expect(showNotice).toHaveBeenCalledWith(
+      "FACET 已切换",
+      "FACET 已切换为「coder」(root)。",
+      "success",
+      2600,
+    );
+  });
+
+  it("shows facet switch notice from successful tool output when metadata is missing", () => {
+    installMarkedStub((text) => text);
+    const { feature } = createFeature();
+    const { chatEvents, showNotice } = createChatEventsHarness(feature);
+
+    chatEvents.handleEvent("tool_result", {
+      conversationId: "",
+      runId: "run-facet-2",
+      success: true,
+      name: "switch_facet",
+      output: "FACET 模组已切换为「coder」(root)。SOUL.md 已更新，锚点行之前的内容保持不变。",
+    });
+
+    expect(showNotice).toHaveBeenCalledWith(
+      "FACET 已切换",
+      "FACET 已切换为「coder」(root)。",
+      "success",
+      2600,
+    );
+  });
+
+  it("shows faqi switch notice from successful tool results", () => {
+    installMarkedStub((text) => text);
+    const { feature } = createFeature();
+    const { chatEvents, showNotice } = createChatEventsHarness(feature);
+
+    chatEvents.handleEvent("tool_result", {
+      conversationId: "",
+      runId: "run-faqi-1",
+      success: true,
+      name: "switch_faqi",
+      output: "ok",
+      metadata: {
+        agentId: "default",
+        currentFaqi: "safe-dev",
+      },
+    });
+
+    expect(showNotice).toHaveBeenCalledWith(
+      "FAQI 已切换",
+      "Agent「default」已切换到 FAQI「safe-dev」。",
+      "success",
+      2600,
+    );
+  });
+
+  it("shows auto-generated method draft notice from tool events", () => {
+    installMarkedStub((text) => text);
+    const { feature } = createFeature();
+    const { chatEvents, showNotice } = createChatEventsHarness(feature);
+
+    chatEvents.handleEvent("tool_event", {
+      conversationId: "",
+      kind: "experience_draft_generated",
+      candidateType: "method",
+      candidateId: "exp-method-1",
+      title: "自动生成的 Method Draft",
+      taskId: "task-auto-1",
+    });
+
+    expect(showNotice).toHaveBeenCalledWith(
+      "Method Draft 已生成",
+      "自动生成的 Method Draft",
+      "success",
+      2600,
+    );
+  });
+
+  it("shows auto-generated skill draft notice from tool events", () => {
+    installMarkedStub((text) => text);
+    const { feature } = createFeature();
+    const { chatEvents, showNotice } = createChatEventsHarness(feature);
+
+    chatEvents.handleEvent("tool_event", {
+      conversationId: "",
+      kind: "experience_draft_generated",
+      candidateType: "skill",
+      candidateId: "exp-skill-1",
+      title: "自动生成的 Skill Draft",
+      taskId: "task-auto-2",
+    });
+
+    expect(showNotice).toHaveBeenCalledWith(
+      "Skill Draft 已生成",
+      "自动生成的 Skill Draft",
+      "success",
+      2600,
+    );
   });
 
   it("dedupes media-rich tool result previews by the same runId and webPath", () => {

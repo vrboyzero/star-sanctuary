@@ -1,3 +1,5 @@
+import { isExperienceDraftGenerateNoticeEnabled } from "./experience-draft-notice-mode.js";
+
 export function createMemoryRuntimeFeature({
   refs,
   isConnected,
@@ -444,16 +446,26 @@ export function createMemoryRuntimeFeature({
       }
 
       const candidate = res.payload?.candidate ?? null;
-      showNotice(
-        res.payload?.reusedExisting
-          ? t("memory.candidateGenerateReusedTitle", {}, "已打开现有经验候选")
-          : t("memory.candidateGenerateSuccessTitle", {}, "经验候选已生成"),
-        candidate?.title
-          ? String(candidate.title)
-          : t("memory.candidateGenerateSuccessMessage", {}, "已为当前任务准备经验候选。"),
-        "success",
-        2200,
-      );
+      const shouldShowDraftGenerateNotice = isExperienceDraftGenerateNoticeEnabled();
+      if (res.payload?.reusedExisting || shouldShowDraftGenerateNotice) {
+        const isSkill = normalizedType === "skill";
+        showNotice(
+          res.payload?.reusedExisting
+            ? t("memory.candidateGenerateReusedTitle", {}, "已打开现有经验候选")
+            : (isSkill
+              ? t("memory.skillDraftGenerateSuccessTitle", {}, "Skill Draft 已生成")
+              : t("memory.methodDraftGenerateSuccessTitle", {}, "Method Draft 已生成")),
+          candidate?.title
+            ? String(candidate.title)
+            : res.payload?.reusedExisting
+              ? t("memory.candidateGenerateSuccessMessage", {}, "已为当前任务准备经验候选。")
+              : (isSkill
+                ? t("memory.skillDraftGenerateSuccessMessage", {}, "已为当前任务生成新的 Skill Draft。")
+                : t("memory.methodDraftGenerateSuccessMessage", {}, "已为当前任务生成新的 Method Draft。")),
+          "success",
+          2200,
+        );
+      }
 
       await loadTaskDetail(normalizedTaskId);
       if (candidate?.id) {

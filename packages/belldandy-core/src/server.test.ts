@@ -14,6 +14,7 @@ import { persistConversationPromptSnapshot } from "./conversation-prompt-snapsho
 import { recordConversationArtifactExport } from "./conversation-export-index.js";
 import { createScopedMemoryManagers } from "./resident-memory-managers.js";
 import { resolveResidentSharedStateDir } from "./resident-memory-policy.js";
+import { notifyConversationToolEvent } from "./query-runtime-side-effects.js";
 import { startGatewayServer } from "./server.js";
 import { approvePairingCode } from "./security/store.js";
 import { RuntimeResilienceTracker } from "./runtime-resilience.js";
@@ -224,6 +225,69 @@ test("message.send persists accepted user transcript before assistant finalizes"
           content: "echo:先记住我刚才说的话。",
         },
       },
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("message.send forwards runtime tool events to websocket clients", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-tool-event-"));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentFactory: () => ({
+      async *run(input) {
+        yield { type: "status" as const, status: "running" };
+        notifyConversationToolEvent(input.conversationId, {
+          kind: "experience_draft_generated",
+          candidateType: "method",
+          candidateId: "exp-auto-1",
+          title: "自动 Method Draft",
+          taskId: "task-auto-1",
+        });
+        yield { type: "final" as const, text: "done" };
+        yield { type: "status" as const, status: "done" };
+      },
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "message-send-tool-event",
+      method: "message.send",
+      params: {
+        conversationId: "conv-tool-event",
+        text: "trigger tool event",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "message-send-tool-event" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "tool_event"));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
+
+    const toolEvent = frames.find((f) => f.type === "event" && f.event === "tool_event");
+    expect(toolEvent?.payload).toMatchObject({
+      conversationId: "conv-tool-event",
+      kind: "experience_draft_generated",
+      candidateType: "method",
+      candidateId: "exp-auto-1",
+      title: "自动 Method Draft",
+      taskId: "task-auto-1",
     });
   } finally {
     ws.close();
@@ -1401,7 +1465,7 @@ test("message.send keeps only one auto task report block when final text already
         };
         yield {
           type: "final" as const,
-          text: `echo:${input.text}\n\n执行统计\n- 耗时：1.23s\n- Token：IN 1 / OUT 1 / TOTAL 2`,
+          text: `echo:${input.text}\n\n执行统计\n- 耗时: 1.23s\n- Token: IN 1 / OUT 1 / TOTAL 2`,
         };
         yield { type: "status" as const, status: "done" };
       },

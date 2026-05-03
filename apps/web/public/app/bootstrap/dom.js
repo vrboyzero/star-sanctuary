@@ -515,6 +515,7 @@ export const APP_DOM_REFS = {
   cfgExtraWorkspaceRoots: byId("cfgExtraWorkspaceRoots"),
   cfgWebRoot: byId("cfgWebRoot"),
   cfgGovernanceDetailMode: byId("cfgGovernanceDetailMode"),
+  cfgExperienceDraftGenerateNoticeEnabled: byId("cfgExperienceDraftGenerateNoticeEnabled"),
   cfgLogLevel: byId("cfgLogLevel"),
   cfgLogConsole: byId("cfgLogConsole"),
   cfgLogFile: byId("cfgLogFile"),

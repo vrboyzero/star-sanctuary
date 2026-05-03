@@ -162,6 +162,10 @@ export const switchFacetTool: Tool = withToolContract({
       success: true,
       output: `FACET 模组已切换为「${sanitized}」(${label})。SOUL.md 已更新，锚点行之前的内容保持不变。建议接下来调用 service_restart 重启服务以清空旧模组的推理惯性。`,
       durationMs: Date.now() - start,
+      metadata: {
+        facetName: sanitized,
+        targetLabel: label,
+      },
     };
   },
 }, {

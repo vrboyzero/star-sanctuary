@@ -74,6 +74,7 @@ function createHarness(sendReq) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  delete globalThis.BELLDANDY_WEB_CONFIG;
 });
 
 describe("memory runtime duplicate precheck", () => {
@@ -187,5 +188,94 @@ describe("memory runtime duplicate precheck", () => {
       "memory.task.get",
       "experience.candidate.get",
     ]);
+  });
+
+  it("shows method draft generate notice by default", async () => {
+    const sendReq = vi.fn(async (req) => {
+      if (req.method === "experience.candidate.check_duplicate") {
+        return {
+          ok: true,
+          payload: {
+            decision: "no_match",
+            similarMatches: [],
+          },
+        };
+      }
+      if (req.method === "experience.candidate.generate") {
+        return {
+          ok: true,
+          payload: {
+            candidate: {
+              id: "exp-method-1",
+              title: "Method Draft Demo",
+            },
+            reusedExisting: false,
+          },
+        };
+      }
+      if (req.method === "memory.task.get") {
+        return { ok: true, payload: { task: { id: "task-1" } } };
+      }
+      if (req.method === "experience.candidate.get") {
+        return { ok: true, payload: { candidate: { id: "exp-method-1", title: "Method Draft Demo" } } };
+      }
+      throw new Error(`unexpected method ${req.method}`);
+    });
+    const { feature, showNotice } = createHarness(sendReq);
+
+    await feature.generateExperienceCandidate("task-1", "method");
+
+    expect(showNotice).toHaveBeenCalledWith(
+      "Method Draft 已生成",
+      "Method Draft Demo",
+      "success",
+      2200,
+    );
+  });
+
+  it("skips draft generate notice when disabled by web config", async () => {
+    globalThis.BELLDANDY_WEB_CONFIG = {
+      experienceDraftGenerateNoticeEnabled: false,
+    };
+    const sendReq = vi.fn(async (req) => {
+      if (req.method === "experience.candidate.check_duplicate") {
+        return {
+          ok: true,
+          payload: {
+            decision: "no_match",
+            similarMatches: [],
+          },
+        };
+      }
+      if (req.method === "experience.candidate.generate") {
+        return {
+          ok: true,
+          payload: {
+            candidate: {
+              id: "exp-skill-1",
+              title: "Skill Draft Demo",
+            },
+            reusedExisting: false,
+          },
+        };
+      }
+      if (req.method === "memory.task.get") {
+        return { ok: true, payload: { task: { id: "task-1" } } };
+      }
+      if (req.method === "experience.candidate.get") {
+        return { ok: true, payload: { candidate: { id: "exp-skill-1", title: "Skill Draft Demo" } } };
+      }
+      throw new Error(`unexpected method ${req.method}`);
+    });
+    const { feature, showNotice } = createHarness(sendReq);
+
+    await feature.generateExperienceCandidate("task-1", "skill");
+
+    expect(showNotice).not.toHaveBeenCalledWith(
+      "Skill Draft 已生成",
+      "Skill Draft Demo",
+      "success",
+      2200,
+    );
   });
 });

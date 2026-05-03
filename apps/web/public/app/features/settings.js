@@ -1,4 +1,5 @@
 import { renderDoctorObservabilityCards } from "./doctor-observability.js";
+import { setExperienceDraftGenerateNoticeEnabled } from "./experience-draft-notice-mode.js";
 import { setGovernanceDetailMode } from "./governance-detail-mode.js";
 import {
   ASSISTANT_MODE_PRESET_CUSTOM,
@@ -327,6 +328,7 @@ export function createSettingsController({
     cfgExtraWorkspaceRoots,
     cfgWebRoot,
     cfgGovernanceDetailMode,
+    cfgExperienceDraftGenerateNoticeEnabled,
     cfgLogLevel,
     cfgLogConsole,
     cfgLogFile,
@@ -372,6 +374,7 @@ export function createSettingsController({
   ];
   const FRONTEND_ONLY_SETTING_FIELDS = new Set([
     "cfgGovernanceDetailMode",
+    "cfgExperienceDraftGenerateNoticeEnabled",
   ]);
   let lastLoadedConfig = null;
   let lastLoadedFormState = null;
@@ -956,6 +959,9 @@ export function createSettingsController({
     if (cfgExtraWorkspaceRoots) cfgExtraWorkspaceRoots.value = c["BELLDANDY_EXTRA_WORKSPACE_ROOTS"] || "";
     if (cfgWebRoot) cfgWebRoot.value = c["BELLDANDY_WEB_ROOT"] || "";
     if (cfgGovernanceDetailMode) cfgGovernanceDetailMode.value = c["BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE"] === "full" ? "full" : "compact";
+    if (cfgExperienceDraftGenerateNoticeEnabled) {
+      cfgExperienceDraftGenerateNoticeEnabled.checked = c["BELLDANDY_WEB_EXPERIENCE_DRAFT_GENERATE_NOTICE_ENABLED"] !== "false";
+    }
     if (cfgLogLevel) cfgLogLevel.value = c["BELLDANDY_LOG_LEVEL"] || "info";
     if (cfgLogConsole) cfgLogConsole.checked = c["BELLDANDY_LOG_CONSOLE"] !== "false";
     if (cfgLogFile) cfgLogFile.checked = c["BELLDANDY_LOG_FILE"] !== "false";
@@ -1750,6 +1756,9 @@ export function createSettingsController({
     if (cfgExtraWorkspaceRoots) updates["BELLDANDY_EXTRA_WORKSPACE_ROOTS"] = cfgExtraWorkspaceRoots.value.trim();
     if (cfgWebRoot) updates["BELLDANDY_WEB_ROOT"] = cfgWebRoot.value.trim();
     if (cfgGovernanceDetailMode) updates["BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE"] = cfgGovernanceDetailMode.value === "full" ? "full" : "compact";
+    if (cfgExperienceDraftGenerateNoticeEnabled) {
+      updates["BELLDANDY_WEB_EXPERIENCE_DRAFT_GENERATE_NOTICE_ENABLED"] = cfgExperienceDraftGenerateNoticeEnabled.checked ? "true" : "false";
+    }
     if (cfgLogLevel) updates["BELLDANDY_LOG_LEVEL"] = cfgLogLevel.value.trim();
     if (cfgLogConsole) updates["BELLDANDY_LOG_CONSOLE"] = cfgLogConsole.checked ? "true" : "false";
     if (cfgLogFile) updates["BELLDANDY_LOG_FILE"] = cfgLogFile.checked ? "true" : "false";
@@ -1845,6 +1854,7 @@ export function createSettingsController({
 
     if (res && res.ok) {
       setGovernanceDetailMode(updates["BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE"]);
+      setExperienceDraftGenerateNoticeEnabled(updates["BELLDANDY_WEB_EXPERIENCE_DRAFT_GENERATE_NOTICE_ENABLED"]);
       invalidateServerConfigCache?.();
       await onModelCatalogChanged?.();
       if (saveSettingsBtn) {

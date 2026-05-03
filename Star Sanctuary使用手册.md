@@ -377,6 +377,22 @@ BELLDANDY_OPENAI_WIRE_API=responses
 
 如果你完全不配置，系统默认会使用 `compact`。
 
+另外还有一个和右下角提示相关的轻量配置：
+
+- `BELLDANDY_WEB_EXPERIENCE_DRAFT_GENERATE_NOTICE_ENABLED`
+  作用是控制普通 `Method Draft / Skill Draft` 生成成功时，WebChat 右下角是否弹提示
+  - `true`
+    保持提示开启，适合想及时看到草稿产出的人
+  - `false`
+    关闭普通生成提示，适合高频生成场景下减少打扰
+
+这个开关默认值是 `true`。
+它只影响普通生成草稿提示，不影响：
+
+- `facet` 切换提示
+- `faqi` 切换提示
+- 合成草稿成功提示
+
 ### 3.7 CLI / IDE 桥接配置
 
 如果你希望让 SS 调用外部编程 CLI 或 IDE CLI，需要额外开启 bridge：
@@ -1211,6 +1227,22 @@ WebChat 的 `🧠 记忆查看` 当前适合做这些事：
 如果你在真实使用中想判断这条链路是不是工作正常，最直接的终端日志信号是：
 
 - `Experience synthesis preview prepared`
+
+同时，WebChat 右下角目前补齐了几类轻提示：
+
+- `facet` 切换成功时会提示当前切换结果
+- `faqi` 切换成功时会提示当前切换结果
+- 普通 `Method Draft / Skill Draft` 生成成功时会提示草稿标题
+- 合成草稿成功时也会继续提示
+
+如果你想手测这一组提示，建议按下面路径走：
+
+- `facet / faqi`
+  在聊天里触发 `switch_facet` 或 `switch_faqi` 成功后，观察右下角提示
+- `Method Draft / Skill Draft`
+  `经验能力 -> 能力获取`，填写来源任务后分别点 `Generate method` / `Generate skill`，观察右下角提示
+- 合成草稿
+  `经验能力 -> 能力获取`，任选一张 draft 卡点 `合成` 并完成创建，观察右下角提示
 - `Experience synthesis draft created`
 - `Experience consumed draft cleanup completed`
 

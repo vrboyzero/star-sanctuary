@@ -67,4 +67,22 @@ describe("buildGatewayHttpRoutesContext governance detail mode", () => {
       expect(context.getWebConfig?.().governanceDetailMode).toBe("full");
     });
   });
+
+  it("enables draft generate notice by default and allows env override", async () => {
+    await withEnv({
+      BELLDANDY_WEB_EXPERIENCE_DRAFT_GENERATE_NOTICE_ENABLED: undefined,
+    }, async () => {
+      const context = buildGatewayHttpRoutesContext(createRuntimeInput());
+      expect(context.webConfig?.experienceDraftGenerateNoticeEnabled).toBe(true);
+      expect(context.getWebConfig?.().experienceDraftGenerateNoticeEnabled).toBe(true);
+    });
+
+    await withEnv({
+      BELLDANDY_WEB_EXPERIENCE_DRAFT_GENERATE_NOTICE_ENABLED: "false",
+    }, async () => {
+      const context = buildGatewayHttpRoutesContext(createRuntimeInput());
+      expect(context.webConfig?.experienceDraftGenerateNoticeEnabled).toBe(false);
+      expect(context.getWebConfig?.().experienceDraftGenerateNoticeEnabled).toBe(false);
+    });
+  });
 });

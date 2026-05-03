@@ -216,6 +216,7 @@ const DEFAULT_EVENTS = [
   "external_outbound.confirm.resolved",
   "email_outbound.confirm.required",
   "email_outbound.confirm.resolved",
+  "tool_event",
 ];
 
 export function createGatewayWebSocketRuntime(

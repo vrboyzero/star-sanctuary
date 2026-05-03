@@ -29,9 +29,11 @@ export type RegisterGatewayHttpRoutesContext = {
   generatedDir?: string;
   webConfig?: {
     governanceDetailMode?: "compact" | "full";
+    experienceDraftGenerateNoticeEnabled?: boolean;
   };
   getWebConfig?: () => {
     governanceDetailMode?: "compact" | "full";
+    experienceDraftGenerateNoticeEnabled?: boolean;
   };
   auth: GatewayServerOptions["auth"];
   agentFactory?: () => BelldandyAgent;
@@ -353,6 +355,7 @@ function buildGatewayWebConfigScript(
 ): string {
   const configObject = {
     governanceDetailMode: webConfig?.governanceDetailMode === "full" ? "full" : "compact",
+    experienceDraftGenerateNoticeEnabled: webConfig?.experienceDraftGenerateNoticeEnabled !== false,
   };
   const serialized = JSON.stringify(configObject, null, 2);
   return [

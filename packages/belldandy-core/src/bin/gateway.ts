@@ -22,6 +22,7 @@ import { normalizePreferredProviderIds } from "../provider-model-catalog.js";
 import { ResidentConversationStore } from "../resident-conversation-store.js";
 import { buildLearningReviewNudgePrelude } from "../learning-review-nudge.js";
 import { runPostTaskLearningReview } from "../learning-review-runner.js";
+import { notifyConversationToolEvent } from "../query-runtime-side-effects.js";
 import { DreamAutomationRuntime } from "../dream-automation-runtime.js";
 import {
   createSubTaskAgentCapabilities,
@@ -252,6 +253,7 @@ import {
   resolveToolWhitelistFromFaqi,
   LIST_FAQIS_TOOL_NAME,
   SWITCH_FAQI_TOOL_NAME,
+  switchFacetTool,
 } from "@belldandy/skills";
 import { listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager, listGlobalMemoryManagers, type MemoryCategory } from "@belldandy/memory";
 import {
@@ -774,7 +776,24 @@ let cronSchedulerHandle: CronSchedulerHandle | undefined;
 let emailInboundRuntimeHandle: Awaited<ReturnType<typeof startImapPollingEmailInboundRuntime>> | undefined;
 
 // 延迟绑定 broadcast：工具注册时 server 尚未创建，执行时才调用
-let serverBroadcast: ((msg: unknown) => void) | undefined;
+  let serverBroadcast: ((msg: unknown) => void) | undefined;
+
+  function emitConversationToolEvent(conversationId: string | undefined, detail: Record<string, unknown>): void {
+    const normalizedConversationId = typeof conversationId === "string" ? conversationId.trim() : "";
+    if (!normalizedConversationId) {
+      return;
+    }
+
+    notifyConversationToolEvent(normalizedConversationId, detail);
+    serverBroadcast?.({
+      type: "event",
+      event: "tool_event",
+      payload: {
+        conversationId: normalizedConversationId,
+        ...detail,
+      },
+    });
+  }
 
 // 2.5 Init ToolsConfigManager (调用设置)
 const toolsConfigManager = new ToolsConfigManager(stateDir, {
@@ -1085,6 +1104,7 @@ const AGENT_META_ALWAYS_ALLOWED_TOOLS = new Set<string>([
   TOOL_SEARCH_NAME,
   LIST_FAQIS_TOOL_NAME,
   SWITCH_FAQI_TOOL_NAME,
+  switchFacetTool.definition.name,
 ]);
 
 const toolExecutor = new ToolExecutor({
@@ -2772,6 +2792,20 @@ if (taskMemoryEnabled) {
       });
       if (!taskId) return;
 
+        for (const candidate of mm.listExperienceCandidates(10, { taskId })) {
+          if (candidate.type !== "method" && candidate.type !== "skill") continue;
+          emitConversationToolEvent(sessionKey, {
+            kind: "experience_draft_generated",
+            conversationId: sessionKey,
+            taskId,
+            candidateId: candidate.id,
+            candidateType: candidate.type,
+            title: candidate.title,
+            agentId: ctx.agentId || "default",
+            source: "task_auto_promotion",
+          });
+        }
+
       runPostTaskLearningReview({
         stateDir,
         residentMemoryManagers: scopedMemoryManagers.records,
@@ -2784,6 +2818,19 @@ if (taskMemoryEnabled) {
         canPromote: (type) => resolveExperiencePromotionGate(type),
       }).then((result) => {
         if (!result) return;
+          for (const action of result.actions) {
+            if (action.status !== "generated" || !action.candidateId) continue;
+            emitConversationToolEvent(sessionKey, {
+              kind: "experience_draft_generated",
+              conversationId: sessionKey,
+              taskId,
+              candidateId: action.candidateId,
+              candidateType: action.type,
+              title: action.title,
+              agentId: ctx.agentId || "default",
+              source: "post_task_learning_review",
+            });
+          }
         logger.info("learning-review", `post-run ${result.summary}`);
       }).catch((err) => {
         logger.warn("learning-review", `Post-run learning review failed for task ${taskId}: ${err instanceof Error ? err.message : String(err)}`);

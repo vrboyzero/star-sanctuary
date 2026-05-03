@@ -18,7 +18,7 @@ export type AutoTaskReportRecord = AutoTaskReportFlags & {
 export const AUTO_TASK_REPORT_COUNTER_NAME = "__auto_task_report__";
 
 const records = new Map<string, AutoTaskReportRecord>();
-const TRAILING_AUTO_TASK_REPORT_BLOCK_RE = /\n{2,}执行统计\n(?:[-•] 耗时：[^\n]+\n)?(?:[-•] Token：IN [^\n]+\n?)?$/u;
+const TRAILING_AUTO_TASK_REPORT_BLOCK_RE = /\n{2,}执行统计\n(?:[-•] 耗时[:：][^\n]+\n)?(?:[-•] Token[:：]\s*IN [^\n]+\n?)?$/u;
 const THINK_BLOCK_RE = /<think\b[^>]*>[\s\S]*?<\/think>/giu;
 
 function parseEnvBoolean(value: string | undefined): boolean {

@@ -510,6 +510,94 @@ describe("experience workbench capability acquisition", () => {
     expect(refs.experienceWorkbenchCapabilityPaneEl.classList.contains("hidden")).toBe(false);
   });
 
+  it("prioritizes synthesized draft cards before regular drafts in capability acquisition", async () => {
+    const candidates = [
+      {
+        id: "draft-method-regular-new",
+        taskId: "task-method-regular-new",
+        type: "method",
+        status: "draft",
+        title: "Method Draft Regular New",
+        slug: "method-draft-regular-new",
+        summary: "regular new summary",
+        content: "# Method Draft Regular New",
+        createdAt: "2026-04-20T09:00:00.000Z",
+        updatedAt: "2026-04-20T12:00:00.000Z",
+        sourceTaskSnapshot: {},
+      },
+      {
+        id: "draft-method-synth-old",
+        taskId: "task-method-synth-old",
+        type: "method",
+        status: "draft",
+        title: "Method Draft Synth Old",
+        slug: "method-draft-synth-old",
+        summary: "synth old summary",
+        content: "# Method Draft Synth Old",
+        createdAt: "2026-04-20T08:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+        sourceTaskSnapshot: {},
+        metadata: {
+          draftOrigin: {
+            kind: "synthesized",
+          },
+          synthesis: {
+            sourceCount: 3,
+          },
+        },
+      },
+      {
+        id: "draft-method-synth-new",
+        taskId: "task-method-synth-new",
+        type: "method",
+        status: "draft",
+        title: "Method Draft Synth New",
+        slug: "method-draft-synth-new",
+        summary: "synth new summary",
+        content: "# Method Draft Synth New",
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T13:00:00.000Z",
+        sourceTaskSnapshot: {},
+        metadata: {
+          draftOrigin: {
+            kind: "synthesized",
+          },
+          synthesis: {
+            sourceCount: 5,
+          },
+        },
+      },
+      {
+        id: "draft-method-regular-old",
+        taskId: "task-method-regular-old",
+        type: "method",
+        status: "draft",
+        title: "Method Draft Regular Old",
+        slug: "method-draft-regular-old",
+        summary: "regular old summary",
+        content: "# Method Draft Regular Old",
+        createdAt: "2026-04-20T07:00:00.000Z",
+        updatedAt: "2026-04-20T09:00:00.000Z",
+        sourceTaskSnapshot: {},
+      },
+    ];
+    const { refs, feature } = createHarness({ candidates });
+
+    await feature.openExperienceWorkbench({ tab: "capability-acquisition", preferFirst: false });
+
+    const [methodLane] = refs.experienceWorkbenchCapabilityOverviewEl.querySelectorAll(".memory-usage-overview-lane");
+    const methodTitles = Array.from(
+      methodLane?.querySelectorAll(".memory-usage-overview-key") || [],
+    ).map((node) => node.textContent.trim());
+
+    expect(methodTitles).toEqual([
+      "Method Draft Synth New",
+      "Method Draft Synth Old",
+      "Method Draft Regular New",
+      "Method Draft Regular Old",
+    ]);
+  });
+
   it("opens candidate detail and refreshes the capability list after accepting a draft", async () => {
     const { refs, feature, sendReq, openTaskFromWorkbench, experienceState } = createHarness();
 
@@ -910,6 +998,7 @@ describe("experience workbench capability acquisition", () => {
   });
 
   it("shows synthesis consumed info in candidate detail", async () => {
+    const previousConfig = globalThis.BELLDANDY_WEB_CONFIG;
     const candidates = [
       {
         id: "draft-method-consumed",
@@ -933,12 +1022,24 @@ describe("experience workbench capability acquisition", () => {
         },
       },
     ];
-    const { refs, feature } = createHarness({ candidates, listCandidateIds: ["draft-method-consumed"] });
+    try {
+      globalThis.BELLDANDY_WEB_CONFIG = {
+        ...(previousConfig && typeof previousConfig === "object" ? previousConfig : {}),
+        governanceDetailMode: "full",
+      };
+      const { refs, feature } = createHarness({ candidates, listCandidateIds: ["draft-method-consumed"] });
 
-    await feature.openExperienceWorkbench({ tab: "candidates", candidateId: "draft-method-consumed", preferFirst: false });
+      await feature.openExperienceWorkbench({ tab: "candidates", candidateId: "draft-method-consumed", preferFirst: false });
 
-    expect(refs.experienceWorkbenchDetailEl.textContent).toContain("已被合成稿 draft-method-1-synthesized 消化");
-    expect(refs.experienceWorkbenchDetailEl.querySelector("[data-open-candidate-id='draft-method-1-synthesized']")).toBeTruthy();
+      expect(refs.experienceWorkbenchDetailEl.textContent).toContain("已被合成稿 draft-method-1-synthesized 消化");
+      expect(refs.experienceWorkbenchDetailEl.querySelector("[data-open-candidate-id='draft-method-1-synthesized']")).toBeTruthy();
+    } finally {
+      if (typeof previousConfig === "undefined") {
+        delete globalThis.BELLDANDY_WEB_CONFIG;
+      } else {
+        globalThis.BELLDANDY_WEB_CONFIG = previousConfig;
+      }
+    }
   });
 
   it("shows cleanup consumed button in candidates tab and removes consumed drafts after confirmation", async () => {

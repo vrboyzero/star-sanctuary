@@ -1,5 +1,8 @@
+import { isExperienceDraftGenerateNoticeEnabled } from "./experience-draft-notice-mode.js";
+
 export function createChatEventsFeature({
   appendMessage,
+  showNotice,
   onPairingRequired,
   showRestartCountdown,
   setTokenUsageRunning,
@@ -40,6 +43,7 @@ export function createChatEventsFeature({
   const pendingGoalUpdates = new Map();
   const pendingSubtaskUpdates = new Map();
   const renderedToolResultPreviewKeys = new Set();
+  const handledToolNoticeKeys = new Set();
 
   function scheduleFrameFlush() {
     if (pendingFrameFlushHandle !== null) {
@@ -207,6 +211,112 @@ export function createChatEventsFeature({
     if (previewKey) {
       renderedToolResultPreviewKeys.add(previewKey);
     }
+    return true;
+  }
+
+  function readToolResultNoticeInfo(payload) {
+    if (!payload || payload.success !== true) {
+      return null;
+    }
+    const toolName = typeof payload.name === "string" ? payload.name.trim() : "";
+    const metadata = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : null;
+    if (toolName === "switch_faqi" && metadata) {
+      const currentFaqi = typeof metadata.currentFaqi === "string" ? metadata.currentFaqi.trim() : "";
+      const agentId = typeof metadata.agentId === "string" ? metadata.agentId.trim() : "";
+      if (!currentFaqi) return null;
+      return {
+        key: `switch_faqi:${payload.runId || ""}:${agentId}:${currentFaqi}`,
+        title: t("runtime.switchFaqiNoticeTitle", {}, "FAQI 已切换"),
+        message: t(
+          "runtime.switchFaqiNoticeMessage",
+          { agentId: agentId || "default", faqi: currentFaqi },
+          `Agent「${agentId || "default"}」已切换到 FAQI「${currentFaqi}」。`,
+        ),
+      };
+    }
+    if (toolName === "switch_facet" && metadata) {
+      const facetName = typeof metadata.facetName === "string"
+        ? metadata.facetName.trim()
+        : (typeof metadata.facet_name === "string" ? metadata.facet_name.trim() : "");
+      const targetLabel = typeof metadata.targetLabel === "string"
+        ? metadata.targetLabel.trim()
+        : (typeof metadata.label === "string"
+          ? metadata.label.trim()
+          : (typeof metadata.target === "string" ? metadata.target.trim() : ""));
+      if (!facetName) return null;
+      return {
+        key: `switch_facet:${payload.runId || ""}:${targetLabel}:${facetName}`,
+        title: t("runtime.switchFacetNoticeTitle", {}, "FACET 已切换"),
+        message: t(
+          "runtime.switchFacetNoticeMessage",
+          { facet: facetName, target: targetLabel || "root" },
+          `FACET 已切换为「${facetName}」(${targetLabel || "root"})。`,
+        ),
+      };
+    }
+    if (toolName === "switch_facet") {
+      const output = typeof payload.output === "string" ? payload.output.trim() : "";
+      const matched = output.match(/FACET(?:\s+模组)?已切换为[「"](.+?)[」"]\((.+?)\)/i);
+      const facetName = matched?.[1]?.trim() || "";
+      const targetLabel = matched?.[2]?.trim() || "";
+      if (!facetName) return null;
+      return {
+        key: `switch_facet:${payload.runId || ""}:${targetLabel}:${facetName}`,
+        title: t("runtime.switchFacetNoticeTitle", {}, "FACET 已切换"),
+        message: t(
+          "runtime.switchFacetNoticeMessage",
+          { facet: facetName, target: targetLabel || "root" },
+          `FACET 已切换为「${facetName}」(${targetLabel || "root"})。`,
+        ),
+      };
+    }
+    return null;
+  }
+
+  function maybeShowToolResultNotice(payload) {
+    const info = readToolResultNoticeInfo(payload);
+    if (!info?.key || handledToolNoticeKeys.has(info.key)) {
+      return false;
+    }
+    handledToolNoticeKeys.add(info.key);
+    showNotice?.(info.title, info.message, "success", 2600);
+    return true;
+  }
+
+  function readExperienceDraftNoticeInfo(payload) {
+    if (!isExperienceDraftGenerateNoticeEnabled()) {
+      return null;
+    }
+    if (!payload || payload.kind !== "experience_draft_generated") {
+      return null;
+    }
+    const candidateType = typeof payload.candidateType === "string" ? payload.candidateType.trim().toLowerCase() : "";
+    if (candidateType !== "method" && candidateType !== "skill") {
+      return null;
+    }
+    const candidateId = typeof payload.candidateId === "string" ? payload.candidateId.trim() : "";
+    const title = typeof payload.title === "string" ? payload.title.trim() : "";
+    const taskId = typeof payload.taskId === "string" ? payload.taskId.trim() : "";
+    const key = `experience_draft_generated:${candidateType}:${candidateId || taskId || title}`;
+    return {
+      key,
+      title: candidateType === "skill"
+        ? t("memory.skillDraftGenerateSuccessTitle", {}, "Skill Draft 已生成")
+        : t("memory.methodDraftGenerateSuccessTitle", {}, "Method Draft 已生成"),
+      message: title
+        || (candidateType === "skill"
+          ? t("memory.skillDraftGenerateSuccessMessage", {}, "已为当前任务生成新的 Skill Draft。")
+          : t("memory.methodDraftGenerateSuccessMessage", {}, "已为当前任务生成新的 Method Draft。")),
+    };
+  }
+
+  function maybeShowExperienceDraftNotice(payload) {
+    const info = readExperienceDraftNoticeInfo(payload);
+    if (!info?.key || handledToolNoticeKeys.has(info.key)) {
+      return false;
+    }
+    handledToolNoticeKeys.add(info.key);
+    showNotice?.(info.title, info.message, "success", 2600);
     return true;
   }
 
@@ -406,10 +516,20 @@ export function createChatEventsFeature({
       if (!isActiveConversationPayload(payload)) {
         return true;
       }
+      maybeShowToolResultNotice(payload);
       if (renderToolResultPreview(payload)) {
         forceScrollToBottom();
       }
       getCanvasApp()?.handleReactEvent("tool_result", payload);
+      return true;
+    }
+
+    if (event === "tool_event") {
+      if (!isActiveConversationPayload(payload)) {
+        return true;
+      }
+      maybeShowExperienceDraftNotice(payload);
+      getCanvasApp()?.handleReactEvent("tool_event", payload);
       return true;
     }
 
