@@ -121,6 +121,7 @@ import { handleModelsConfigMethod } from "./server-methods/models-config.js";
 import { handleQueryRuntimeDomainsMethod } from "./server-methods/query-runtime-domains.js";
 import { handleConfigChannelMethod } from "./server-methods/config-channel.js";
 import { suppressConfigFileRestart } from "./config-restart-guard.js";
+import { areAllConfigKeysHotReload } from "./config-hot-reload.js";
 import { handleGoalMethod } from "./server-methods/goals.js";
 import { handleMemoryExperienceMethod } from "./server-methods/memory-experience.js";
 import { handleMessageSendMethod } from "./server-methods/message-send.js";
@@ -715,11 +716,6 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     };
 
   const app = express();
-  const communityApiEnabled = String(process.env.BELLDANDY_COMMUNITY_API_ENABLED ?? "false").toLowerCase() === "true";
-  const communityApiToken =
-    process.env.BELLDANDY_COMMUNITY_API_TOKEN
-    ?? process.env.BELLDANDY_AUTH_TOKEN
-    ?? (opts.auth.mode === "token" ? opts.auth.token : undefined);
   const tokenUsageUploadConfig: TokenUsageUploadConfig = {
     enabled: String(process.env.BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED ?? "false").toLowerCase() === "true",
     url: readEnvTrimmed("BELLDANDY_TOKEN_USAGE_UPLOAD_URL"),
@@ -1867,12 +1863,13 @@ async function handleReq(
         readEnvFileIntoConfig,
         updateEnvFile,
         onConfigUpdating: (updates) => {
-          if (Object.keys(updates).length === 1 && Object.prototype.hasOwnProperty.call(updates, "BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE")) {
+          if (areAllConfigKeysHotReload(Object.keys(updates))) {
+            suppressConfigFileRestart(".env");
             suppressConfigFileRestart(".env.local");
           }
         },
         onConfigUpdated: (updates) => {
-          if (Object.keys(updates).length === 1 && Object.prototype.hasOwnProperty.call(updates, "BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE")) {
+          if (Object.prototype.hasOwnProperty.call(updates, "BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE")) {
             ctx.setGovernanceDetailMode?.(updates.BELLDANDY_WEB_GOVERNANCE_DETAIL_MODE);
           }
         },

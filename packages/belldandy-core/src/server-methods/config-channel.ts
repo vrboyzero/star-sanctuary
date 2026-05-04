@@ -17,6 +17,7 @@ import {
   rejectChannelSecurityApprovalRequest,
   writeChannelSecurityConfig,
 } from "../channel-security-store.js";
+import { areAllConfigKeysHotReload } from "../config-hot-reload.js";
 import type { GatewayWebSocketRequestContext } from "../server-websocket-dispatch.js";
 
 type ConfigChannelMethodContext = Pick<
@@ -225,6 +226,16 @@ function normalizeConfigValue(value: string | undefined): string {
   return typeof value === "string" ? value : "";
 }
 
+function applyProcessEnvUpdates(updates: Record<string, string>): void {
+  for (const [key, value] of Object.entries(updates)) {
+    if (typeof value === "string" && value.length > 0) {
+      process.env[key] = value;
+      continue;
+    }
+    delete process.env[key];
+  }
+}
+
 export async function handleConfigChannelMethod(
   req: GatewayReqFrame,
   ctx: ConfigChannelMethodContext,
@@ -305,6 +316,9 @@ export async function handleConfigChannelMethod(
       if (Object.prototype.hasOwnProperty.call(effectiveUpdates, "BELLDANDY_MODEL_PREFERRED_PROVIDERS")) {
         const preferredProviderIds = normalizePreferredProviderIds(effectiveUpdates.BELLDANDY_MODEL_PREFERRED_PROVIDERS);
         ctx.preferredProviderIds.splice(0, ctx.preferredProviderIds.length, ...preferredProviderIds);
+      }
+      if (areAllConfigKeysHotReload(Object.keys(effectiveUpdates))) {
+        applyProcessEnvUpdates(effectiveUpdates);
       }
       ctx.onConfigUpdated?.(effectiveUpdates);
 

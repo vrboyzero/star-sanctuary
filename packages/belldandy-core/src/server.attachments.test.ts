@@ -259,6 +259,68 @@ test("message.send caps total injected text attachment chars across files", asyn
   });
 });
 
+test("message.send picks up updated attachment limit env without restarting server", async () => {
+  await withEnv({
+    BELLDANDY_ATTACHMENT_MAX_FILE_BYTES: "8",
+    BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES: "64",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "att-hot-before",
+        method: "message.send",
+        params: {
+          text: "",
+          attachments: [
+            { name: "big.txt", type: "text/plain", base64: toBase64("123456789") },
+          ],
+        },
+      }));
+
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "att-hot-before"));
+      const beforeRes = frames.find((f) => f.type === "res" && f.id === "att-hot-before");
+      expect(beforeRes.ok).toBe(false);
+
+      process.env.BELLDANDY_ATTACHMENT_MAX_FILE_BYTES = "16";
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "att-hot-after",
+        method: "message.send",
+        params: {
+          text: "ok",
+          attachments: [
+            { name: "big.txt", type: "text/plain", base64: toBase64("123456789") },
+          ],
+        },
+      }));
+
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "att-hot-after" && f.ok === true));
+      const afterRes = frames.find((f) => f.type === "res" && f.id === "att-hot-after");
+      expect(afterRes.ok).toBe(true);
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
 test("message.send caps appended audio transcript chars when user text already exists", async () => {
   await withEnv({
     BELLDANDY_ATTACHMENT_TEXT_TOTAL_CHAR_LIMIT: "30",

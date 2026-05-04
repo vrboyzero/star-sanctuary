@@ -56,6 +56,7 @@ type GatewayHttpRuntimeSettings = Pick<
   RegisterGatewayHttpRoutesContext,
   | "communityApiEnabled"
   | "communityApiToken"
+  | "getCommunityApiSettings"
   | "webConfig"
   | "getWebConfig"
   | "webhookEnabled"
@@ -66,6 +67,7 @@ type GatewayHttpRuntimeSettings = Pick<
   | "webhookMaxInFlightPerKey"
   | "webhookRateLimiter"
   | "webhookInFlightLimiter"
+  | "getWebhookRuntimeSettings"
 >;
 
 type GatewayWebConfig = NonNullable<RegisterGatewayHttpRoutesContext["webConfig"]>;
@@ -117,45 +119,16 @@ export function buildGatewayHttpRoutesContext(
 function readGatewayHttpRuntimeSettings(
   input: Pick<GatewayHttpRuntimeContextInput, "options" | "getGovernanceDetailMode">,
 ): GatewayHttpRuntimeSettings {
-  const communityApiEnabled = String(process.env.BELLDANDY_COMMUNITY_API_ENABLED ?? "false").toLowerCase() === "true";
-  const communityApiToken =
-    process.env.BELLDANDY_COMMUNITY_API_TOKEN
-    ?? process.env.BELLDANDY_AUTH_TOKEN
-    ?? (input.options.auth.mode === "token" ? input.options.auth.token : undefined);
-  const webhookPreAuthMaxBytes = parsePositiveIntEnv(
-    "BELLDANDY_WEBHOOK_PREAUTH_MAX_BYTES",
-    WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes,
-  );
-  const webhookPreAuthTimeoutMs = parsePositiveIntEnv(
-    "BELLDANDY_WEBHOOK_PREAUTH_TIMEOUT_MS",
-    WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs,
-  );
-  const webhookRateLimitWindowMs = parsePositiveIntEnv(
-    "BELLDANDY_WEBHOOK_RATE_LIMIT_WINDOW_MS",
-    WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
-  );
-  const webhookRateLimitMaxRequests = parsePositiveIntEnv(
-    "BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_REQUESTS",
-    WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
-  );
-  const webhookRateLimitMaxTrackedKeys = parsePositiveIntEnv(
-    "BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS",
-    WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
-  );
-  const webhookMaxInFlightPerKey = parsePositiveIntEnv(
-    "BELLDANDY_WEBHOOK_MAX_IN_FLIGHT_PER_KEY",
-    WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey,
-  );
-  const webhookMaxInFlightTrackedKeys = parsePositiveIntEnv(
-    "BELLDANDY_WEBHOOK_MAX_IN_FLIGHT_TRACKED_KEYS",
-    WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
-  );
   const governanceDetailMode = input.getGovernanceDetailMode?.() ?? readGovernanceDetailModeEnv();
   const experienceDraftGenerateNoticeEnabled = readExperienceDraftGenerateNoticeEnabledEnv();
+  const communityApiSettings = readCommunityApiRuntimeSettings(input.options.auth);
+  const limiterCache = createWebhookRuntimeLimiterCache();
+  const webhookRuntimeSettings = readWebhookRuntimeSettings(input.options.webhookConfig, limiterCache);
 
   return {
-    communityApiEnabled,
-    communityApiToken,
+    communityApiEnabled: communityApiSettings.enabled,
+    communityApiToken: communityApiSettings.token,
+    getCommunityApiSettings: () => readCommunityApiRuntimeSettings(input.options.auth),
     webConfig: {
       governanceDetailMode,
       experienceDraftGenerateNoticeEnabled,
@@ -164,21 +137,120 @@ function readGatewayHttpRuntimeSettings(
       governanceDetailMode: input.getGovernanceDetailMode?.() ?? readGovernanceDetailModeEnv(),
       experienceDraftGenerateNoticeEnabled: readExperienceDraftGenerateNoticeEnabledEnv(),
     }),
-    webhookEnabled: Boolean(input.options.webhookConfig && input.options.webhookConfig.webhooks.length > 0),
-    webhookPreAuthMaxBytes,
-    webhookPreAuthTimeoutMs,
-    webhookRateLimitWindowMs,
-    webhookRateLimitMaxRequests,
-    webhookMaxInFlightPerKey,
-    webhookRateLimiter: createFixedWindowRateLimiter({
-      windowMs: webhookRateLimitWindowMs,
-      maxRequests: webhookRateLimitMaxRequests,
-      maxTrackedKeys: webhookRateLimitMaxTrackedKeys,
-    }),
-    webhookInFlightLimiter: createWebhookInFlightLimiter({
-      maxInFlightPerKey: webhookMaxInFlightPerKey,
-      maxTrackedKeys: webhookMaxInFlightTrackedKeys,
-    }),
+    webhookEnabled: webhookRuntimeSettings.enabled,
+    webhookPreAuthMaxBytes: webhookRuntimeSettings.preAuthMaxBytes,
+    webhookPreAuthTimeoutMs: webhookRuntimeSettings.preAuthTimeoutMs,
+    webhookRateLimitWindowMs: webhookRuntimeSettings.rateLimitWindowMs,
+    webhookRateLimitMaxRequests: webhookRuntimeSettings.rateLimitMaxRequests,
+    webhookMaxInFlightPerKey: webhookRuntimeSettings.maxInFlightPerKey,
+    webhookRateLimiter: webhookRuntimeSettings.rateLimiter,
+    webhookInFlightLimiter: webhookRuntimeSettings.inFlightLimiter,
+    getWebhookRuntimeSettings: () => readWebhookRuntimeSettings(input.options.webhookConfig, limiterCache),
+  };
+}
+
+function readCommunityApiRuntimeSettings(
+  auth: GatewayServerOptions["auth"],
+): { enabled: boolean; token?: string } {
+  return {
+    enabled: String(process.env.BELLDANDY_COMMUNITY_API_ENABLED ?? "false").toLowerCase() === "true",
+    token:
+      process.env.BELLDANDY_COMMUNITY_API_TOKEN
+      ?? process.env.BELLDANDY_AUTH_TOKEN
+      ?? (auth.mode === "token" ? auth.token : undefined),
+  };
+}
+
+type WebhookRuntimeSettingsSnapshot = {
+  enabled: boolean;
+  preAuthMaxBytes: number;
+  preAuthTimeoutMs: number;
+  rateLimitWindowMs: number;
+  rateLimitMaxRequests: number;
+  rateLimitMaxTrackedKeys: number;
+  maxInFlightPerKey: number;
+  maxInFlightTrackedKeys: number;
+  rateLimiter: ReturnType<typeof createFixedWindowRateLimiter>;
+  inFlightLimiter: ReturnType<typeof createWebhookInFlightLimiter>;
+};
+
+function createWebhookRuntimeLimiterCache() {
+  let rateLimitSignature = "";
+  let inFlightSignature = "";
+  let rateLimiter = createFixedWindowRateLimiter();
+  let inFlightLimiter = createWebhookInFlightLimiter();
+
+  return {
+    resolveRateLimiter(windowMs: number, maxRequests: number, maxTrackedKeys: number) {
+      const nextSignature = `${windowMs}:${maxRequests}:${maxTrackedKeys}`;
+      if (nextSignature !== rateLimitSignature) {
+        rateLimitSignature = nextSignature;
+        rateLimiter = createFixedWindowRateLimiter({ windowMs, maxRequests, maxTrackedKeys });
+      }
+      return rateLimiter;
+    },
+    resolveInFlightLimiter(maxInFlightPerKey: number, maxTrackedKeys: number) {
+      const nextSignature = `${maxInFlightPerKey}:${maxTrackedKeys}`;
+      if (nextSignature !== inFlightSignature) {
+        inFlightSignature = nextSignature;
+        inFlightLimiter = createWebhookInFlightLimiter({ maxInFlightPerKey, maxTrackedKeys });
+      }
+      return inFlightLimiter;
+    },
+  };
+}
+
+function readWebhookRuntimeSettings(
+  webhookConfig: GatewayServerOptions["webhookConfig"] | undefined,
+  limiterCache: ReturnType<typeof createWebhookRuntimeLimiterCache>,
+): WebhookRuntimeSettingsSnapshot {
+  const preAuthMaxBytes = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_PREAUTH_MAX_BYTES",
+    WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes,
+  );
+  const preAuthTimeoutMs = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_PREAUTH_TIMEOUT_MS",
+    WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs,
+  );
+  const rateLimitWindowMs = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_RATE_LIMIT_WINDOW_MS",
+    WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
+  );
+  const rateLimitMaxRequests = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_REQUESTS",
+    WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
+  );
+  const rateLimitMaxTrackedKeys = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS",
+    WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
+  );
+  const maxInFlightPerKey = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_MAX_IN_FLIGHT_PER_KEY",
+    WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey,
+  );
+  const maxInFlightTrackedKeys = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_MAX_IN_FLIGHT_TRACKED_KEYS",
+    WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
+  );
+
+  return {
+    enabled: Boolean(webhookConfig && webhookConfig.webhooks.length > 0),
+    preAuthMaxBytes,
+    preAuthTimeoutMs,
+    rateLimitWindowMs,
+    rateLimitMaxRequests,
+    rateLimitMaxTrackedKeys,
+    maxInFlightPerKey,
+    maxInFlightTrackedKeys,
+    rateLimiter: limiterCache.resolveRateLimiter(
+      rateLimitWindowMs,
+      rateLimitMaxRequests,
+      rateLimitMaxTrackedKeys,
+    ),
+    inFlightLimiter: limiterCache.resolveInFlightLimiter(
+      maxInFlightPerKey,
+      maxInFlightTrackedKeys,
+    ),
   };
 }
 

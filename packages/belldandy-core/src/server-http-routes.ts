@@ -35,6 +35,10 @@ export type RegisterGatewayHttpRoutesContext = {
     governanceDetailMode?: "compact" | "full";
     experienceDraftGenerateNoticeEnabled?: boolean;
   };
+  getCommunityApiSettings?: () => {
+    enabled: boolean;
+    token?: string;
+  };
   auth: GatewayServerOptions["auth"];
   agentFactory?: () => BelldandyAgent;
   agentRegistry?: AgentRegistry;
@@ -51,6 +55,18 @@ export type RegisterGatewayHttpRoutesContext = {
   webhookMaxInFlightPerKey: number;
   webhookRateLimiter: FixedWindowRateLimiter;
   webhookInFlightLimiter: WebhookInFlightLimiter;
+  getWebhookRuntimeSettings?: () => {
+    enabled: boolean;
+    preAuthMaxBytes: number;
+    preAuthTimeoutMs: number;
+    rateLimitWindowMs: number;
+    rateLimitMaxRequests: number;
+    rateLimitMaxTrackedKeys: number;
+    maxInFlightPerKey: number;
+    maxInFlightTrackedKeys: number;
+    rateLimiter: FixedWindowRateLimiter;
+    inFlightLimiter: WebhookInFlightLimiter;
+  };
   log: {
     info: (scope: string, message: string, meta?: unknown) => void;
     error: (scope: string, message: string, meta?: unknown) => void;
@@ -242,8 +258,12 @@ export async function registerGatewayHttpRoutes(ctx: RegisterGatewayHttpRoutesCo
   });
 
   const communityJsonParser = express.json();
-  if (!ctx.communityApiEnabled) {
-    ctx.app.post("/api/message", (_req, res) => {
+  ctx.app.post("/api/message", communityJsonParser, async (req, res) => {
+    const communityApiSettings = ctx.getCommunityApiSettings?.() ?? {
+      enabled: ctx.communityApiEnabled,
+      token: ctx.communityApiToken,
+    };
+    if (!communityApiSettings.enabled) {
       res.status(404).json({
         ok: false,
         error: {
@@ -251,33 +271,44 @@ export async function registerGatewayHttpRoutes(ctx: RegisterGatewayHttpRoutesCo
           message: "Community API is disabled. Set BELLDANDY_COMMUNITY_API_ENABLED=true to enable.",
         },
       });
-    });
-  } else {
-    ctx.app.post("/api/message", communityJsonParser, async (req, res) => {
-      const conversationStore = ctx.getConversationStore();
-      const queryRuntimeTraceStore = ctx.getQueryRuntimeTraceStore();
-      const response = await handleCommunityMessageWithQueryRuntime({
-        requestId: `api.message:${crypto.randomUUID()}`,
-        authorization: req.headers.authorization,
-        communityApiToken: ctx.communityApiToken,
-        body: req.body,
-        stateDir: ctx.stateDir,
-        agentFactory: ctx.agentFactory,
-        agentRegistry: ctx.agentRegistry,
-        conversationStore,
-        log: ctx.log,
-        runtimeObserver: queryRuntimeTraceStore.createObserver<"api.message">(),
-        onChannelSecurityApprovalRequired: ctx.onChannelSecurityApprovalRequired,
-        emitAutoRunTaskTokenResult: (store, payload) => {
-          ctx.emitAutoRunTaskTokenResult(store, payload);
-        },
-      });
-      ctx.sendHttpJson(res, response);
-    });
-  }
+      return;
+    }
 
-  if (!ctx.webhookEnabled) {
-    ctx.app.post("/api/webhook/:id", (_req, res) => {
+    const conversationStore = ctx.getConversationStore();
+    const queryRuntimeTraceStore = ctx.getQueryRuntimeTraceStore();
+    const response = await handleCommunityMessageWithQueryRuntime({
+      requestId: `api.message:${crypto.randomUUID()}`,
+      authorization: req.headers.authorization,
+      communityApiToken: communityApiSettings.token,
+      body: req.body,
+      stateDir: ctx.stateDir,
+      agentFactory: ctx.agentFactory,
+      agentRegistry: ctx.agentRegistry,
+      conversationStore,
+      log: ctx.log,
+      runtimeObserver: queryRuntimeTraceStore.createObserver<"api.message">(),
+      onChannelSecurityApprovalRequired: ctx.onChannelSecurityApprovalRequired,
+      emitAutoRunTaskTokenResult: (store, payload) => {
+        ctx.emitAutoRunTaskTokenResult(store, payload);
+      },
+    });
+    ctx.sendHttpJson(res, response);
+  });
+
+  ctx.app.post("/api/webhook/:id", async (req, res) => {
+    const webhookRuntimeSettings = ctx.getWebhookRuntimeSettings?.() ?? {
+      enabled: ctx.webhookEnabled,
+      preAuthMaxBytes: ctx.webhookPreAuthMaxBytes,
+      preAuthTimeoutMs: ctx.webhookPreAuthTimeoutMs,
+      rateLimitWindowMs: ctx.webhookRateLimitWindowMs,
+      rateLimitMaxRequests: ctx.webhookRateLimitMaxRequests,
+      rateLimitMaxTrackedKeys: 0,
+      maxInFlightPerKey: ctx.webhookMaxInFlightPerKey,
+      maxInFlightTrackedKeys: 0,
+      rateLimiter: ctx.webhookRateLimiter,
+      inFlightLimiter: ctx.webhookInFlightLimiter,
+    };
+    if (!webhookRuntimeSettings.enabled) {
       res.status(404).json({
         ok: false,
         error: {
@@ -285,68 +316,81 @@ export async function registerGatewayHttpRoutes(ctx: RegisterGatewayHttpRoutesCo
           message: `Webhook API is disabled. Configure webhooks in ${DEFAULT_STATE_DIR_DISPLAY}/webhooks.json to enable.`,
         },
       });
+      return;
+    }
+
+    const webhookGuardKey = ctx.resolveWebhookRequestGuardKey(req, req.params.id);
+    const pipeline = beginWebhookRequestPipelineOrReject({
+      req,
+      res,
+      rateLimiter: webhookRuntimeSettings.rateLimiter,
+      rateLimitKey: webhookGuardKey,
+      requireJsonContentType: true,
+      inFlightLimiter: webhookRuntimeSettings.inFlightLimiter,
+      inFlightKey: webhookGuardKey,
     });
-  } else {
-    ctx.app.post("/api/webhook/:id", async (req, res) => {
-      const webhookGuardKey = ctx.resolveWebhookRequestGuardKey(req, req.params.id);
-      const pipeline = beginWebhookRequestPipelineOrReject({
+    if (!pipeline.ok) {
+      return;
+    }
+
+    try {
+      const bodyResult = await import("./webhook/index.js").then(({ readJsonWebhookBodyOrReject }) => readJsonWebhookBodyOrReject({
         req,
         res,
-        rateLimiter: ctx.webhookRateLimiter,
-        rateLimitKey: webhookGuardKey,
-        requireJsonContentType: true,
-        inFlightLimiter: ctx.webhookInFlightLimiter,
-        inFlightKey: webhookGuardKey,
-      });
-      if (!pipeline.ok) {
+        profile: "pre-auth",
+        maxBytes: webhookRuntimeSettings.preAuthMaxBytes,
+        timeoutMs: webhookRuntimeSettings.preAuthTimeoutMs,
+        emptyObjectOnEmpty: true,
+        invalidJsonMessage: "Invalid JSON",
+      }));
+      if (!bodyResult.ok) {
         return;
       }
 
-      try {
-        const bodyResult = await import("./webhook/index.js").then(({ readJsonWebhookBodyOrReject }) => readJsonWebhookBodyOrReject({
-          req,
-          res,
-          profile: "pre-auth",
-          maxBytes: ctx.webhookPreAuthMaxBytes,
-          timeoutMs: ctx.webhookPreAuthTimeoutMs,
-          emptyObjectOnEmpty: true,
-          invalidJsonMessage: "Invalid JSON",
-        }));
-        if (!bodyResult.ok) {
-          return;
-        }
+      const conversationStore = ctx.getConversationStore();
+      const queryRuntimeTraceStore = ctx.getQueryRuntimeTraceStore();
+      const response = await handleWebhookReceiveWithQueryRuntime({
+        requestId: `webhook.receive:${crypto.randomUUID()}`,
+        webhookId: req.params.id,
+        authorization: req.headers.authorization,
+        idempotencyKey: typeof req.headers["x-idempotency-key"] === "string" ? req.headers["x-idempotency-key"] : undefined,
+        body: bodyResult.value as any,
+        agentFactory: ctx.agentFactory,
+        agentRegistry: ctx.agentRegistry,
+        webhookConfig: ctx.webhookConfig,
+        webhookIdempotency: ctx.webhookIdempotency,
+        conversationStore,
+        log: ctx.log,
+        runtimeObserver: queryRuntimeTraceStore.createObserver<"webhook.receive">(),
+        emitAutoRunTaskTokenResult: (store, payload) => {
+          ctx.emitAutoRunTaskTokenResult(store, payload);
+        },
+      });
+      ctx.sendHttpJson(res, response);
+    } finally {
+      pipeline.release();
+    }
+  });
 
-        const conversationStore = ctx.getConversationStore();
-        const queryRuntimeTraceStore = ctx.getQueryRuntimeTraceStore();
-        const response = await handleWebhookReceiveWithQueryRuntime({
-          requestId: `webhook.receive:${crypto.randomUUID()}`,
-          webhookId: req.params.id,
-          authorization: req.headers.authorization,
-          idempotencyKey: typeof req.headers["x-idempotency-key"] === "string" ? req.headers["x-idempotency-key"] : undefined,
-          body: bodyResult.value as any,
-          agentFactory: ctx.agentFactory,
-          agentRegistry: ctx.agentRegistry,
-          webhookConfig: ctx.webhookConfig,
-          webhookIdempotency: ctx.webhookIdempotency,
-          conversationStore,
-          log: ctx.log,
-          runtimeObserver: queryRuntimeTraceStore.createObserver<"webhook.receive">(),
-          emitAutoRunTaskTokenResult: (store, payload) => {
-            ctx.emitAutoRunTaskTokenResult(store, payload);
-          },
-        });
-        ctx.sendHttpJson(res, response);
-      } finally {
-        pipeline.release();
-      }
-    });
-  }
-
-  if (ctx.webhookEnabled) {
+  if (ctx.webhookEnabled || ctx.getWebhookRuntimeSettings) {
+    const webhookRuntimeSettings = ctx.getWebhookRuntimeSettings?.() ?? {
+      enabled: ctx.webhookEnabled,
+      preAuthMaxBytes: ctx.webhookPreAuthMaxBytes,
+      preAuthTimeoutMs: ctx.webhookPreAuthTimeoutMs,
+      rateLimitWindowMs: ctx.webhookRateLimitWindowMs,
+      rateLimitMaxRequests: ctx.webhookRateLimitMaxRequests,
+      rateLimitMaxTrackedKeys: 0,
+      maxInFlightPerKey: ctx.webhookMaxInFlightPerKey,
+      maxInFlightTrackedKeys: 0,
+      rateLimiter: ctx.webhookRateLimiter,
+      inFlightLimiter: ctx.webhookInFlightLimiter,
+    };
+    if (webhookRuntimeSettings.enabled) {
     ctx.log.info(
       "webhook",
-      `Ingress guard enabled (preAuthMaxBytes=${ctx.webhookPreAuthMaxBytes}, preAuthTimeoutMs=${ctx.webhookPreAuthTimeoutMs}, rateLimit=${ctx.webhookRateLimitMaxRequests}/${ctx.webhookRateLimitWindowMs}ms, maxInFlightPerKey=${ctx.webhookMaxInFlightPerKey})`,
+        `Ingress guard enabled (preAuthMaxBytes=${webhookRuntimeSettings.preAuthMaxBytes}, preAuthTimeoutMs=${webhookRuntimeSettings.preAuthTimeoutMs}, rateLimit=${webhookRuntimeSettings.rateLimitMaxRequests}/${webhookRuntimeSettings.rateLimitWindowMs}ms, maxInFlightPerKey=${webhookRuntimeSettings.maxInFlightPerKey})`,
     );
+    }
   }
 }
 

@@ -85,4 +85,34 @@ describe("buildGatewayHttpRoutesContext governance detail mode", () => {
       expect(context.getWebConfig?.().experienceDraftGenerateNoticeEnabled).toBe(false);
     });
   });
+
+  it("reads Community API and Webhook guard settings through runtime getters", async () => {
+    await withEnv({
+      BELLDANDY_COMMUNITY_API_ENABLED: "false",
+      BELLDANDY_COMMUNITY_API_TOKEN: undefined,
+      BELLDANDY_WEBHOOK_PREAUTH_MAX_BYTES: "65536",
+      BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_REQUESTS: "120",
+    }, async () => {
+      const input = createRuntimeInput();
+      input.options.auth = { mode: "token", token: "fallback-token" };
+      input.options.webhookConfig = { webhooks: [{}] } as never;
+      const context = buildGatewayHttpRoutesContext(input);
+
+      expect(context.communityApiEnabled).toBe(false);
+      expect(context.getCommunityApiSettings?.().enabled).toBe(false);
+      expect(context.getCommunityApiSettings?.().token).toBe("fallback-token");
+      expect(context.webhookPreAuthMaxBytes).toBe(65536);
+      expect(context.getWebhookRuntimeSettings?.().rateLimitMaxRequests).toBe(120);
+
+      process.env.BELLDANDY_COMMUNITY_API_ENABLED = "true";
+      process.env.BELLDANDY_COMMUNITY_API_TOKEN = "community-secret";
+      process.env.BELLDANDY_WEBHOOK_PREAUTH_MAX_BYTES = "2048";
+      process.env.BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_REQUESTS = "5";
+
+      expect(context.getCommunityApiSettings?.().enabled).toBe(true);
+      expect(context.getCommunityApiSettings?.().token).toBe("community-secret");
+      expect(context.getWebhookRuntimeSettings?.().preAuthMaxBytes).toBe(2048);
+      expect(context.getWebhookRuntimeSettings?.().rateLimitMaxRequests).toBe(5);
+    });
+  });
 });

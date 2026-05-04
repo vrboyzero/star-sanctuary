@@ -722,10 +722,11 @@ if (embeddingEnabled && !openaiApiKey) {
 // [SECURITY] 危险工具需显式启用
 const dangerousToolsEnabled = readEnv("BELLDANDY_DANGEROUS_TOOLS_ENABLED") === "true";
 const agentBridgeEnabled = readEnv("BELLDANDY_AGENT_BRIDGE_ENABLED") === "true";
-const externalOutboundRequireConfirmation = readEnv("BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION") !== "false";
-const emailOutboundRequireConfirmation = readEnv("BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION")
-  ? readEnv("BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION") !== "false"
-  : externalOutboundRequireConfirmation;
+const readExternalOutboundRequireConfirmation = () => readEnv("BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION") !== "false";
+const readEmailOutboundRequireConfirmation = () => {
+  const value = readEnv("BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION");
+  return value ? value !== "false" : readExternalOutboundRequireConfirmation();
+};
 const emailDefaultProviderId = readEnv("BELLDANDY_EMAIL_DEFAULT_PROVIDER")?.trim() || "smtp";
 const emailSmtpEnabled = readEnv("BELLDANDY_EMAIL_SMTP_ENABLED") === "true";
 const emailSmtpAccountId = readEnv("BELLDANDY_EMAIL_SMTP_ACCOUNT_ID")?.trim() || "default";
@@ -1311,20 +1312,20 @@ if (toolsEnabled) {
     senderRegistry: externalOutboundSenderRegistry,
     confirmationStore: externalOutboundConfirmationStore,
     auditStore: externalOutboundAuditStore,
-    getRequireConfirmation: () => externalOutboundRequireConfirmation,
+    getRequireConfirmation: readExternalOutboundRequireConfirmation,
   }));
-  logger.info("tools", `registered send_channel_message (confirm=${externalOutboundRequireConfirmation ? "required" : "auto"})`);
+  logger.info("tools", `registered send_channel_message (confirm=${readExternalOutboundRequireConfirmation() ? "required" : "auto"})`);
   toolExecutor.registerTool(createSendEmailTool({
     providerRegistry: emailOutboundProviderRegistry,
     confirmationStore: emailOutboundConfirmationStore,
     auditStore: emailOutboundAuditStore,
     reminderStore: emailFollowUpReminderStore,
     normalizeDraft: (draft) => normalizeEmailOutboundDraft(draft as any),
-    getRequireConfirmation: () => emailOutboundRequireConfirmation,
+    getRequireConfirmation: readEmailOutboundRequireConfirmation,
     getDefaultAccountId: () => emailSmtpAccountId,
     getDefaultProviderId: () => emailOutboundProviderRegistry.getDefaultProviderId() || emailDefaultProviderId,
   }));
-  logger.info("tools", `registered send_email (confirm=${emailOutboundRequireConfirmation ? "required" : "auto"}, providers=${emailOutboundProviderRegistry.listProviderIds().join(",") || "none"})`);
+  logger.info("tools", `registered send_email (confirm=${readEmailOutboundRequireConfirmation() ? "required" : "auto"}, providers=${emailOutboundProviderRegistry.listProviderIds().join(",") || "none"})`);
 }
 
 // 4.4 Bridge plugin hooks → HookRegistry (deferred to after hookRegistry init, see section 7.5)

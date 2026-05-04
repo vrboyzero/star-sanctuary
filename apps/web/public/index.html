@@ -703,7 +703,7 @@
                 <input id="cfgExternalOutboundRequireConfirmation" type="checkbox" style="margin-right: 8px;" checked />
                 <span data-i18n="settings.externalOutboundRequireConfirmationLabel">外部渠道外发需要确认</span>
               </label>
-              <div class="form-help" data-i18n="settings.externalOutboundRequireConfirmationHelp">控制 WebChat 请求 Agent 向飞书 / QQ / Community / Discord 外发文本时，是否必须先经过页面确认弹窗。默认开启；保存后需重启 Gateway 生效。</div>
+              <div class="form-help" data-i18n="settings.externalOutboundRequireConfirmationHelp">控制 WebChat 请求 Agent 向飞书 / QQ / Community / Discord 外发文本时，是否必须先经过页面确认弹窗。默认开启。无需重启</div>
             </div>
             <div class="form-group">
               <label class="form-label" data-i18n="settings.assistantExternalDeliveryPreferenceLabel">Assistant 外发优先级</label>
@@ -1555,7 +1555,7 @@
               <input id="cfgTtsEnabled" type="checkbox" style="margin-right: 8px;" />
               <span class="settings-priority-toggle-title" data-i18n="settings.ttsEnabledLabel">Enable TTS</span>
             </label>
-            <div class="form-help" data-i18n="settings.ttsEnabledHelp">服务端自动语音开关。开启后回复可附带语音音频。</div>
+            <div class="form-help" data-i18n="settings.ttsEnabledHelp">服务端自动语音开关。开启后回复可附带语音音频。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" data-i18n="settings.ttsProviderLabel">TTS Provider</label>
@@ -1564,27 +1564,27 @@
               <option value="openai">openai</option>
               <option value="dashscope">dashscope</option>
             </select>
-            <div class="form-help" data-i18n="settings.ttsProviderHelp">语音合成提供方。`edge` 免费可用，`openai` 和 `dashscope` 需要对应密钥。</div>
+            <div class="form-help" data-i18n="settings.ttsProviderHelp">语音合成提供方。`edge` 免费可用，`openai` 和 `dashscope` 需要对应密钥。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" data-i18n="settings.ttsVoiceLabel">TTS Voice</label>
             <input id="cfgTtsVoice" class="input" data-i18n-placeholder="settings.ttsVoicePlaceholder" placeholder="留空则使用 provider 默认音色" />
-            <div class="form-help" data-i18n="settings.ttsVoiceHelp">音色名称。留空时按当前 Provider 自动选择默认音色。</div>
+            <div class="form-help" data-i18n="settings.ttsVoiceHelp">音色名称。留空时按当前 Provider 自动选择默认音色。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" data-i18n="settings.ttsModelLabel">TTS Model</label>
             <input id="cfgTtsModel" class="input" data-i18n-placeholder="settings.ttsModelPlaceholder" placeholder="留空则按 provider 使用默认模型" />
-            <div class="form-help" data-i18n="settings.ttsModelHelp">统一 TTS 模型名。`openai` 与 `dashscope` 共用，`edge` 会忽略。</div>
+            <div class="form-help" data-i18n="settings.ttsModelHelp">统一 TTS 模型名。`openai` 与 `dashscope` 共用，`edge` 会忽略。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" data-i18n="settings.ttsOpenAiBaseUrlLabel">TTS OpenAI Base URL</label>
             <input id="cfgTtsOpenAIBaseUrl" class="input" data-i18n-placeholder="settings.ttsOpenAiBaseUrlPlaceholder" placeholder="留空则复用主模型 Base URL" />
-            <div class="form-help" data-i18n="settings.ttsOpenAiBaseUrlHelp">仅在 TTS Provider 选择 `openai` 时使用。留空时回退到全局 `BELLDANDY_OPENAI_BASE_URL`，再回退旧的 `OPENAI_BASE_URL`。</div>
+            <div class="form-help" data-i18n="settings.ttsOpenAiBaseUrlHelp">仅在 TTS Provider 选择 `openai` 时使用。留空时回退到全局 `BELLDANDY_OPENAI_BASE_URL`，再回退旧的 `OPENAI_BASE_URL`。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" data-i18n="settings.ttsOpenAiApiKeyLabel">TTS OpenAI API Key</label>
             <input id="cfgTtsOpenAIApiKey" class="input" type="password" data-i18n-placeholder="settings.ttsOpenAiApiKeyPlaceholder" placeholder="留空则复用主模型 API Key" />
-            <div class="form-help" data-i18n="settings.ttsOpenAiApiKeyHelp">仅在 TTS Provider 选择 `openai` 时使用。留空时回退到全局 `BELLDANDY_OPENAI_API_KEY`，再回退旧的 `OPENAI_API_KEY`。</div>
+            <div class="form-help" data-i18n="settings.ttsOpenAiApiKeyHelp">仅在 TTS Provider 选择 `openai` 时使用。留空时回退到全局 `BELLDANDY_OPENAI_API_KEY`，再回退旧的 `OPENAI_API_KEY`。无需重启</div>
           </div>
 
           <hr class="theme-divider">
@@ -1676,30 +1676,37 @@
               <input id="cfgImageEnabled" type="checkbox" style="margin-right: 8px;" />
               <span>Enable Image Tool</span>
             </label>
+            <div class="form-help">启用独立图片生成工具。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgImageProvider">Image Provider</label>
             <input id="cfgImageProvider" class="input" placeholder="openai" />
+            <div class="form-help">图片生成 provider。通常填 `openai`。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgImageApiKey">Image API Key</label>
             <input id="cfgImageApiKey" class="input" type="password" placeholder="sk-..." />
+            <div class="form-help">图片生成专用 API Key。留空时按服务端默认回退。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgImageBaseUrl">Image Base URL</label>
             <input id="cfgImageBaseUrl" class="input" placeholder="https://api.openai.com/v1" />
+            <div class="form-help">图片生成接口地址。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgImageModel">Image Model</label>
             <input id="cfgImageModel" class="input" placeholder="gpt-image-2" />
+            <div class="form-help">图片生成模型名。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgImageOutputFormat">Image Output Format</label>
             <input id="cfgImageOutputFormat" class="input" placeholder="png / jpeg / webp" />
+            <div class="form-help">图片生成输出格式。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgImageTimeoutMs">Image Timeout (ms)</label>
             <input id="cfgImageTimeoutMs" class="input" placeholder="60000" />
+            <div class="form-help">图片生成请求超时，单位毫秒。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgImageUnderstandEnabled">
@@ -1964,12 +1971,12 @@
                 <input id="cfgCommunityApiEnabled" type="checkbox" style="margin-right: 8px;" />
                 <span class="settings-priority-toggle-title" data-i18n="settings.communityApiEnabledLabel">Enable Community API</span>
               </label>
-              <div class="form-help" data-i18n="settings.communityApiEnabledHelp">启用 /api/message 社区 API。开启前必须确保 Gateway 认证模式不是 none。</div>
+              <div class="form-help" data-i18n="settings.communityApiEnabledHelp">启用 /api/message 社区 API。开启前必须确保 Gateway 认证模式不是 none。无需重启</div>
             </div>
             <div class="form-group">
               <label class="form-label" data-i18n="settings.communityApiTokenLabel">Community API Token</label>
               <input id="cfgCommunityApiToken" class="input" type="password" data-i18n-placeholder="settings.communityApiTokenPlaceholder" placeholder="用于 Bearer 鉴权" />
-              <div class="form-help" data-i18n="settings.communityApiTokenHelp">社区 API 的 Bearer Token。保存时会继续使用脱敏逻辑。</div>
+              <div class="form-help" data-i18n="settings.communityApiTokenHelp">社区 API 的 Bearer Token。保存时会继续使用脱敏逻辑。无需重启</div>
             </div>
 
             <hr class="theme-divider">
@@ -2275,14 +2282,14 @@
               <option value="compact">compact</option>
               <option value="full">full</option>
             </select>
-            <div class="form-help">控制记忆查看、经验能力、长期任务等治理审阅类页面右下详情区的显示密度。`compact` 只显示重要级信息，`full` 显示完整信息。</div>
+            <div class="form-help">控制记忆查看、经验能力、长期任务等治理审阅类页面右下详情区的显示密度。`compact` 只显示重要级信息，`full` 显示完整信息。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgExperienceDraftGenerateNoticeEnabled">
               <input id="cfgExperienceDraftGenerateNoticeEnabled" type="checkbox" style="margin-right: 8px;" checked />
               <span>Method / Skill Draft 生成提示</span>
             </label>
-            <div class="form-help">控制手动生成与自动生成的 Method Draft / Skill Draft 是否在聊天页右下角弹出提示。</div>
+            <div class="form-help">控制手动生成与自动生成的 Method Draft / Skill Draft 是否在聊天页右下角弹出提示。无需重启</div>
           </div>
 
           <hr class="theme-divider">
@@ -2348,27 +2355,27 @@
           <div class="form-group">
             <label class="form-label" data-i18n="settings.attachmentMaxFileBytesLabel">Attachment Max File Bytes</label>
             <input id="cfgAttachmentMaxFileBytes" class="input" placeholder="10485760" />
-            <div class="form-help" data-i18n="settings.attachmentMaxFileBytesHelp">单个附件大小上限，单位字节。</div>
+            <div class="form-help" data-i18n="settings.attachmentMaxFileBytesHelp">单个附件大小上限，单位字节。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" data-i18n="settings.attachmentMaxTotalBytesLabel">Attachment Max Total Bytes</label>
             <input id="cfgAttachmentMaxTotalBytes" class="input" placeholder="31457280" />
-            <div class="form-help" data-i18n="settings.attachmentMaxTotalBytesHelp">单次消息所有附件总大小上限，单位字节。</div>
+            <div class="form-help" data-i18n="settings.attachmentMaxTotalBytesHelp">单次消息所有附件总大小上限，单位字节。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" data-i18n="settings.attachmentTextCharLimitLabel">Attachment Text Char Limit</label>
             <input id="cfgAttachmentTextCharLimit" class="input" placeholder="200000" />
-            <div class="form-help" data-i18n="settings.attachmentTextCharLimitHelp">单个文本附件可注入 prompt 的字符上限。</div>
+            <div class="form-help" data-i18n="settings.attachmentTextCharLimitHelp">单个文本附件可注入 prompt 的字符上限。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" data-i18n="settings.attachmentTextTotalCharLimitLabel">Attachment Text Total Char Limit</label>
             <input id="cfgAttachmentTextTotalCharLimit" class="input" placeholder="200000" />
-            <div class="form-help" data-i18n="settings.attachmentTextTotalCharLimitHelp">单次消息所有文本附件与音频转录共用的 prompt 字符预算。</div>
+            <div class="form-help" data-i18n="settings.attachmentTextTotalCharLimitHelp">单次消息所有文本附件与音频转录共用的 prompt 字符预算。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" data-i18n="settings.audioTranscriptAppendCharLimitLabel">Audio Transcript Append Char Limit</label>
             <input id="cfgAudioTranscriptAppendCharLimit" class="input" placeholder="12000" />
-            <div class="form-help" data-i18n="settings.audioTranscriptAppendCharLimitHelp">用户已输入文本时，单个音频转录追加进 prompt 的字符上限。</div>
+            <div class="form-help" data-i18n="settings.audioTranscriptAppendCharLimitHelp">用户已输入文本时，单个音频转录追加进 prompt 的字符上限。无需重启</div>
           </div>
 
           <hr class="theme-divider">
@@ -2376,36 +2383,43 @@
           <div class="settings-subsection-header">
             <div>
               <div class="settings-subsection-title">Webhook Guard</div>
-              <div class="form-help">Webhook 入口预鉴权、限流和并发保护。</div>
+              <div class="form-help">Webhook 入口预鉴权、限流和并发保护。无需重启</div>
             </div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgWebhookPreauthMaxBytes">Webhook Preauth Max Bytes</label>
             <input id="cfgWebhookPreauthMaxBytes" class="input" placeholder="65536" />
+            <div class="form-help">预鉴权阶段允许读取的最大请求体字节数。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgWebhookPreauthTimeoutMs">Webhook Preauth Timeout (ms)</label>
             <input id="cfgWebhookPreauthTimeoutMs" class="input" placeholder="5000" />
+            <div class="form-help">预鉴权阶段读取请求体的超时时间，单位毫秒。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgWebhookRateLimitWindowMs">Webhook Rate Limit Window (ms)</label>
             <input id="cfgWebhookRateLimitWindowMs" class="input" placeholder="60000" />
+            <div class="form-help">Webhook 入口固定窗口限流时间窗，单位毫秒。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgWebhookRateLimitMaxRequests">Webhook Rate Limit Max Requests</label>
             <input id="cfgWebhookRateLimitMaxRequests" class="input" placeholder="120" />
+            <div class="form-help">单个 guard key 在一个时间窗内允许的最大请求数。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgWebhookRateLimitMaxTrackedKeys">Webhook Rate Limit Max Tracked Keys</label>
             <input id="cfgWebhookRateLimitMaxTrackedKeys" class="input" placeholder="4096" />
+            <div class="form-help">内存里最多追踪多少个限流 key。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgWebhookMaxInFlightPerKey">Webhook Max In Flight Per Key</label>
             <input id="cfgWebhookMaxInFlightPerKey" class="input" placeholder="8" />
+            <div class="form-help">同一个 guard key 允许同时处理的最大并发请求数。无需重启</div>
           </div>
           <div class="form-group">
             <label class="form-label" for="cfgWebhookMaxInFlightTrackedKeys">Webhook Max In Flight Tracked Keys</label>
             <input id="cfgWebhookMaxInFlightTrackedKeys" class="input" placeholder="4096" />
+            <div class="form-help">内存里最多追踪多少个 in-flight key。无需重启</div>
           </div>
 
           <div class="settings-subsection-header" style="margin-top: 16px;">

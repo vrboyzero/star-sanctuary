@@ -696,6 +696,101 @@ test("/api/webhook limits concurrent in-flight requests per client", async () =>
   });
 });
 
+test("api.message and webhook guard pick up updated env without restarting server", async () => {
+  await withEnv({
+    BELLDANDY_COMMUNITY_API_ENABLED: "false",
+    BELLDANDY_COMMUNITY_API_TOKEN: undefined,
+    BELLDANDY_WEBHOOK_PREAUTH_MAX_BYTES: "24",
+    BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_REQUESTS: "2",
+    BELLDANDY_WEBHOOK_RATE_LIMIT_WINDOW_MS: "60000",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "token", token: "fallback-auth-token" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => new MockAgent(),
+      webhookConfig: {
+        version: 1,
+        webhooks: [
+          {
+            id: "audit",
+            enabled: true,
+            token: "webhook-test-token",
+          },
+        ],
+      },
+      webhookIdempotency: new IdempotencyManager(60_000),
+    });
+
+    try {
+      const disabledCommunity = await fetch(`http://127.0.0.1:${server.port}/api/message`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer fallback-auth-token",
+        },
+        body: JSON.stringify({ text: "hello", conversationId: "conv-hot-community-off" }),
+      });
+      expect(disabledCommunity.status).toBe(404);
+
+      process.env.BELLDANDY_COMMUNITY_API_ENABLED = "true";
+      process.env.BELLDANDY_COMMUNITY_API_TOKEN = "community-hot-token";
+      const enabledCommunity = await fetch(`http://127.0.0.1:${server.port}/api/message`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer community-hot-token",
+        },
+        body: JSON.stringify({
+          text: "hello after hot enable",
+          conversationId: "conv-hot-community-on",
+          from: "office.goddess.ai",
+        }),
+      });
+      const enabledPayload = await enabledCommunity.json();
+      expect(enabledCommunity.status).toBe(200);
+      expect(enabledPayload.ok).toBe(true);
+
+      const tooLargeBefore = await fetch(`http://127.0.0.1:${server.port}/api/webhook/audit`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text: "this body should exceed pre-auth limit" }),
+      });
+      expect(tooLargeBefore.status).toBe(413);
+
+      process.env.BELLDANDY_WEBHOOK_PREAUTH_MAX_BYTES = "4096";
+      process.env.BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_REQUESTS = "1";
+
+      const first = await fetch(`http://127.0.0.1:${server.port}/api/webhook/audit`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer webhook-test-token",
+        },
+        body: JSON.stringify({ text: "hello after hot webhook change" }),
+      });
+      const second = await fetch(`http://127.0.0.1:${server.port}/api/webhook/audit`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer webhook-test-token",
+        },
+        body: JSON.stringify({ text: "hello after hot webhook change" }),
+      });
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(429);
+    } finally {
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
 test("system.doctor exposes api.message and webhook query runtime lifecycle traces", async () => {
   await withEnv({
     BELLDANDY_COMMUNITY_API_ENABLED: "true",

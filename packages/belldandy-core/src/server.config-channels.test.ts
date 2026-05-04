@@ -558,6 +558,72 @@ test("config.update accepts system governance env settings and keeps extra works
   }
 });
 
+test("config.update hot reloads multimedia and attachment settings without restart suppression drift", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const envDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-env-"));
+  await fs.promises.writeFile(path.join(envDir, ".env"), "", "utf-8");
+
+  const originalAttachmentMaxFileBytes = process.env.BELLDANDY_ATTACHMENT_MAX_FILE_BYTES;
+  const originalTtsProvider = process.env.BELLDANDY_TTS_PROVIDER;
+  const originalExternalOutbound = process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION;
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    envDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "config-update-hot-reload-batch",
+      method: "config.update",
+      params: {
+        updates: {
+          BELLDANDY_ATTACHMENT_MAX_FILE_BYTES: "2048",
+          BELLDANDY_TTS_PROVIDER: "openai",
+          BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION: "false",
+        },
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "config-update-hot-reload-batch"));
+    const updateRes = frames.find((f) => f.type === "res" && f.id === "config-update-hot-reload-batch");
+    expect(updateRes.ok).toBe(true);
+
+    expect(process.env.BELLDANDY_ATTACHMENT_MAX_FILE_BYTES).toBe("2048");
+    expect(process.env.BELLDANDY_TTS_PROVIDER).toBe("openai");
+    expect(process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION).toBe("false");
+    expect(isConfigFileRestartSuppressed(".env.local")).toBe(true);
+    expect(isConfigFileRestartSuppressed(".env")).toBe(true);
+
+    const envLocalContent = await fs.promises.readFile(path.join(envDir, ".env.local"), "utf-8");
+    expect(envLocalContent).toContain('BELLDANDY_ATTACHMENT_MAX_FILE_BYTES="2048"');
+    expect(envLocalContent).toContain('BELLDANDY_TTS_PROVIDER="openai"');
+    expect(envLocalContent).toContain('BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION="false"');
+  } finally {
+    if (originalAttachmentMaxFileBytes == null) delete process.env.BELLDANDY_ATTACHMENT_MAX_FILE_BYTES;
+    else process.env.BELLDANDY_ATTACHMENT_MAX_FILE_BYTES = originalAttachmentMaxFileBytes;
+    if (originalTtsProvider == null) delete process.env.BELLDANDY_TTS_PROVIDER;
+    else process.env.BELLDANDY_TTS_PROVIDER = originalTtsProvider;
+    if (originalExternalOutbound == null) delete process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION;
+    else process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION = originalExternalOutbound;
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(envDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("config.update accepts channel settings and config.read redacts channel secrets", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const envDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-env-"));

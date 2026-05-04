@@ -372,9 +372,67 @@ export function createSettingsController({
     "BELLDANDY_IMAGE_UNDERSTAND_OPENAI_API_KEY",
     "BELLDANDY_VIDEO_UNDERSTAND_OPENAI_API_KEY",
   ];
-  const FRONTEND_ONLY_SETTING_FIELDS = new Set([
+  const HOT_RELOAD_SETTING_FIELDS = new Set([
     "cfgGovernanceDetailMode",
     "cfgExperienceDraftGenerateNoticeEnabled",
+    "cfgAttachmentMaxFileBytes",
+    "cfgAttachmentMaxTotalBytes",
+    "cfgAttachmentTextCharLimit",
+    "cfgAttachmentTextTotalCharLimit",
+    "cfgAudioTranscriptAppendCharLimit",
+    "cfgExternalOutboundRequireConfirmation",
+    "cfgEmailOutboundRequireConfirmation",
+    "cfgTtsEnabled",
+    "cfgTtsProvider",
+    "cfgTtsVoice",
+    "cfgTtsModel",
+    "cfgTtsOpenAIBaseUrl",
+    "cfgTtsOpenAIApiKey",
+    "cfgImageEnabled",
+    "cfgImageProvider",
+    "cfgImageApiKey",
+    "cfgImageBaseUrl",
+    "cfgImageModel",
+    "cfgImageOutputFormat",
+    "cfgImageTimeoutMs",
+    "cfgImageUnderstandEnabled",
+    "cfgImageUnderstandApiKey",
+    "cfgImageUnderstandBaseUrl",
+    "cfgImageUnderstandModel",
+    "cfgImageUnderstandTimeoutMs",
+    "cfgImageUnderstandAutoOnAttachment",
+    "cfgBrowserScreenshotAutoUnderstand",
+    "cfgCameraSnapAutoUnderstand",
+    "cfgScreenCaptureAutoUnderstand",
+    "cfgVideoUnderstandEnabled",
+    "cfgVideoUnderstandApiKey",
+    "cfgVideoUnderstandBaseUrl",
+    "cfgVideoUnderstandModel",
+    "cfgVideoUnderstandTimeoutMs",
+    "cfgVideoUnderstandTransport",
+    "cfgVideoUnderstandFps",
+    "cfgVideoUnderstandAutoOnAttachment",
+    "cfgVideoUnderstandAutoAttachmentMaxTimelineItems",
+    "cfgVideoUnderstandAutoAttachmentSummaryCharLimit",
+    "cfgSttProvider",
+    "cfgSttModel",
+    "cfgSttOpenAiBaseUrl",
+    "cfgSttOpenAiApiKey",
+    "cfgSttLanguage",
+    "cfgSttGroqApiKey",
+    "cfgSttGroqBaseUrl",
+    "cfgDashScopeApiKey",
+    "cfgVideoFileApiUrl",
+    "cfgVideoFileApiKey",
+    "cfgCommunityApiEnabled",
+    "cfgCommunityApiToken",
+    "cfgWebhookPreauthMaxBytes",
+    "cfgWebhookPreauthTimeoutMs",
+    "cfgWebhookRateLimitWindowMs",
+    "cfgWebhookRateLimitMaxRequests",
+    "cfgWebhookRateLimitMaxTrackedKeys",
+    "cfgWebhookMaxInFlightPerKey",
+    "cfgWebhookMaxInFlightTrackedKeys",
   ]);
   let lastLoadedConfig = null;
   let lastLoadedFormState = null;
@@ -1866,7 +1924,7 @@ export function createSettingsController({
         .filter((fieldName) => currentFormState[fieldName] !== lastLoadedFormState?.[fieldName]);
       lastLoadedFormState = currentFormState;
       const shouldSkipAutoRestart = changedFieldNames.length > 0
-        && changedFieldNames.every((fieldName) => FRONTEND_ONLY_SETTING_FIELDS.has(fieldName));
+        && changedFieldNames.every((fieldName) => HOT_RELOAD_SETTING_FIELDS.has(fieldName));
 
       if (shouldSkipAutoRestart) {
         if (saveSettingsBtn) {

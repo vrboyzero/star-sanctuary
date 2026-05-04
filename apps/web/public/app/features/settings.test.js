@@ -1773,6 +1773,113 @@ describe("settings controller", () => {
     });
   });
 
+  it("skips auto restart after saving hot-reload multimedia and attachment settings", async () => {
+    const refs = createSettingsRefs({
+      cfgAttachmentMaxFileBytes: createInput("2048"),
+      cfgTtsProvider: createInput("openai"),
+      cfgImageEnabled: createCheckbox(true),
+      cfgExternalOutboundRequireConfirmation: createCheckbox(false),
+    });
+    const sendReq = vi.fn(async (frame) => {
+      switch (frame.method) {
+        case "config.update":
+          return { ok: true, payload: {} };
+        case "models.config.update":
+          return { ok: true, payload: {} };
+        case "channel.security.get":
+        case "channel.reply_chunking.get":
+          return { ok: true, payload: { path: "ok.json", content: '{\n  "version": 1,\n  "channels": {}\n}\n' } };
+        case "channel.security.pending.list":
+          return { ok: true, payload: { pending: [] } };
+        case "system.restart":
+          return { ok: true, payload: {} };
+        default:
+          return { ok: true, payload: {} };
+      }
+    });
+    const { controller } = createController({
+      refs,
+      sendReq,
+      loadServerConfig: vi.fn().mockResolvedValue({
+        BELLDANDY_ATTACHMENT_MAX_FILE_BYTES: "1024",
+        BELLDANDY_TTS_PROVIDER: "edge",
+        BELLDANDY_IMAGE_ENABLED: "false",
+        BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION: "true",
+      }),
+    });
+
+    await controller.loadConfig();
+    refs.cfgAttachmentMaxFileBytes.value = "2048";
+    refs.cfgTtsProvider.value = "openai";
+    refs.cfgImageEnabled.checked = true;
+    refs.cfgExternalOutboundRequireConfirmation.checked = false;
+    await controller.saveConfig();
+
+    const updateCall = sendReq.mock.calls.find(([frame]) => frame.method === "config.update");
+    expect(updateCall?.[0]?.params?.updates).toMatchObject({
+      BELLDANDY_ATTACHMENT_MAX_FILE_BYTES: "2048",
+      BELLDANDY_TTS_PROVIDER: "openai",
+      BELLDANDY_IMAGE_ENABLED: "true",
+      BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION: "false",
+    });
+    const restartCall = sendReq.mock.calls.find(([frame]) => frame.method === "system.restart");
+    expect(restartCall).toBeUndefined();
+  });
+
+  it("skips auto restart after saving community api and webhook guard settings", async () => {
+    const refs = createSettingsRefs({
+      cfgCommunityApiEnabled: createCheckbox(true),
+      cfgCommunityApiToken: createInput("community-secret"),
+      cfgWebhookPreauthMaxBytes: createInput("2048"),
+      cfgWebhookRateLimitMaxRequests: createInput("5"),
+    });
+    const sendReq = vi.fn(async (frame) => {
+      switch (frame.method) {
+        case "config.update":
+          return { ok: true, payload: {} };
+        case "models.config.update":
+          return { ok: true, payload: {} };
+        case "channel.security.get":
+        case "channel.reply_chunking.get":
+          return { ok: true, payload: { path: "ok.json", content: '{\n  "version": 1,\n  "channels": {}\n}\n' } };
+        case "channel.security.pending.list":
+          return { ok: true, payload: { pending: [] } };
+        case "system.restart":
+          return { ok: true, payload: {} };
+        default:
+          return { ok: true, payload: {} };
+      }
+    });
+    const { controller } = createController({
+      refs,
+      sendReq,
+      loadServerConfig: vi.fn().mockResolvedValue({
+        BELLDANDY_AUTH_MODE: "token",
+        BELLDANDY_COMMUNITY_API_ENABLED: "false",
+        BELLDANDY_COMMUNITY_API_TOKEN: "",
+        BELLDANDY_WEBHOOK_PREAUTH_MAX_BYTES: "65536",
+        BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_REQUESTS: "120",
+      }),
+    });
+
+    await controller.loadConfig();
+    refs.cfgCommunityApiEnabled.checked = true;
+    refs.cfgCommunityApiToken.value = "community-secret";
+    refs.cfgWebhookPreauthMaxBytes.value = "2048";
+    refs.cfgWebhookRateLimitMaxRequests.value = "5";
+    await controller.saveConfig();
+
+    const updateCall = sendReq.mock.calls.find(([frame]) => frame.method === "config.update");
+    expect(updateCall?.[0]?.params?.updates).toMatchObject({
+      BELLDANDY_COMMUNITY_API_ENABLED: "true",
+      BELLDANDY_COMMUNITY_API_TOKEN: "community-secret",
+      BELLDANDY_WEBHOOK_PREAUTH_MAX_BYTES: "2048",
+      BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_REQUESTS: "5",
+    });
+    const restartCall = sendReq.mock.calls.find(([frame]) => frame.method === "system.restart");
+    expect(restartCall).toBeUndefined();
+  });
+
   it("saves final cleanup prompt and multimedia settings", async () => {
     const refs = createSettingsRefs({
       cfgPromptExperimentDisableSections: createInput(" methodology,context "),
