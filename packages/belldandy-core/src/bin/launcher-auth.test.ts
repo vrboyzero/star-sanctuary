@@ -39,6 +39,25 @@ test("token mode generates setup token only when auto-open is enabled and no aut
   })).toBe("http://localhost:28889/?token=setup-generated-token");
 });
 
+test("token mode reuses configured auth token for auto-open query", () => {
+  const resolved = resolveLauncherSetupAuth({
+    authMode: "token",
+    authToken: "configured-auth-token",
+    autoOpenBrowser: true,
+  });
+
+  expect(resolved).toEqual({
+    authToken: "configured-auth-token",
+    setupToken: "configured-auth-token",
+  });
+  expect(buildAutoOpenTargetUrl({
+    host: "127.0.0.1",
+    port: 28889,
+    authMode: "token",
+    setupToken: resolved.setupToken,
+  })).toBe("http://127.0.0.1:28889/?token=configured-auth-token");
+});
+
 test("token mode without auto-open keeps missing auth token unresolved", () => {
   expect(resolveLauncherSetupAuth({
     authMode: "token",

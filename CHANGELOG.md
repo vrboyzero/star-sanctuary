@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.3] - 2026-05-04
+
+聚焦收敛 `v0.5.2` 发布后暴露的本地启动鉴权问题，补强 Launcher 自动开页 token 传递，以及 WebChat 会话内 token 持久化与重连恢复，确保正式分发产物首启后能稳定连回本地 Gateway。
+
+### Launcher / Auth
+
+- `launcher-auth` 现在在 `token` 鉴权模式且已存在配置 token 时，会直接复用该 token 生成自动开页 URL
+- 新增回归测试，锁定 `auto-open` 查询参数必须与当前配置 token 保持一致，避免浏览器首开拿到临时无效 token
+
+### WebChat / Session
+
+- WebChat 新增会话级 auth token 存储键，自动开页或手工输入的 token 会同步写入 `sessionStorage`
+- 页面初始化时会先恢复会话 token，再接续原有本地持久化逻辑，减少刷新、重连或设置切换后出现 `4403 invalid token` 的概率
+- 新增 `persistence.test.js`，覆盖会话 token 的恢复、写入与清理行为
+
+### Validation
+
+- 本地针对本次修复重新执行发布前验证：
+  - `corepack pnpm test`
+  - `corepack pnpm build`
+  - `corepack pnpm build:release-light -- --version=0.5.3`
+  - `corepack pnpm verify:release-light -- --version=0.5.3`
+
 ## [0.5.2] - 2026-05-04
 
 聚焦收敛发布前阻塞，修复模型配置与 Web 端治理详情模式相关的编译 / 测试回归，恢复 `v0.5.2` 的完整构建、打包与发版准备链路。

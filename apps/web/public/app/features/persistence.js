@@ -14,6 +14,22 @@ function safeStorageWrite(writeFn) {
   }
 }
 
+function safeSessionStorageRead(readFn) {
+  try {
+    return readFn(globalThis.sessionStorage);
+  } catch {
+    return undefined;
+  }
+}
+
+function safeSessionStorageWrite(writeFn) {
+  try {
+    writeFn(globalThis.sessionStorage);
+  } catch {
+    // ignore storage failures
+  }
+}
+
 export function restoreAuthFields({ storeKey, authModeEl, authValueEl }) {
   const raw = safeStorageRead((storage) => storage.getItem(storeKey));
   if (!raw) return;
@@ -36,6 +52,28 @@ export function persistAuthFields({ storeKey, authModeEl, authValueEl, transient
   }
   safeStorageWrite((storage) => {
     storage.setItem(storeKey, JSON.stringify({ mode, value }));
+  });
+}
+
+export function restoreSessionAuthToken({ sessionStoreKey, authModeEl, authValueEl }) {
+  if (!sessionStoreKey || !authModeEl || !authValueEl) return null;
+  const token = safeSessionStorageRead((storage) => storage.getItem(sessionStoreKey));
+  if (!token) return null;
+  authModeEl.value = "token";
+  authValueEl.value = String(token);
+  return String(token);
+}
+
+export function persistSessionAuthToken({ sessionStoreKey, authModeEl, authValueEl }) {
+  if (!sessionStoreKey || !authModeEl || !authValueEl) return;
+  const mode = authModeEl.value;
+  const value = authValueEl.value.trim();
+  safeSessionStorageWrite((storage) => {
+    if (mode === "token" && value) {
+      storage.setItem(sessionStoreKey, value);
+      return;
+    }
+    storage.removeItem(sessionStoreKey);
   });
 }
 

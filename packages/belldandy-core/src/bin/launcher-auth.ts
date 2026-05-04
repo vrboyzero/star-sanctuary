@@ -26,8 +26,12 @@ export function resolveLauncherSetupAuth(
     return { authToken: params.authToken };
   }
 
-  if (params.authToken) {
-    return { authToken: params.authToken };
+  const authToken = params.authToken?.trim();
+  if (authToken) {
+    return {
+      authToken,
+      setupToken: params.autoOpenBrowser ? authToken : undefined,
+    };
   }
 
   if (!params.autoOpenBrowser) {

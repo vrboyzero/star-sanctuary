@@ -1,9 +1,11 @@
 import {
   persistAuthFields,
   persistConnectionFields,
+  persistSessionAuthToken,
   persistUuidField,
   persistWorkspaceRootsField,
   restoreAuthFields,
+  restoreSessionAuthToken,
   restoreUuidField,
   restoreWorkspaceRootsField,
 } from "./app/features/persistence.js";
@@ -16,6 +18,7 @@ import {
   CONTENT_PANEL_VISIBLE_KEY,
   CONTROL_PANEL_VISIBLE_KEY,
   MODEL_ID_KEY,
+  SESSION_AUTH_TOKEN_KEY,
   STORE_KEY,
   TOKEN_USAGE_COLLAPSED_KEY,
   UUID_KEY,
@@ -796,6 +799,7 @@ workspaceFeature = createWorkspaceFeature({
 workspaceFeature.handleSidebarVisibilityChange?.(panelVisibilityFeature.getState().contentPanelVisible);
 
 restoreAuthFields({ storeKey: STORE_KEY, authModeEl, authValueEl });
+restoreSessionAuthToken({ sessionStoreKey: SESSION_AUTH_TOKEN_KEY, authModeEl, authValueEl });
 restoreWorkspaceRootsField({ workspaceRootsKey: WORKSPACE_ROOTS_KEY, workspaceRootsEl });
 restoreUuidField({ uuidKey: UUID_KEY, userUuidEl });
 
@@ -835,6 +839,7 @@ if (urlToken) {
   authModeEl.value = "token";
   authValueEl.value = urlToken;
   transientUrlToken = urlToken;
+  persistSessionAuthToken({ sessionStoreKey: SESSION_AUTH_TOKEN_KEY, authModeEl, authValueEl });
 }
 
 setStatus(localeController.t("status.disconnected", {}, "disconnected"));
@@ -3599,6 +3604,7 @@ if (authModeEl) {
   authModeEl.addEventListener("change", () => {
     if (authModeEl.value !== "token") transientUrlToken = null;
     persistAuthFields({ storeKey: STORE_KEY, authModeEl, authValueEl, transientUrlToken });
+    persistSessionAuthToken({ sessionStoreKey: SESSION_AUTH_TOKEN_KEY, authModeEl, authValueEl });
   });
 }
 if (authValueEl) {
@@ -3607,6 +3613,7 @@ if (authValueEl) {
       transientUrlToken = null;
     }
     persistAuthFields({ storeKey: STORE_KEY, authModeEl, authValueEl, transientUrlToken });
+    persistSessionAuthToken({ sessionStoreKey: SESSION_AUTH_TOKEN_KEY, authModeEl, authValueEl });
   });
 }
 
