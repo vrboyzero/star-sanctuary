@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { getModeLogSuffix, resolveDistributionMode, resolveSingleExeArtifactRoot } from "./distribution-mode.mjs";
+import { resolveSingleExeVerifyRoots } from "./single-exe-verify-paths.mjs";
 
 const workspaceRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1")), "..", "..", "..");
 const platform = process.platform;
@@ -15,10 +16,14 @@ const singleExeRoot = resolveSingleExeArtifactRoot({
   arch,
   mode,
 });
+const verifyRoots = resolveSingleExeVerifyRoots({
+  kind: "deps",
+  suffix,
+});
 const metadataPath = path.join(singleExeRoot, "single-exe.json");
 const executablePath = path.join(singleExeRoot, "star-sanctuary-single.exe");
-const singleExeHome = path.join(workspaceRoot, "artifacts", `single-exe-home-verify${suffix}`);
-const stateDir = path.join(workspaceRoot, "artifacts", `single-exe-state-verify${suffix}`);
+const singleExeHome = verifyRoots.homeDir;
+const stateDir = verifyRoots.stateDir;
 const stdoutPath = path.join(workspaceRoot, "artifacts", `single-exe-verify${suffix}.stdout.log`);
 const stderrPath = path.join(workspaceRoot, "artifacts", `single-exe-verify${suffix}.stderr.log`);
 const reportPath = path.join(singleExeRoot, "single-exe-deps-report.json");

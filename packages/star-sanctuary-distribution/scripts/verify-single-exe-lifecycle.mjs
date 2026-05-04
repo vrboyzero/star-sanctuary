@@ -3,6 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { getModeLogSuffix, resolveDistributionMode, resolveSingleExeArtifactRoot } from "./distribution-mode.mjs";
+import { resolveSingleExeVerifyRoots } from "./single-exe-verify-paths.mjs";
 
 const workspaceRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1")), "..", "..", "..");
 const platform = process.platform;
@@ -16,10 +17,14 @@ const singleExeRoot = resolveSingleExeArtifactRoot({
   arch,
   mode,
 });
+const verifyRoots = resolveSingleExeVerifyRoots({
+  kind: "lifecycle",
+  suffix,
+});
 const executablePath = path.join(singleExeRoot, "star-sanctuary-single.exe");
 const metadataPath = path.join(singleExeRoot, "single-exe.json");
-const lifecycleHome = path.join(workspaceRoot, "artifacts", `single-exe-home-lifecycle${suffix}`);
-const stateDir = path.join(workspaceRoot, "artifacts", `single-exe-state-lifecycle${suffix}`);
+const lifecycleHome = verifyRoots.homeDir;
+const stateDir = verifyRoots.stateDir;
 const reportPath = path.join(singleExeRoot, "single-exe-lifecycle-report.json");
 
 function wait(ms) {

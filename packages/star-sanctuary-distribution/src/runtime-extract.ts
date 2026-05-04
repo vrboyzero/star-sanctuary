@@ -35,6 +35,7 @@ export type EnsureSingleExeRuntimeFromSeaParams = {
 type DeferredDirectoryLink = {
   linkPath: string;
   targetPath: string;
+  relativeTargetPath: string;
   relativePath: string;
 };
 
@@ -49,6 +50,7 @@ type RuntimeCopyStats = {
 type RuntimeSymlinkEntry = {
   linkPath: string;
   targetPath: string;
+  relativeTargetPath: string;
 };
 
 const SINGLE_EXE_SEA_VERSION_ASSET_KEY = "portable/version.json";
@@ -63,6 +65,40 @@ function ensureDir(dirPath: string): void {
 
 function removePath(targetPath: string): void {
   fs.rmSync(targetPath, { recursive: true, force: true });
+}
+
+function sleepSync(ms: number): void {
+  if (ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function hasNativeArtifacts(targetPath: string): boolean {
+  try {
+    for (const entryName of fs.readdirSync(targetPath)) {
+      const entryPath = path.join(targetPath, entryName);
+      const stat = fs.statSync(entryPath);
+      if (stat.isDirectory()) continue;
+      const normalized = entryName.toLowerCase();
+      if (normalized.endsWith(".node") || normalized.endsWith(".dll") || normalized.endsWith(".exe")) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function orderWindowsRuntimeSymlinks<T extends { targetPath: string }>(runtimeSymlinks: T[]): T[] {
+  if (process.platform !== "win32" || runtimeSymlinks.length <= 1) {
+    return runtimeSymlinks;
+  }
+
+  return [...runtimeSymlinks].sort((left, right) => {
+    const leftScore = hasNativeArtifacts(left.targetPath) ? 1 : 0;
+    const rightScore = hasNativeArtifacts(right.targetPath) ? 1 : 0;
+    return leftScore - rightScore;
+  });
 }
 
 function normalizeRelativePath(filePath: string): string {
@@ -86,9 +122,9 @@ function resolveDeferredDirectoryLink(params: {
   symlinkEntry: RuntimeManifestFileEntry | undefined;
   sourceEntryPath: string;
   sourceRootDir: string;
-  finalTargetRootDir: string;
+  targetRootDir: string;
 }): DeferredDirectoryLink {
-  const { symlinkEntry, sourceEntryPath, sourceRootDir, finalTargetRootDir } = params;
+  const { symlinkEntry, sourceEntryPath, sourceRootDir, targetRootDir } = params;
   const relativePath = normalizeRelativePath(path.relative(sourceRootDir, sourceEntryPath));
   const rawTarget = symlinkEntry?.target ?? fs.readlinkSync(sourceEntryPath);
   const resolvedSourceTarget = path.isAbsolute(rawTarget)
@@ -99,23 +135,26 @@ function resolveDeferredDirectoryLink(params: {
     throw new Error(`Single-exe runtime symlink escapes payload runtime: ${relativePath} -> ${rawTarget}`);
   }
 
+  const linkPath = path.join(targetRootDir, relativePath);
+  const targetPath = path.join(targetRootDir, path.relative(sourceRootDir, resolvedSourceTarget));
+
   return {
-    linkPath: path.join(finalTargetRootDir, relativePath),
-    targetPath: path.join(finalTargetRootDir, path.relative(sourceRootDir, resolvedSourceTarget)),
+    linkPath,
+    targetPath,
+    relativeTargetPath: path.relative(path.dirname(linkPath), targetPath),
     relativePath,
   };
 }
 
 function copyRuntimeTree(params: {
   sourceRootDir: string;
-  stageTargetRootDir: string;
-  finalTargetRootDir: string;
+  targetRootDir: string;
   symlinkEntryMap: Map<string, RuntimeManifestFileEntry>;
 }): {
   stats: RuntimeCopyStats;
   deferredDirectoryLinks: DeferredDirectoryLink[];
 } {
-  const { sourceRootDir, stageTargetRootDir, finalTargetRootDir, symlinkEntryMap } = params;
+  const { sourceRootDir, targetRootDir, symlinkEntryMap } = params;
   const deferredDirectoryLinks: DeferredDirectoryLink[] = [];
   const stats: RuntimeCopyStats = {
     copiedFiles: 0,
@@ -154,7 +193,7 @@ function copyRuntimeTree(params: {
               symlinkEntry: symlinkEntryMap.get(relativePath),
               sourceEntryPath,
               sourceRootDir,
-              finalTargetRootDir,
+              targetRootDir,
             }),
           );
           stats.deferredDirectoryLinks += 1;
@@ -180,7 +219,7 @@ function copyRuntimeTree(params: {
     }
   }
 
-  visitDirectory(sourceRootDir, stageTargetRootDir);
+  visitDirectory(sourceRootDir, targetRootDir);
 
   return {
     stats,
@@ -191,20 +230,57 @@ function copyRuntimeTree(params: {
 function materializeDirectoryLinks(directoryLinks: DeferredDirectoryLink[]): void {
   const symlinkType: "junction" | "dir" = process.platform === "win32" ? "junction" : "dir";
 
-  for (const directoryLink of directoryLinks) {
+  for (const directoryLink of orderWindowsRuntimeSymlinks(directoryLinks)) {
     ensureDir(path.dirname(directoryLink.linkPath));
     removePath(directoryLink.linkPath);
-    fs.symlinkSync(directoryLink.targetPath, directoryLink.linkPath, symlinkType);
+    if (process.platform === "win32") {
+      createWindowsJunctionWithRetry(directoryLink);
+      continue;
+    }
+    fs.symlinkSync(directoryLink.relativeTargetPath, directoryLink.linkPath, symlinkType);
   }
 }
 
 function materializeRuntimeSymlinks(runtimeSymlinks: RuntimeSymlinkEntry[]): void {
   const symlinkType: "junction" | "dir" = process.platform === "win32" ? "junction" : "dir";
 
-  for (const runtimeSymlink of runtimeSymlinks) {
+  for (const runtimeSymlink of orderWindowsRuntimeSymlinks(runtimeSymlinks)) {
     ensureDir(path.dirname(runtimeSymlink.linkPath));
     removePath(runtimeSymlink.linkPath);
-    fs.symlinkSync(runtimeSymlink.targetPath, runtimeSymlink.linkPath, symlinkType);
+    if (process.platform === "win32") {
+      createWindowsJunctionWithRetry(runtimeSymlink);
+      continue;
+    }
+    fs.symlinkSync(runtimeSymlink.relativeTargetPath, runtimeSymlink.linkPath, symlinkType);
+  }
+}
+
+function isRetryableWindowsJunctionError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("access is denied")
+    || message.includes("eperm")
+    || message.includes("eacces")
+    || message.includes("ebusy")
+  );
+}
+
+function createWindowsJunctionWithRetry(params: RuntimeSymlinkEntry | DeferredDirectoryLink): void {
+  const { linkPath, targetPath } = params;
+  const maxAttempts = 16;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      fs.symlinkSync(targetPath, linkPath, "junction");
+      return;
+    } catch (error) {
+      if (attempt === maxAttempts || !isRetryableWindowsJunctionError(error)) {
+        throw error;
+      }
+      removePath(linkPath);
+      sleepSync(250 * attempt);
+    }
   }
 }
 
@@ -227,13 +303,13 @@ function copyPayloadToStage(params: {
     finalVersionDirInfo.versionRootDir,
     finalVersionDirInfo.runtimeDir,
   );
+  const stageRuntimeDir = path.join(stageDir, runtimeDirRelativePath);
   ensureDir(stageDir);
   fs.copyFileSync(payloadPaths.versionFilePath, path.join(stageDir, "version.json"));
   fs.copyFileSync(payloadPaths.runtimeManifestPath, path.join(stageDir, "runtime-manifest.json"));
   return copyRuntimeTree({
     sourceRootDir: payloadPaths.runtimeSourceDir,
-    stageTargetRootDir: path.join(stageDir, runtimeDirRelativePath),
-    finalTargetRootDir: finalVersionDirInfo.runtimeDir,
+    targetRootDir: stageRuntimeDir,
     symlinkEntryMap,
   });
 }
@@ -286,14 +362,12 @@ function copySeaPayloadToStage(params: {
   stageDir: string;
   versionFile: PortableVersionFile;
   runtimeManifest: RuntimeManifest;
-  finalVersionDirInfo: RuntimeVersionDirInfo;
 }): {
   stats: RuntimeCopyStats;
   runtimeSymlinks: RuntimeSymlinkEntry[];
 } {
-  const { stageDir, versionFile, runtimeManifest, finalVersionDirInfo } = params;
+  const { stageDir, versionFile, runtimeManifest } = params;
   const stageRuntimeDir = path.join(stageDir, versionFile.runtimeDir);
-  const finalRuntimeDir = finalVersionDirInfo.runtimeDir;
   const stats: RuntimeCopyStats = {
     copiedFiles: 0,
     copiedDirectories: 0,
@@ -330,13 +404,22 @@ function copySeaPayloadToStage(params: {
     }
 
     runtimeSymlinks.push({
-      linkPath: path.join(finalRuntimeDir, ...entry.path.split("/")),
+      linkPath: destinationPath,
       targetPath: resolveManifestSymlinkTargetPath({
-        linkPath: path.join(finalRuntimeDir, ...entry.path.split("/")),
+        linkPath: destinationPath,
         target: entry.target ?? "",
-        runtimeRootDir: finalRuntimeDir,
+        runtimeRootDir: stageRuntimeDir,
         runtimeDirName: runtimeManifest.runtimeDir,
       }),
+      relativeTargetPath: path.relative(
+        path.dirname(destinationPath),
+        resolveManifestSymlinkTargetPath({
+          linkPath: destinationPath,
+          target: entry.target ?? "",
+          runtimeRootDir: stageRuntimeDir,
+          runtimeDirName: runtimeManifest.runtimeDir,
+        }),
+      ),
     });
     stats.deferredDirectoryLinks += 1;
   }
@@ -347,21 +430,21 @@ function copySeaPayloadToStage(params: {
   };
 }
 
-function replaceVersionDirAtomically(params: {
+function rebuildVersionDirWithRollback(params: {
   versionRootDir: string;
-  stageDir: string;
-  finalize?: () => void;
+  rebuild: () => void;
 }): void {
-  const { versionRootDir, stageDir, finalize } = params;
+  const { versionRootDir, rebuild } = params;
   const backupDir = `${versionRootDir}.corrupt-${Date.now()}`;
+  const hadExistingVersionDir = fs.existsSync(versionRootDir);
 
-  if (fs.existsSync(versionRootDir)) {
+  if (hadExistingVersionDir) {
     fs.renameSync(versionRootDir, backupDir);
   }
 
   try {
-    fs.renameSync(stageDir, versionRootDir);
-    finalize?.();
+    removePath(versionRootDir);
+    rebuild();
   } catch (error) {
     try {
       if (fs.existsSync(versionRootDir)) {
@@ -371,13 +454,13 @@ function replaceVersionDirAtomically(params: {
       // Best effort cleanup before rollback.
     }
 
-    if (fs.existsSync(backupDir)) {
+    if (hadExistingVersionDir && fs.existsSync(backupDir)) {
       fs.renameSync(backupDir, versionRootDir);
     }
     throw error;
   }
 
-  if (fs.existsSync(backupDir)) {
+  if (hadExistingVersionDir && fs.existsSync(backupDir)) {
     try {
       removePath(backupDir);
     } catch {
@@ -412,33 +495,30 @@ export function ensureSingleExeRuntime(params: EnsureSingleExeRuntimeParams): En
     };
   }
 
-  const stageDir = `${versionDirInfo.versionRootDir}.staging-${process.pid}-${Date.now()}`;
   const startedAt = Date.now();
   logSingleExeExtract(
     `Extracting runtime ${versionDirInfo.versionKey} to ${versionDirInfo.versionRootDir} (reason=${validation.reason ?? "unknown"})`,
   );
-  removePath(stageDir);
 
   try {
-    const { stats, deferredDirectoryLinks } = copyPayloadToStage({
-      stageDir,
-      payloadPaths,
-      finalVersionDirInfo: versionDirInfo,
-    });
-
-    replaceVersionDirAtomically({
+    let stats: RuntimeCopyStats | undefined;
+    rebuildVersionDirWithRollback({
       versionRootDir: versionDirInfo.versionRootDir,
-      stageDir,
-      finalize: () => {
-        materializeDirectoryLinks(deferredDirectoryLinks);
+      rebuild: () => {
+        const copyResult = copyPayloadToStage({
+          stageDir: versionDirInfo.versionRootDir,
+          payloadPaths,
+          finalVersionDirInfo: versionDirInfo,
+        });
+        stats = copyResult.stats;
+        materializeDirectoryLinks(copyResult.deferredDirectoryLinks);
       },
     });
 
     logSingleExeExtract(
-      `Extracted runtime ${versionDirInfo.versionKey}: files=${stats.copiedFiles}, dirs=${stats.copiedDirectories}, linkDirs=${stats.deferredDirectoryLinks}, linkFiles=${stats.copiedSymlinkFiles}, skippedBrokenLinks=${stats.skippedBrokenSymlinks}, durationMs=${Date.now() - startedAt}`,
+      `Extracted runtime ${versionDirInfo.versionKey}: files=${stats?.copiedFiles ?? 0}, dirs=${stats?.copiedDirectories ?? 0}, linkDirs=${stats?.deferredDirectoryLinks ?? 0}, linkFiles=${stats?.copiedSymlinkFiles ?? 0}, skippedBrokenLinks=${stats?.skippedBrokenSymlinks ?? 0}, durationMs=${Date.now() - startedAt}`,
     );
   } catch (error) {
-    removePath(stageDir);
     throw error;
   }
 
@@ -493,34 +573,30 @@ export function ensureSingleExeRuntimeFromSea(
     };
   }
 
-  const stageDir = `${versionDirInfo.versionRootDir}.staging-${process.pid}-${Date.now()}`;
   const startedAt = Date.now();
   logSingleExeExtract(
     `Extracting embedded runtime ${versionDirInfo.versionKey} to ${versionDirInfo.versionRootDir} (reason=${validation.reason ?? "unknown"})`,
   );
-  removePath(stageDir);
 
   try {
-    const { stats, runtimeSymlinks } = copySeaPayloadToStage({
-      stageDir,
-      versionFile,
-      runtimeManifest,
-      finalVersionDirInfo: versionDirInfo,
-    });
-
-    replaceVersionDirAtomically({
+    let stats: RuntimeCopyStats | undefined;
+    rebuildVersionDirWithRollback({
       versionRootDir: versionDirInfo.versionRootDir,
-      stageDir,
-      finalize: () => {
-        materializeRuntimeSymlinks(runtimeSymlinks);
+      rebuild: () => {
+        const copyResult = copySeaPayloadToStage({
+          stageDir: versionDirInfo.versionRootDir,
+          versionFile,
+          runtimeManifest,
+        });
+        stats = copyResult.stats;
+        materializeRuntimeSymlinks(copyResult.runtimeSymlinks);
       },
     });
 
     logSingleExeExtract(
-      `Extracted embedded runtime ${versionDirInfo.versionKey}: files=${stats.copiedFiles}, symlinks=${stats.deferredDirectoryLinks}, durationMs=${Date.now() - startedAt}`,
+      `Extracted embedded runtime ${versionDirInfo.versionKey}: files=${stats?.copiedFiles ?? 0}, symlinks=${stats?.deferredDirectoryLinks ?? 0}, durationMs=${Date.now() - startedAt}`,
     );
   } catch (error) {
-    removePath(stageDir);
     throw error;
   }
 

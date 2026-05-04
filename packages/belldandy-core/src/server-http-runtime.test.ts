@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildGatewayHttpRoutesContext } from "./server-http-runtime.js";
 import { withEnv } from "./server-testkit.js";
 
-function createRuntimeInput() {
+function createRuntimeInput(): Parameters<typeof buildGatewayHttpRoutesContext>[0] {
   return {
     app: {} as never,
     stateDir: "E:/tmp/belldandy-test",
@@ -12,7 +12,7 @@ function createRuntimeInput() {
       error() {},
     },
     options: {
-      auth: { mode: "none" as const },
+      auth: { mode: "none" },
       webRoot: "E:/tmp/web",
       stateDir: "E:/tmp/belldandy-test",
       agentFactory: undefined,

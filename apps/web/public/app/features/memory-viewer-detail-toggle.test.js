@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createMemoryViewerFeature } from "./memory-viewer.js";
 
@@ -108,6 +108,24 @@ function createHarness() {
 }
 
 describe("memory viewer detail toggles", () => {
+  let previousWebConfig;
+
+  beforeEach(() => {
+    previousWebConfig = globalThis.BELLDANDY_WEB_CONFIG;
+    globalThis.BELLDANDY_WEB_CONFIG = {
+      ...(previousWebConfig && typeof previousWebConfig === "object" ? previousWebConfig : {}),
+      governanceDetailMode: "full",
+    };
+  });
+
+  afterEach(() => {
+    if (previousWebConfig && typeof previousWebConfig === "object") {
+      globalThis.BELLDANDY_WEB_CONFIG = previousWebConfig;
+      return;
+    }
+    delete globalThis.BELLDANDY_WEB_CONFIG;
+  });
+
   it("collapses large content and metadata by default, then expands on demand", () => {
     const { refs, feature } = createHarness();
     const longContent = Array.from({ length: 18 }, (_, index) => `content-line-${index + 1}`).join("\n");

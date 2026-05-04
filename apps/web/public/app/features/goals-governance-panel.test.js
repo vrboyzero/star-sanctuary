@@ -1,8 +1,26 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createGoalsGovernancePanelFeature } from "./goals-governance-panel.js";
 
 describe("goals governance panel", () => {
+  let previousWebConfig;
+
+  beforeEach(() => {
+    previousWebConfig = globalThis.BELLDANDY_WEB_CONFIG;
+    globalThis.BELLDANDY_WEB_CONFIG = {
+      ...(previousWebConfig && typeof previousWebConfig === "object" ? previousWebConfig : {}),
+      governanceDetailMode: "full",
+    };
+  });
+
+  afterEach(() => {
+    if (previousWebConfig && typeof previousWebConfig === "object") {
+      globalThis.BELLDANDY_WEB_CONFIG = previousWebConfig;
+      return;
+    }
+    delete globalThis.BELLDANDY_WEB_CONFIG;
+  });
+
   it("renders bridge governance summary in the governance panel", () => {
     const panel = { innerHTML: "" };
     const feature = createGoalsGovernancePanelFeature({

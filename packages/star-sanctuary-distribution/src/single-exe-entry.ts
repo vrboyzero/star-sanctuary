@@ -14,6 +14,7 @@ import {
   ensureSingleExeRuntimeFromSea,
   SINGLE_EXE_NODE_RUNTIME_FILE_NAME,
 } from "./runtime-extract.js";
+import { resolveSingleExeAppHomeDir } from "./runtime-version-dir.js";
 import { isSeaRuntime } from "./sea.js";
 import { resolveStateDir } from "./state-dir.js";
 
@@ -48,11 +49,13 @@ async function main(): Promise<void> {
   }));
   console.log(`[Star Sanctuary Single-Exe] State dir: ${envDir}`);
   const runningFromSea = isSeaRuntime();
+  const appHomeDir = resolveSingleExeAppHomeDir({ env: baseEnv });
   const ensuredRuntime = runningFromSea
-    ? ensureSingleExeRuntimeFromSea({ env: baseEnv })
+    ? ensureSingleExeRuntimeFromSea({ env: baseEnv, appHomeDir })
     : ensureSingleExeRuntime({
       payloadRoot: resolveSingleExePayloadRoot(process.env),
       env: baseEnv,
+      appHomeDir,
     });
 
   if (!runningFromSea) {

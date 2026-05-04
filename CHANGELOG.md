@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.2] - 2026-05-04
+
+聚焦收敛发布前阻塞，修复模型配置与 Web 端治理详情模式相关的编译 / 测试回归，恢复 `v0.5.2` 的完整构建、打包与发版准备链路。
+
+### Core / Build
+
+- 修复 `resolveModelConfig` 主配置类型缺少 `options` 字段，恢复模型配置解析与网关构建期类型一致性
+- 移除 `gateway.ts` 中重复导入的 `switchFacetTool`，消除 TypeScript 构建阻塞
+- 补齐 HTTP runtime 输入里的治理详情模式 setter 契约，避免运行时上下文与测试桩继续漂移
+
+### Web / Tests
+
+- 将治理详情相关前端用例显式固定到 `full` 模式，避免默认 `compact` 模式下的 DOM 断言误报
+- 恢复以下发布前关键验证通过：
+  - 全量 `pnpm build`
+  - 全量 `pnpm test`
+  - Web 端治理面板 / 经验候选动作 / Memory detail 折叠展开定向回归
+
 ## [0.5.1] - 2026-04-28
 
 聚焦修复命令安装链路对 GitHub API 匿名限流的脆弱依赖，确保安装器在 `releases/latest` 元数据请求失败时，仍能通过 GitHub 公开 release 页面与正式附件直链继续安装。

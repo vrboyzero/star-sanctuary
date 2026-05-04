@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createMemoryDetailRenderFeature } from "./memory-detail-render.js";
 import { createMemoryViewerFeature } from "./memory-viewer.js";
@@ -147,6 +147,24 @@ function createHarness() {
 }
 
 describe("memory detail render actions", () => {
+  let previousWebConfig;
+
+  beforeEach(() => {
+    previousWebConfig = globalThis.BELLDANDY_WEB_CONFIG;
+    globalThis.BELLDANDY_WEB_CONFIG = {
+      ...(previousWebConfig && typeof previousWebConfig === "object" ? previousWebConfig : {}),
+      governanceDetailMode: "full",
+    };
+  });
+
+  afterEach(() => {
+    if (previousWebConfig && typeof previousWebConfig === "object") {
+      globalThis.BELLDANDY_WEB_CONFIG = previousWebConfig;
+      return;
+    }
+    delete globalThis.BELLDANDY_WEB_CONFIG;
+  });
+
   it("binds generate/review/stale actions in task detail", async () => {
     const { refs, state, runtime, detailRenderFeature } = createHarness();
     state.selectedCandidate = {

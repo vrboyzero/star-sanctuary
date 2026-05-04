@@ -253,7 +253,6 @@ import {
   resolveToolWhitelistFromFaqi,
   LIST_FAQIS_TOOL_NAME,
   SWITCH_FAQI_TOOL_NAME,
-  switchFacetTool,
 } from "@belldandy/skills";
 import { listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager, listGlobalMemoryManagers, type MemoryCategory } from "@belldandy/memory";
 import {

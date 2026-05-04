@@ -182,6 +182,13 @@ function validateInstalledRuntimeManifestEntries(params: {
         linkPath: absolutePath,
         target: entry.target,
       });
+      if (process.platform === "win32") {
+        const linkStat = fs.lstatSync(absolutePath);
+        const targetStat = fs.statSync(expectedTargetPath);
+        if (!linkStat.isSymbolicLink() && linkStat.isDirectory() && targetStat.isDirectory()) {
+          continue;
+        }
+      }
       const actualResolvedPath = normalizeResolvedPath(absolutePath);
       const expectedResolvedPath = normalizeResolvedPath(expectedTargetPath);
       if (actualResolvedPath !== expectedResolvedPath) {

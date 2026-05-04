@@ -45,6 +45,7 @@ type GatewayHttpRuntimeContextInput = {
     | "onChannelSecurityApprovalRequired"
   >;
   getGovernanceDetailMode?: () => "compact" | "full";
+  setGovernanceDetailMode?: (value: string | undefined) => void;
   getConversationStore: () => ConversationStore;
   getQueryRuntimeTraceStore: () => QueryRuntimeTraceStore;
   writeBinaryFileAtomic: RegisterGatewayHttpRoutesContext["writeBinaryFileAtomic"];

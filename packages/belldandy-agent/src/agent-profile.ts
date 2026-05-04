@@ -356,6 +356,7 @@ export function resolveModelConfig(
     proxyUrl?: string;
     thinking?: Record<string, unknown>;
     reasoningEffort?: string;
+    options?: Record<string, unknown>;
   },
   fallbacks: ModelProfile[],
 ): {
