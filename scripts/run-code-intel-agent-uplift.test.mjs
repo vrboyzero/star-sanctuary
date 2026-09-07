@@ -24,9 +24,9 @@ afterEach(async () => {
 describe("CodeIntel Agent uplift paired run", () => {
   it("fails closed unless all authorized DeepSeek pricing is injected exactly", () => {
     const pricing = {
-      BELLDANDY_MODEL_INPUT_USD_PER_1M: "0.125",
-      BELLDANDY_MODEL_CACHE_READ_USD_PER_1M: "0.0025",
-      BELLDANDY_MODEL_OUTPUT_USD_PER_1M: "0.25",
+      BELLDANDY_MODEL_INPUT_USD_PER_1M: "0.5625",
+      BELLDANDY_MODEL_CACHE_READ_USD_PER_1M: "0.01875",
+      BELLDANDY_MODEL_OUTPUT_USD_PER_1M: "1.6875",
     };
     expect(() => assertCodeIntelAgentUpliftPricingEnvironment((name) => pricing[name]))
       .not.toThrow();
@@ -111,9 +111,9 @@ describe("CodeIntel Agent uplift paired run", () => {
     const outputPath = path.join(root, "cohort-preflight.json");
     const calls = [];
     const pricing = {
-      BELLDANDY_MODEL_INPUT_USD_PER_1M: "0.125",
-      BELLDANDY_MODEL_CACHE_READ_USD_PER_1M: "0.0025",
-      BELLDANDY_MODEL_OUTPUT_USD_PER_1M: "0.25",
+      BELLDANDY_MODEL_INPUT_USD_PER_1M: "0.5625",
+      BELLDANDY_MODEL_CACHE_READ_USD_PER_1M: "0.01875",
+      BELLDANDY_MODEL_OUTPUT_USD_PER_1M: "1.6875",
     };
 
     const report = await runCodeIntelAgentUpliftCohortPreflight({
@@ -214,9 +214,9 @@ describe("CodeIntel Agent uplift paired run", () => {
     tempRoots.push(root);
     const calls = [];
     const pricing = {
-      BELLDANDY_MODEL_INPUT_USD_PER_1M: "0.125",
-      BELLDANDY_MODEL_CACHE_READ_USD_PER_1M: "0.0025",
-      BELLDANDY_MODEL_OUTPUT_USD_PER_1M: "0.25",
+      BELLDANDY_MODEL_INPUT_USD_PER_1M: "0.5625",
+      BELLDANDY_MODEL_CACHE_READ_USD_PER_1M: "0.01875",
+      BELLDANDY_MODEL_OUTPUT_USD_PER_1M: "1.6875",
     };
 
     const report = await runCodeIntelAgentUpliftCohortPreflight({

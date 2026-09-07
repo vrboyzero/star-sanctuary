@@ -39,10 +39,13 @@ const NAVIGATION_TOOLS = new Set([
 ]);
 const MUTATION_TOOLS = new Set(["file_edit", "apply_patch", "file_write", "file_delete"]);
 const SUPPORTED_PLATFORMS = new Set(["windows-native", "wsl2-linux"]);
+// 2026-09-07 用户授权（自动化持续开发规则第 11 条）：付费重跑前按 V4-Pro 授权价目更新
+// 定价合同（输入 4.5 / 输出 13.5 / 缓存命中 0.15 元每百万 tokens × 8 CNY/USD），
+// 与 v3 candidate runner 的 deepseek-v4-pro 定价一致；任务真值、Gate 与子账本不变。
 const AUTHORIZED_PRICING_USD_PER_1M = new Map([
-  ["BELLDANDY_MODEL_INPUT_USD_PER_1M", 0.125],
-  ["BELLDANDY_MODEL_CACHE_READ_USD_PER_1M", 0.0025],
-  ["BELLDANDY_MODEL_OUTPUT_USD_PER_1M", 0.25],
+  ["BELLDANDY_MODEL_INPUT_USD_PER_1M", 0.5625],
+  ["BELLDANDY_MODEL_CACHE_READ_USD_PER_1M", 0.01875],
+  ["BELLDANDY_MODEL_OUTPUT_USD_PER_1M", 1.6875],
 ]);
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultSourceRoot = path.resolve(path.dirname(scriptPath), "..");
