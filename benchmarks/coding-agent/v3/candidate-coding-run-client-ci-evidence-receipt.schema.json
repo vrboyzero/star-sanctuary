@@ -143,7 +143,7 @@
               "maxLength": 200
             },
             "private": {
-              "const": true
+              "type": "boolean"
             }
           }
         },

@@ -2682,11 +2682,12 @@ Windows/WSL2 `verify:command-sandbox-oci` 均明确通过；Docker 两入口 lea
 - 资格评定：exit 0，报告 `coding-agent-benchmark-candidate-qualification-report/v2`，status `not_eligible`，blockingReasons=`candidate_dimension_evidence_incomplete`（context_retrieval/editing_testing/safety_recovery failed、headless_ecosystem partial）。
 - 三个新发现经证据复核（见下方「重要问题说明」）：冻结结构化审计组数检查不可达、CI 回执绑定因仓库 visibility=PUBLIC 阻塞。
 
-##### 后续计划
+##### 后续计划（2026-09-07 用户已决策）
 
-- 下一步：向用户呈报三项新发现并等待决策——① 是否把 `vrboyzero/deep-space-sanctuary` 改回 private（改回后即可重采 Quality Gates `34056106938` CI 回执、补 headless_ecosystem 合同）；② 是否授权修复 verification/supervisor 两个冻结审计完整性检查的组数口径（editing_testing、safety_recovery 两维因此 failed）；③ code_intel 维度未达冻结门为正式记录，是否按「模型不可达」归档或另行授权重试。
-- 为什么先做它：三项发现分别是环境/合同/模型三类根因，不决策就无法继续推进资格判定与第二个连续候选。
-- 当前还缺的关键闭环：用户对上述三项的决策；两个连续 9.5 候选目标在 code_intel 冻结门未变前数学不可达的正式结论。
+- 用户决策：① 保持公开仓库 + 修订 CI 回执合同（`repository.private` const→boolean）；② 授权修复两个冻结审计组数口径（改「所有套件通过」）；③ code_intel 换模型 V4-Pro（价目已授权）；④ 授权总预算守卫 80→120 CNY；打包为一次合同修订（一个 commit、规则第 13 条、一个后续新身份）。
+- 下一步：实现修订包 → 本地全测 → 推 origin/main → CI Quality Gates → 双 harness 更新解析新身份 → 准备新候选输入（fixture 冻结复用，cache-pointers）→ 新 144 矩阵（≈41.6 CNY，V4-Pro 同配置）→ 聚合 + 全证据链（uplift attempt-16 V4-Pro ≈1.2-1.5 CNY、supervisor soak 2h、verification、cli_tui、git_delivery）→ CI 回执采集（公开仓库按真实可见性记录）→ 资格评定 → 文档收尾与聚合根备份回工作区 tmp。
+- 为什么先做它：三发现的根因（环境/合同/模型）都已决策，修订包是新候选能诚实出分的前提；旧候选 3211834f 证据按「单一身份来源 / 禁止跨修订投影」不跨身份复用，全量重跑不可避免且已获预算授权。
+- 当前还缺的关键闭环：新身份下的完整 144/144 矩阵、七维证据、CI 回执与资格评定；两个连续 9.5 候选目标。
 
 ### 暂停点的剩余工作量估算（2026-09-05）
 
@@ -2849,3 +2850,4 @@ Windows/WSL2 `verify:command-sandbox-oci` 均明确通过；Docker 两入口 lea
 - **现象（同日）**：editing_testing、safety_recovery 两维分别因 `verification_structured_test_reports` 与 `fault_matrix_audit_reconciliation` 合同 failed。**判断**：两份审计的 vitest 报告本身全部通过（verification 58/58、supervisor 142/142、success=true、exit 0），失败点是冻结完整性检查 `groups.total === 测试文件数`——冻结 harness 的 vitest 3.2.7 `numTotalTestSuites` 含 describe 级套件（verification 4 文件实际 8 组、supervisor 18 文件实际 30 组），期望值（4/18）在冻结树上数学不可达。这是冻结合同首次真实执行暴露的潜在缺陷，非候选质量失败。处理决策为 `record_only / 待用户授权修复`：修复需改动冻结的 score 模块完整性口径，未经授权不动。
 - **现象（同日）**：headless_ecosystem 缺 `real_ci_consumer_binding` 合同——CI 回执采集（`collect-private-ci.mjs` capture）被 `run.repository.private === true` 断言拒绝，实测 `vrboyzero/deep-space-sanctuary` 当前 `visibility=PUBLIC`（isPrivate=false，pushedAt 2026-09-06T19:49Z），冻结 loader 亦会因 live API `private=false` 与回执绑定漂移而拒绝。**判断**：冻结 CI 消费合同要求私有仓库，仓库当前公开使该合同不可绑定；同时公开状态本身是安全问题提示。处理决策为 `record_only / 待用户决策`：改回 private 后即可重采 Quality Gates `34056106938` 回执（用户操作 GitHub 设置，我不擅自处理）。
 - 收尾过程的三类环境问题已闭环并记录：全局回执敏感扫描重建（fixtures 根 WSL drvfs junction 确定性 741 个不可读，改选 2 个完全可读声明根 + WSL 侧 349,519 文件 0 命中补充校验）；verification 浏览器 relay 由 Chrome 152（headless 不加载 MV3 扩展）改用 ms-playwright chromium-1187；supervisor soak pair 因双平台行尾不一致漂移，WSL harness 对齐 CRLF 后通过（两端身份仍为规范 3211834f）。
+- **处理方案落定（2026-09-07，用户决策，规则第 13 条）**：上述三项新发现与 code_intel 维度失败均纳入**一次合同修订包**——① CI 回执合同 `repository.private` const→boolean（保持公开仓库，如实记录可见性）；② 两个审计完整性检查改「所有套件全部通过」（vitest 套件口径修复）；③ code_intel uplift 模型绑定 flash→V4-Pro（任务真值、Gate、子账本、navigation 契约不动）；并授权总预算守卫 80→120 CNY。结构性影响：修订=新身份，3211834f 旧证据不跨身份复用，新候选全量重跑（矩阵 ≈41.6 CNY + 证据链 + uplift ≈1.2-1.5 CNY）。另：旧聚合机器可读证据于当日被外部清理（%TEMP%），幸存物为 `formal-3211834-1/slots`（144 槽原始数据）、工作区 dumps 与本文档书面结论；新轮完成后聚合根将备份回工作区 tmp。

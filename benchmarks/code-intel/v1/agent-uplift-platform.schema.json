@@ -37,7 +37,7 @@
       "required": ["provider", "modelId", "maxTotalCostCny", "priorObservedCostCny", "runCostCny", "remainingCostCny", "exchangeRateCnyPerUsd"],
       "properties": {
         "provider": { "type": "string", "minLength": 1 },
-        "modelId": { "const": "deepseek-v4-flash" },
+        "modelId": { "const": "deepseek-v4-pro" },
         "maxTotalCostCny": { "type": "number", "exclusiveMinimum": 0, "maximum": 40 },
         "singleRunMaxUsd": { "type": "number", "exclusiveMinimum": 0, "maximum": 5 },
         "priorObservedCostCny": { "type": "number", "minimum": 0 },
@@ -133,7 +133,7 @@
           "required": ["provider", "id"],
           "properties": {
             "provider": { "type": "string", "minLength": 1 },
-            "id": { "const": "deepseek-v4-flash" }
+            "id": { "const": "deepseek-v4-pro" }
           }
         },
         "executionProfile": { "enum": ["workspace-write", "command-control"] },

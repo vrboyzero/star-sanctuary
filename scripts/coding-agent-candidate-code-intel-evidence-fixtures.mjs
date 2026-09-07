@@ -594,7 +594,7 @@ function createUpliftReports(aggregate, attempt) {
     },
     authorization: {
       provider: "fixture-provider",
-      modelId: "deepseek-v4-flash",
+      modelId: "deepseek-v4-pro",
       maxTotalCostCny: 10,
       priorObservedCostCny: platform === "windows-native" ? 0 : 1,
       runCostCny: 1,
@@ -628,7 +628,7 @@ function createUpliftReports(aggregate, attempt) {
       candidateId: "code-intel-semantic-live-v1",
       authorization: {
         provider: "fixture-provider",
-        modelId: "deepseek-v4-flash",
+        modelId: "deepseek-v4-pro",
         maxTotalCostCny: 10,
         priorObservedCostCny: 0,
         runCostCny: 2,
@@ -689,7 +689,7 @@ function createUpliftCell(variant, task, platform, index, aggregate, attempt) {
       repositoryReceiptSha256: digestForPath(`repository-receipt-${task.id}-${platform}`),
       source,
       harness,
-      model: { provider: "fixture-provider", id: "deepseek-v4-flash" },
+      model: { provider: "fixture-provider", id: "deepseek-v4-pro" },
       executionProfile: task.executionProfile,
       maxTokens: 4096,
     },

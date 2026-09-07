@@ -820,7 +820,7 @@ function isUpliftPairValid(pair, task, platform, attempt, expectedAggregateBindi
       && cell.identity?.harness
       && JSON.stringify(cell.identity.source) === JSON.stringify(expectedAggregateBinding.source)
       && JSON.stringify(cell.identity.harness) === JSON.stringify(expectedAggregateBinding.harness)
-      && cell.identity.model?.id === "deepseek-v4-flash"
+      && cell.identity.model?.id === "deepseek-v4-pro"
       && cell.identity.executionProfile === task.executionProfile;
   });
 }

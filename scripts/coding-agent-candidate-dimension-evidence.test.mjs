@@ -2025,8 +2025,10 @@ function createVerificationAuditVitestReport() {
     }],
   }));
   return {
-    numTotalTestSuites: testResults.length,
-    numPassedTestSuites: testResults.length,
+    // vitest 3.2.7 的套件计数含文件级与 describe 级套件（4 文件实际 8 组），
+    // 合同修订后完整性检查只要求所有套件通过，不再要求套件数等于文件数。
+    numTotalTestSuites: testResults.length * 2,
+    numPassedTestSuites: testResults.length * 2,
     numFailedTestSuites: 0,
     numPendingTestSuites: 0,
     numTotalTests: testResults.length,
@@ -2225,7 +2227,7 @@ async function failCandidateVerificationStructuredTestAudit(aggregateRoot) {
   const reportReference = receipt.structuredTestAudit.nativeTestReport;
   const reportPath = path.join(aggregateRoot, ...reportReference.path.split("/"));
   const nativeReport = JSON.parse(await fs.readFile(reportPath, "utf-8"));
-  nativeReport.numPassedTestSuites = VERIFICATION_AUDIT_TEST_FILES.length - 1;
+  nativeReport.numPassedTestSuites = nativeReport.numTotalTestSuites - 1;
   nativeReport.numFailedTestSuites = 1;
   nativeReport.numPassedTests = VERIFICATION_AUDIT_TEST_FILES.length - 1;
   nativeReport.numFailedTests = 1;
@@ -2421,7 +2423,7 @@ async function failCandidateSupervisorFaultAudit(
   if (failedResult === undefined) {
     throw new Error(`Unknown Supervisor fault-audit test file: ${failedTestFile}`);
   }
-  report.numPassedTestSuites = 17;
+  report.numPassedTestSuites = report.numTotalTestSuites - 1;
   report.numFailedTestSuites = 1;
   report.numPassedTests = 137;
   report.numFailedTests = 1;
@@ -2557,8 +2559,10 @@ function createSupervisorFaultAuditVitestReport() {
     })),
   }));
   return {
-    numTotalTestSuites: 18,
-    numPassedTestSuites: 18,
+    // vitest 3.2.7 的套件计数含文件级与 describe 级套件（18 文件实际 30 组），
+    // 合同修订后完整性检查只要求所有套件通过，不再要求套件数等于文件数。
+    numTotalTestSuites: 30,
+    numPassedTestSuites: 30,
     numFailedTestSuites: 0,
     numPendingTestSuites: 0,
     numTotalTests: 138,

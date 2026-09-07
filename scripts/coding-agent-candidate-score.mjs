@@ -1200,8 +1200,10 @@ function isCandidateVerificationStructuredTestComplete(dag, projectedReport) {
   const [node] = dag.nodes;
   const [attempt] = node.attempts;
   return projectedReport.status === "passed"
-    && projectedReport.evidence.groups.total === EXPECTED_VERIFICATION_AUDIT_TEST_FILES.length
-    && projectedReport.evidence.groups.passed === EXPECTED_VERIFICATION_AUDIT_TEST_FILES.length
+    // vitest 3.2.7 的 numTotalTestSuites 含文件级与 describe 级套件，不能等于测试文件数；
+    // 文件选择已由 requireCandidateVerificationStructuredTestBinding 强制，这里只要求所有套件全部通过。
+    && projectedReport.evidence.groups.total > 0
+    && projectedReport.evidence.groups.passed === projectedReport.evidence.groups.total
     && projectedReport.evidence.groups.failed === 0
     && projectedReport.evidence.groups.skipped === 0
     && projectedReport.evidence.tests.total > 0
@@ -1654,8 +1656,10 @@ function isCandidateSupervisorFaultAuditComplete(dag, projectedReport) {
   const [node] = dag.nodes;
   const [attempt] = node.attempts;
   return projectedReport.status === "passed"
-    && projectedReport.evidence.groups.total === EXPECTED_SUPERVISOR_FAULT_AUDIT_TEST_FILES.length
-    && projectedReport.evidence.groups.passed === EXPECTED_SUPERVISOR_FAULT_AUDIT_TEST_FILES.length
+    // vitest 3.2.7 的 numTotalTestSuites 含文件级与 describe 级套件，不能等于测试文件数；
+    // 文件选择已由 requireCandidateSupervisorFaultAuditBinding 强制，这里只要求所有套件全部通过。
+    && projectedReport.evidence.groups.total > 0
+    && projectedReport.evidence.groups.passed === projectedReport.evidence.groups.total
     && projectedReport.evidence.groups.failed === 0
     && projectedReport.evidence.groups.skipped === 0
     && projectedReport.evidence.tests.total > 0

@@ -137,7 +137,7 @@ describe("CodeIntel Agent uplift readiness", () => {
       stateRoot: path.join(fixture.outputRoot, "state"),
       outputRoot: path.join(fixture.outputRoot, "execution"),
       provider: "openai",
-      modelId: "deepseek-v4-flash",
+      modelId: "deepseek-v4-pro",
       maxTotalCostCny: 0.8,
     };
     const executionDependencies = {

@@ -155,7 +155,7 @@ wsl.exe --distribution Ubuntu-22.04 --cd <wsl-workspace-root> --exec corepack pn
 
 每次 WSL2 audit/soak 执行前，producer 都在 staging 内调用 `resolveBenchmarkRepositoryIdentity(process.cwd())`，并与 aggregate harness 的 commit、`workspaceDirty=false`、lockfile SHA-256 与 worktree content SHA-256 精确比较；任一漂移都在运行前失败关闭。staging 的机器绝对路径只用于本地启动，不写入 candidate artifact。
 
-本地 runner 不触发 push、PR、GitHub Actions、模型或 Provider；未绑定可信 `candidateCodingRunClientCiReceipt` 时，private CI 保持 `external_required` 且 `executedByRunner=false`，runner 顶层同样固定 `providerCalls=0`。因此本地 owner 全部完成仍不能替代真实 private CI，也不能单独使候选进入 `eligible/scored`。
+本地 runner 不触发 push、PR、GitHub Actions、模型或 Provider；未绑定可信 `candidateCodingRunClientCiReceipt` 时，真实 CI 保持 `external_required` 且 `executedByRunner=false`，runner 顶层同样固定 `providerCalls=0`。因此本地 owner 全部完成仍不能替代真实 CI，也不能单独使候选进入 `eligible/scored`。回执按仓库真实可见性记录 `repository.private`（公开/私有均可），loader 以 live GitHub API 与回执逐项一致绑定。
 
 ```powershell
 corepack pnpm benchmark:coding-agent:v3:candidate-local-evidence --aggregate-root <v3-aggregate-root> --wsl-workspace-root <wsl-workspace-root> --generated-at <ISO-8601>
