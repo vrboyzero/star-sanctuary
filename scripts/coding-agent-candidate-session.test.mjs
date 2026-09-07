@@ -141,7 +141,9 @@ describe("candidate slot journal", () => {
 
   it("stops before the next request can reach either the global or candidate limit", () => {
     expect(assertCandidateCostGuard({ providerReportedCostUsd: 2.43983027, reservedUnknownCostUsd: 2.24221, candidateProviderReportedCostUsd: 0 })).toMatchObject({ nextWorstRmb: 38.25632216 });
-    expect(() => assertCandidateCostGuard({ providerReportedCostUsd: 9.9, reservedUnknownCostUsd: 0, candidateProviderReportedCostUsd: 0 })).toThrow(/80 RMB/);
+    // 用户授权总守卫 80→120 CNY（2026-09-07，规则第 13 条）：14.9+0.1 触发新守卫，9.9+0.1 不再触发。
+    expect(() => assertCandidateCostGuard({ providerReportedCostUsd: 14.9, reservedUnknownCostUsd: 0, candidateProviderReportedCostUsd: 0 })).toThrow(/120 RMB/);
+    expect(assertCandidateCostGuard({ providerReportedCostUsd: 9.9, reservedUnknownCostUsd: 0, candidateProviderReportedCostUsd: 0 }).nextWorstUsd).toBe(10);
     expect(() => assertCandidateCostGuard({ providerReportedCostUsd: 4.9, reservedUnknownCostUsd: 0, candidateProviderReportedCostUsd: 4.9 })).toThrow(/runner/);
     expect(() => assertCandidateCostGuard({ providerReportedCostUsd: NaN, reservedUnknownCostUsd: 0, candidateProviderReportedCostUsd: 0 })).toThrow(/cost/);
   });

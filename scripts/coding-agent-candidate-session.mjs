@@ -12,7 +12,7 @@ export function assertCandidateCostGuard(cost) {
     if (!Number.isFinite(cost[field]) || cost[field] < 0) throw new Error("Candidate cost is invalid.");
   }
   const nextWorstUsd = cost.providerReportedCostUsd + cost.reservedUnknownCostUsd + SINGLE_RUN_USD;
-  if (nextWorstUsd >= 10 - 1e-12) throw new Error("The next request could reach the 80 RMB guard.");
+  if (nextWorstUsd >= 15 - 1e-12) throw new Error("The next request could reach the 120 RMB guard.");
   if (cost.candidateProviderReportedCostUsd + SINGLE_RUN_USD >= 5 - 1e-12) {
     throw new Error("The next request could reach the benchmark runner guard.");
   }

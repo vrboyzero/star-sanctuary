@@ -319,7 +319,7 @@
           "const": 5
         },
         "authorizedMaxRmb": {
-          "const": 80
+          "const": 120
         },
         "usdToRmb": {
           "const": 8
